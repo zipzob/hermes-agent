@@ -393,6 +393,7 @@ class AudioRecorder:
         self._stream: Any = None
         self._frames: List[Any] = []
         self._recording = False
+        self._fallback_process = None
         self._start_time: float = 0.0
         # Silence detection state
         self._has_spoken = False
@@ -544,12 +545,25 @@ class AudioRecorder:
         # Create stream — may block on CoreAudio (first call only).
         stream = None
         try:
-            stream = sd.InputStream(
-                samplerate=SAMPLE_RATE,
-                channels=CHANNELS,
-                dtype=DTYPE,
-                callback=_callback,
-            )
+            stream_kwargs = {
+                "samplerate": SAMPLE_RATE,
+                "channels": CHANNELS,
+                "dtype": DTYPE,
+                "callback": _callback,
+            }
+            # In WSLg, PulseAudio capture can work even when PortAudio device
+            # enumeration reports no default input device (-1). In that case,
+            # let PortAudio choose without explicitly querying a device first.
+            if os.environ.get("PULSE_SERVER"):
+                try:
+                    devices = sd.query_devices()
+                except Exception:
+                    devices = None
+                if devices:
+                    default_input, _default_output = sd.default.device
+                    if default_input not in (None, -1):
+                        stream_kwargs["device"] = (default_input, None)
+            stream = sd.InputStream(**stream_kwargs)
             stream.start()
         except Exception as e:
             if stream is not None:
@@ -557,11 +571,49 @@ class AudioRecorder:
                     stream.close()
                 except Exception:
                     pass
+            if os.environ.get("PULSE_SERVER"):
+                self._start_pulse_fallback_recorder(e)
+                return
             raise RuntimeError(
                 f"Failed to open audio input stream: {e}. "
                 "Check that a microphone is connected and accessible."
             ) from e
         self._stream = stream
+
+    def _start_pulse_fallback_recorder(self, original_error) -> None:
+        """WSL/Pulse fallback when PortAudio can't enumerate a default mic."""
+        import shutil
+        import subprocess
+
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            raise RuntimeError(
+                f"Failed to open audio input stream: {original_error}. "
+                "PortAudio could not find a default microphone and ffmpeg is not installed for Pulse fallback."
+            ) from original_error
+
+        fd, path = tempfile.mkstemp(prefix="hermes-voice-", suffix=".wav")
+        os.close(fd)
+        self._fallback_path = path
+        self._fallback_process = subprocess.Popen(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "pulse",
+                "-i",
+                "default",
+                path,
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=False,
+        )
+        self._stream = "pulse-fallback"
 
     def start(self, on_silence_stop=None) -> None:
         """Start capturing audio from the default input device.
@@ -648,33 +700,75 @@ class AudioRecorder:
 
             self._recording = False
             self._current_rms = 0
+
+            if self._fallback_process is not None:
+                proc = self._fallback_process
+                self._fallback_process = None
+                fallback_path = getattr(self, "_fallback_path", None)
+            else:
+                proc = None
+                fallback_path = None
+
             # Stream stays alive — no close needed.
-
-            if not self._frames:
+            if proc is None and not self._frames:
                 return None
 
-            # Concatenate frames and write WAV
-            _, np = _import_audio()
-            audio_data = np.concatenate(self._frames, axis=0)
-            self._frames = []
+            if proc is None:
+                # Concatenate frames and write WAV
+                _, np = _import_audio()
+                audio_data = np.concatenate(self._frames, axis=0)
+                self._frames = []
 
-            elapsed = time.monotonic() - self._start_time
-            logger.info("Voice recording stopped (%.1fs, %d samples)", elapsed, len(audio_data))
+                elapsed = time.monotonic() - self._start_time
+                logger.info("Voice recording stopped (%.1fs, %d samples)", elapsed, len(audio_data))
 
-            # Skip very short recordings (< 0.3s of audio)
-            min_samples = int(SAMPLE_RATE * 0.3)
-            if len(audio_data) < min_samples:
-                logger.debug("Recording too short (%d samples), discarding", len(audio_data))
+                # Skip very short recordings (< 0.3s of audio)
+                min_samples = int(SAMPLE_RATE * 0.3)
+                if len(audio_data) < min_samples:
+                    logger.debug("Recording too short (%d samples), discarding", len(audio_data))
+                    return None
+
+                # Skip silent recordings using peak RMS (not overall average, which
+                # gets diluted by silence at the end of the recording).
+                if self._peak_rms < SILENCE_RMS_THRESHOLD:
+                    logger.info("Recording too quiet (peak RMS=%d < %d), discarding",
+                                self._peak_rms, SILENCE_RMS_THRESHOLD)
+                    return None
+
+                return self._write_wav(audio_data)
+
+        if proc is not None:
+            try:
+                if proc.stdin:
+                    proc.stdin.write(b"q")
+                    proc.stdin.flush()
+                    proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
+                proc.wait(timeout=2)
+            if proc.returncode not in (0, 255):
+                stderr = b""
+                if proc.stderr:
+                    try:
+                        stderr = proc.stderr.read()
+                    except Exception:
+                        stderr = b""
+                raise RuntimeError(
+                    "Pulse fallback recorder failed: "
+                    + (stderr.decode("utf-8", errors="ignore").strip() or f"exit {proc.returncode}")
+                )
+            if not fallback_path or not os.path.exists(fallback_path) or os.path.getsize(fallback_path) <= 44:
                 return None
-
-            # Skip silent recordings using peak RMS (not overall average, which
-            # gets diluted by silence at the end of the recording).
-            if self._peak_rms < SILENCE_RMS_THRESHOLD:
-                logger.info("Recording too quiet (peak RMS=%d < %d), discarding",
-                            self._peak_rms, SILENCE_RMS_THRESHOLD)
-                return None
-
-            return self._write_wav(audio_data)
+            os.makedirs(_TEMP_DIR, exist_ok=True)
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            wav_path = os.path.join(_TEMP_DIR, f"recording_{timestamp}.wav")
+            shutil.move(fallback_path, wav_path)
+            logger.info("Voice recording stopped via Pulse fallback (saved to %s)", wav_path)
+            return wav_path
 
     def cancel(self) -> None:
         """Stop recording and discard all captured audio.
@@ -686,6 +780,20 @@ class AudioRecorder:
             self._frames = []
             self._on_silence_stop = None
             self._current_rms = 0
+            proc = self._fallback_process
+            self._fallback_process = None
+            fallback_path = getattr(self, "_fallback_path", None)
+        if proc is not None:
+            try:
+                proc.kill()
+                proc.wait(timeout=2)
+            except Exception:
+                pass
+        if fallback_path and os.path.exists(fallback_path):
+            try:
+                os.remove(fallback_path)
+            except OSError:
+                pass
         logger.info("Voice recording cancelled")
 
     def shutdown(self) -> None:
