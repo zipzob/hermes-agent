@@ -261,6 +261,77 @@ def test_reopening_parent_demotes_ready_child(client):
     assert child_after_reopen["status"] == "todo"
 
 
+def test_patch_reassign(client):
+    t = client.post(
+        "/api/plugins/kanban/tasks",
+        json={"title": "x", "assignee": "a"},
+    ).json()["task"]
+    r = client.patch(
+        f"/api/plugins/kanban/tasks/{t['id']}",
+        json={"assignee": "b"},
+    )
+    assert r.status_code == 200
+    assert r.json()["task"]["assignee"] == "b"
+
+
+def test_patch_priority_and_edit(client):
+    t = client.post("/api/plugins/kanban/tasks", json={"title": "x"}).json()["task"]
+    r = client.patch(
+        f"/api/plugins/kanban/tasks/{t['id']}",
+        json={"priority": 5, "title": "renamed"},
+    )
+    assert r.status_code == 200
+    data = r.json()["task"]
+    assert data["priority"] == 5
+    assert data["title"] == "renamed"
+
+
+def test_patch_invalid_status(client):
+    t = client.post("/api/plugins/kanban/tasks", json={"title": "x"}).json()["task"]
+    r = client.patch(
+        f"/api/plugins/kanban/tasks/{t['id']}",
+        json={"status": "banana"},
+    )
+    assert r.status_code == 400
+
+
+def test_patch_status_review_allowed(client):
+    t = client.post("/api/plugins/kanban/tasks", json={"title": "x"}).json()["task"]
+    r = client.patch(
+        f"/api/plugins/kanban/tasks/{t['id']}",
+        json={"status": "review"},
+    )
+    assert r.status_code == 200
+    assert r.json()["task"]["status"] == "review"
+
+
+def test_patch_status_running_rejected(client):
+    """Dashboard PATCH cannot transition a task directly to 'running'.
+
+    The only legitimate path into 'running' is through the dispatcher's
+    ``claim_task`` — which atomically creates a ``task_runs`` row,
+    claim_lock, expiry, and worker-PID metadata. Allowing a direct set
+    creates orphaned 'running' tasks with no run row or claim, which
+    violate the board's run-history invariants. See issue #19535.
+    """
+    t = client.post("/api/plugins/kanban/tasks", json={"title": "x"}).json()["task"]
+    r = client.patch(
+        f"/api/plugins/kanban/tasks/{t['id']}",
+        json={"status": "running"},
+    )
+    assert r.status_code == 400
+    assert "running" in r.json()["detail"]
+    # Task's status should still be its pre-request value — the direct-set
+    # was rejected before any mutation.
+    board = client.get("/api/plugins/kanban/board").json()
+    statuses = {
+        tt["id"]: col["name"]
+        for col in board["columns"]
+        for tt in col["tasks"]
+    }
+    assert statuses.get(t["id"]) != "running"
+
+
 # ---------------------------------------------------------------------------
 # DELETE /tasks/:id
 # ---------------------------------------------------------------------------
@@ -280,6 +351,27 @@ def test_delete_task(client):
     # Gone from detail
     r = client.get(f"/api/plugins/kanban/tasks/{t['id']}")
     assert r.status_code == 404
+
+
+def test_delete_parent_promotes_orphaned_todo_child(client):
+    parent = client.post("/api/plugins/kanban/tasks", json={"title": "p"}).json()["task"]
+    child = client.post(
+        "/api/plugins/kanban/tasks",
+        json={"title": "c", "parents": [parent["id"]]},
+    ).json()["task"]
+    assert child["status"] == "todo"
+
+    r = client.delete(f"/api/plugins/kanban/tasks/{parent['id']}")
+    assert r.status_code == 200
+
+    child_after = client.get(f"/api/plugins/kanban/tasks/{child['id']}").json()["task"]
+    assert child_after["status"] == "ready"
+
+
+def test_delete_task_not_found(client):
+    r = client.delete("/api/plugins/kanban/tasks/t_nonexistent")
+    assert r.status_code == 404
+    assert "not found" in r.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
@@ -702,6 +794,81 @@ def test_specify_happy_path(client, monkeypatch):
     assert detail["title"] == "Polished"
     assert "**Goal**" in (detail["body"] or "")
 
+
+def test_specify_non_triage_returns_ok_false_not_http_error(client, monkeypatch):
+    """The endpoint intentionally returns ``{ok: false, reason: ...}`` for
+    "task not in triage" rather than a 4xx — the dashboard renders the
+    reason inline so the user can fix it without a page reload."""
+    # Create a normal (ready) task — not in triage.
+    t = client.post("/api/plugins/kanban/tasks", json={"title": "x"}).json()["task"]
+
+    _patch_specifier_response(monkeypatch, content="unused")
+
+    r = client.post(
+        f"/api/plugins/kanban/tasks/{t['id']}/specify",
+        json={},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert "not in triage" in body["reason"]
+
+
+def test_specify_no_aux_client_surfaces_reason(client, monkeypatch):
+    t = client.post(
+        "/api/plugins/kanban/tasks",
+        json={"title": "rough", "triage": True},
+    ).json()["task"]
+
+    # Simulate "no auxiliary client configured" — call_llm raises when
+    # no provider resolves (#35566 routing).
+    def _no_provider(**kwargs):
+        raise RuntimeError("No LLM provider configured")
+    monkeypatch.setattr("agent.auxiliary_client.call_llm", _no_provider)
+
+    r = client.post(
+        f"/api/plugins/kanban/tasks/{t['id']}/specify",
+        json={},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    # call_llm's no-provider RuntimeError surfaces via the LLM-error branch.
+    assert "LLM error" in body["reason"]
+
+    # Task must stay in triage — nothing was touched.
+    detail = client.get(f"/api/plugins/kanban/tasks/{t['id']}").json()["task"]
+    assert detail["status"] == "triage"
+
+
+def test_board_endpoint_accepts_explicit_board_default_param(client):
+    """GET /board?board=default must not fall through to env/current-file resolution.
+
+    The dashboard always sends ``?board=<slug>`` (including ``board=default``)
+    so that the server-side ``current`` file can never override the dashboard's
+    selected board.  This test asserts the endpoint accepts the parameter and
+    returns the default board without falling back to environment variable or
+    current-file resolution.
+    Regression: #21819.
+    """
+    # Create a task on the default board.
+    t = client.post(
+        "/api/plugins/kanban/tasks",
+        json={"title": "on-default-board"},
+    ).json()["task"]
+    assert t["status"] == "ready"
+
+    # Request with explicit board=default — must succeed and include the task.
+    r = client.get("/api/plugins/kanban/board?board=default")
+    assert r.status_code == 200
+    data = r.json()
+    ready = next((c for c in data["columns"] if c["name"] == "ready"), None)
+    assert ready is not None, "no 'ready' column in default board response"
+    task_ids = [task["id"] for task in ready["tasks"]]
+    assert t["id"] in task_ids, (
+        f"task {t['id']} not found in ready column of default board "
+        f"(got tasks: {task_ids}). The board=default param was likely ignored."
+    )
 
 # ---------------------------------------------------------------------------
 # Final result visibility for Done cards
