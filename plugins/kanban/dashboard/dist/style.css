@@ -172,8 +172,10 @@
 }
 .hermes-kanban-dot-triage   { background: #b47dd6; }  /* lilac — fresh/unspecified */
 .hermes-kanban-dot-todo     { background: var(--color-muted-foreground); }
+.hermes-kanban-dot-scheduled { background: #7aa7ff; } /* soft blue — time/date-bound */
 .hermes-kanban-dot-ready    { background: #d4b348; }  /* amber */
 .hermes-kanban-dot-running  { background: #3fb97d; }  /* green */
+.hermes-kanban-dot-review   { background: #d68b45; }  /* orange — human review */
 .hermes-kanban-dot-blocked  { background: var(--color-destructive, #d14a4a); }
 .hermes-kanban-dot-done     { background: #4a8cd1; }  /* blue */
 .hermes-kanban-dot-archived { background: var(--color-border); }

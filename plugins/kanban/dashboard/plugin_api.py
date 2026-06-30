@@ -894,6 +894,8 @@ def update_task(task_id: str, payload: UpdateTaskBody, board: Optional[str] = Qu
                 else:
                     # Direct status write for drag-drop (todo -> ready etc).
                     ok = _set_status_direct(conn, task_id, "ready")
+            elif s == "review":
+                ok = _set_status_direct(conn, task_id, "review")
             elif s == "archived":
                 ok = kanban_db.archive_task(conn, task_id)
             elif s == "running":
