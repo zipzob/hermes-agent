@@ -59,6 +59,7 @@ _DEFAULT_LOCAL_URL = "http://localhost:8888"
 _MIN_CLIENT_VERSION = "0.6.1"
 _DEFAULT_TIMEOUT = 120  # seconds — cloud API can take 30-40s per request
 _DEFAULT_IDLE_TIMEOUT = 300  # seconds — Hindsight embedded daemon default
+_DEFAULT_EMBEDDED_FAILURE_COOLDOWN = 300.0  # seconds — fail fast after daemon startup failure
 # Mirrors hindsight-integrations/openclaw — Hindsight 0.5.0 added
 # `update_mode='append'` semantics on retain (vectorize-io/hindsight#932).
 # Without it, reusing a stable session-scoped document_id silently
@@ -718,6 +719,12 @@ class HindsightMemoryProvider(MemoryProvider):
         self._client = None
         self._timeout = _DEFAULT_TIMEOUT
         self._idle_timeout = _DEFAULT_IDLE_TIMEOUT
+        self._embedded_startup_lock = threading.Lock()
+        self._embedded_startup_in_progress = False
+        self._embedded_startup_succeeded = False
+        self._embedded_failure_at = 0.0
+        self._embedded_failure_reason = ""
+        self._embedded_failure_cooldown = _DEFAULT_EMBEDDED_FAILURE_COOLDOWN
         self._prefetch_result = ""
         self._prefetch_lock = threading.Lock()
         self._prefetch_thread = None
@@ -1100,6 +1107,8 @@ class HindsightMemoryProvider(MemoryProvider):
 
     def _get_client(self):
         """Return the cached Hindsight client (created once, reused)."""
+        if self._mode == "local_embedded":
+            self._raise_if_embedded_unhealthy()
         if self._client is None:
             if self._mode == "local_embedded":
                 available, reason = _check_local_runtime()
@@ -1150,6 +1159,52 @@ class HindsightMemoryProvider(MemoryProvider):
                              self._api_url, bool(self._api_key), kwargs["timeout"])
                 self._client = Hindsight(**kwargs)
         return self._client
+
+    def _raise_if_embedded_unhealthy(self) -> None:
+        """Fail fast when the embedded daemon is known broken or still starting.
+
+        HindsightEmbedded startup can block for the daemon manager's full wait
+        window when config/deps are broken. initialize() starts that work in a
+        background thread; foreground memory tools must not duplicate the same
+        wait or the TUI appears frozen behind a single stuck tool call.
+        """
+        if self._mode != "local_embedded":
+            return
+        now = time.monotonic()
+        with self._embedded_startup_lock:
+            if self._embedded_startup_in_progress and threading.current_thread().name != "hindsight-daemon-start":
+                raise RuntimeError(
+                    "Hindsight embedded daemon is still starting; memory tools are temporarily unavailable. "
+                    "Retry shortly or inspect ~/.hermes/logs/hindsight-embed.log."
+                )
+            if self._embedded_failure_reason and now - self._embedded_failure_at < self._embedded_failure_cooldown:
+                remaining = max(1, int(self._embedded_failure_cooldown - (now - self._embedded_failure_at)))
+                raise RuntimeError(
+                    "Hindsight embedded daemon startup previously failed; memory tools are temporarily disabled "
+                    f"for {remaining}s: {self._embedded_failure_reason}. "
+                    "Inspect ~/.hermes/logs/hindsight-embed.log or run 'hermes memory status'."
+                )
+            if self._embedded_failure_reason:
+                self._embedded_failure_reason = ""
+                self._embedded_failure_at = 0.0
+
+    def _mark_embedded_starting(self) -> None:
+        with self._embedded_startup_lock:
+            self._embedded_startup_in_progress = True
+
+    def _mark_embedded_started(self) -> None:
+        with self._embedded_startup_lock:
+            self._embedded_startup_in_progress = False
+            self._embedded_startup_succeeded = True
+            self._embedded_failure_reason = ""
+            self._embedded_failure_at = 0.0
+
+    def _mark_embedded_failed(self, reason: BaseException | str) -> None:
+        with self._embedded_startup_lock:
+            self._embedded_startup_in_progress = False
+            self._embedded_startup_succeeded = False
+            self._embedded_failure_reason = str(reason) or type(reason).__name__
+            self._embedded_failure_at = time.monotonic()
 
     def _run_sync(self, coro):
         """Schedule *coro* on the shared loop using the configured timeout."""
@@ -1654,6 +1709,7 @@ class HindsightMemoryProvider(MemoryProvider):
                 log_dir = get_hermes_home() / "logs"
                 log_dir.mkdir(parents=True, exist_ok=True)
                 log_path = log_dir / "hindsight-embed.log"
+                self._mark_embedded_starting()
                 try:
                     # Redirect the daemon manager's Rich console to our log file
                     # instead of stderr. This avoids global fd redirects that
@@ -1681,9 +1737,11 @@ class HindsightMemoryProvider(MemoryProvider):
                             client._manager.stop(profile)
 
                     client._ensure_started()
+                    self._mark_embedded_started()
                     with open(log_path, "a", encoding="utf-8") as f:
                         f.write("\n=== Daemon started successfully ===\n")
                 except Exception as e:
+                    self._mark_embedded_failed(e)
                     with open(log_path, "a", encoding="utf-8") as f:
                         f.write(f"\n=== Daemon startup failed: {e} ===\n")
                         traceback.print_exc(file=f)
