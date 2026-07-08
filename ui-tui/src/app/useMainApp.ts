@@ -6,6 +6,7 @@ import {
   useHasSelection,
   useSelection,
   useStdout,
+  useTerminalFocus,
   useTerminalTitle
 } from '@hermes/ink'
 import { useStore } from '@nanostores/react'
@@ -143,6 +144,7 @@ export async function startPromptLiveSession({
 export function useMainApp(gw: GatewayClient) {
   const { exit } = useApp()
   const { stdout } = useStdout()
+  const terminalFocused = useTerminalFocus()
   const [cols, setCols] = useState(stdout?.columns ?? 80)
 
   useEffect(() => {
@@ -157,7 +159,10 @@ export function useMainApp(gw: GatewayClient) {
     // first event reflows immediately (the drag stays responsive), the rest
     // collapse to at most one reflow per RESIZE_COALESCE_MS, and the trailing
     // edge always applies the final width so the settled layout is exact.
-    const coalescer = createResizeCoalescer(() => setCols(stdout.columns ?? 80), RESIZE_COALESCE_MS)
+    const coalescer = createResizeCoalescer(() => {
+      setCols(stdout.columns ?? 80)
+      forceRedraw(stdout)
+    }, RESIZE_COALESCE_MS)
     const sync = () => coalescer.schedule()
 
     stdout.on('resize', sync)
@@ -175,6 +180,18 @@ export function useMainApp(gw: GatewayClient) {
       }
     }
   }, [stdout])
+
+  useEffect(() => {
+    if (!stdout?.isTTY || !terminalFocused) {
+      return
+    }
+
+    // Some terminals lose incremental Ink frame state after tab/window focus
+    // transitions. Heal by reasserting bracketed paste and forcing one full
+    // repaint when focus returns instead of waiting for a resize/manual redraw.
+    stdout.write(BRACKET_PASTE_ON)
+    forceRedraw(stdout)
+  }, [stdout, terminalFocused])
 
   const [historyItems, setHistoryItemsState] = useState<Msg[]>(() => [{ kind: 'intro', role: 'system', text: '' }])
   const [historyGeneration, setHistoryGeneration] = useState(0)
