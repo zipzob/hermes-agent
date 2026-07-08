@@ -6,6 +6,7 @@ turn counting, tags), and schema completeness.
 """
 
 import json
+import importlib
 import os
 import re
 import stat
@@ -26,6 +27,7 @@ from plugins.memory.hindsight import (
     _load_config,
     _load_simple_env,
     _build_embedded_profile_env,
+    _check_local_runtime,
     _normalize_observation_scopes,
     _normalize_retain_tags,
     _resolve_bank_id_template,
@@ -218,6 +220,129 @@ def test_normalize_retain_tags_accepts_csv_and_dedupes():
         "agent:fakeassistantname",
         "source_system:hermes-agent",
     ]
+
+
+def test_normalize_retain_tags_accepts_json_array_string():
+    value = json.dumps(["agent:fakeassistantname", "source_system:hermes-agent"])
+    assert _normalize_retain_tags(value) == ["agent:fakeassistantname", "source_system:hermes-agent"]
+
+
+def test_normalize_observation_scopes_empty_is_none():
+    assert _normalize_observation_scopes("") is None
+    assert _normalize_observation_scopes(None) is None
+    assert _normalize_observation_scopes("   ") is None
+
+
+def test_normalize_observation_scopes_keywords_pass_through():
+    assert _normalize_observation_scopes("per_tag") == "per_tag"
+    assert _normalize_observation_scopes("combined") == "combined"
+    assert _normalize_observation_scopes(" all_combinations ") == "all_combinations"
+
+
+def test_normalize_observation_scopes_unknown_keyword_is_none():
+    assert _normalize_observation_scopes("nonsense") is None
+
+
+def test_normalize_observation_scopes_json_list_of_lists():
+    value = json.dumps([["user:alice"], ["team:eng"], ["user:alice", "team:eng"]])
+    assert _normalize_observation_scopes(value) == [
+        ["user:alice"],
+        ["team:eng"],
+        ["user:alice", "team:eng"],
+    ]
+
+
+def test_normalize_observation_scopes_flat_list_is_single_scope():
+    assert _normalize_observation_scopes(["user:alice", "team:eng"]) == [
+        ["user:alice", "team:eng"]
+    ]
+
+
+def test_normalize_observation_scopes_list_of_lists():
+    assert _normalize_observation_scopes([["user:alice"], ["team:eng"]]) == [
+        ["user:alice"],
+        ["team:eng"],
+    ]
+
+
+def test_check_local_runtime_requires_sentence_transformers(monkeypatch):
+    """Missing local embedding deps must fail before daemon startup waits."""
+    real_import_module = importlib.import_module
+
+    def fake_import_module(name, package=None):
+        if name == "sentence_transformers":
+            raise ImportError("No module named 'sentence_transformers'")
+        if name in {"hindsight", "hindsight_embed.daemon_embed_manager"}:
+            return SimpleNamespace()
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", fake_import_module)
+
+    available, reason = _check_local_runtime()
+
+    assert available is False
+    assert reason is not None
+    assert "sentence_transformers" in reason
+
+
+def test_check_local_runtime_passes_when_embedded_imports_pass(monkeypatch):
+    seen = []
+    real_import_module = importlib.import_module
+
+    def fake_import_module(name, package=None):
+        if name in {"hindsight", "hindsight_embed.daemon_embed_manager", "sentence_transformers"}:
+            seen.append(name)
+            return SimpleNamespace()
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", fake_import_module)
+
+    assert _check_local_runtime() == (True, None)
+    assert seen == [
+        "hindsight",
+        "hindsight_embed.daemon_embed_manager",
+        "sentence_transformers",
+    ]
+
+
+def test_embedded_startup_in_progress_fails_fast():
+    provider = HindsightMemoryProvider()
+    provider._mode = "local_embedded"
+
+    provider._mark_embedded_starting()
+
+    with pytest.raises(RuntimeError, match="still starting"):
+        provider._raise_if_embedded_unhealthy()
+
+
+def test_embedded_startup_failure_circuit_breaker(monkeypatch):
+    provider = HindsightMemoryProvider()
+    provider._mode = "local_embedded"
+    provider._embedded_failure_cooldown = 300.0
+    now = 1000.0
+    monkeypatch.setattr("plugins.memory.hindsight.time.monotonic", lambda: now)
+
+    provider._mark_embedded_failed("missing HINDSIGHT_API_LLM_API_KEY")
+
+    with pytest.raises(RuntimeError) as exc:
+        provider._raise_if_embedded_unhealthy()
+
+    assert "previously failed" in str(exc.value)
+    assert "HINDSIGHT_API_LLM_API_KEY" in str(exc.value)
+
+
+def test_embedded_startup_failure_clears_after_cooldown(monkeypatch):
+    provider = HindsightMemoryProvider()
+    provider._mode = "local_embedded"
+    provider._embedded_failure_cooldown = 10.0
+    times = iter([1000.0, 1011.0])
+    monkeypatch.setattr("plugins.memory.hindsight.time.monotonic", lambda: next(times))
+
+    provider._mark_embedded_failed("temporary startup failure")
+    provider._raise_if_embedded_unhealthy()
+
+    assert provider._embedded_failure_reason == ""
+    assert provider._embedded_failure_at == 0.0
 
 
 # ---------------------------------------------------------------------------
