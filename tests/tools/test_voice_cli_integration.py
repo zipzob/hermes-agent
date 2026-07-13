@@ -352,6 +352,46 @@ class TestVoiceStopAndTranscribeReal:
         assert isinstance(queued, _VoiceInputMessage)
         assert str(queued) == "hello world"
 
+    @patch("cli._cprint")
+    @patch("cli.os.unlink")
+    @patch("cli.os.path.isfile", return_value=True)
+    @patch("hermes_cli.config.load_config", return_value={"stt": {}})
+    def test_completion_beep_plays_after_successful_transcription(
+        self, _cfg, _isf, _unl, _cp
+    ):
+        events = []
+        recorder = MagicMock()
+        recorder.stop.side_effect = lambda: events.append("stop") or "/tmp/test.wav"
+        cli = _make_voice_cli(_voice_recording=True, _voice_recorder=recorder)
+
+        with patch(
+            "tools.voice_mode.transcribe_recording",
+            side_effect=lambda *_args, **_kwargs: (
+                events.append("transcribe")
+                or {"success": True, "transcript": "hello world"}
+            ),
+        ), patch(
+            "tools.voice_mode.play_beep",
+            side_effect=lambda **_kwargs: events.append("beep"),
+        ):
+            cli._voice_stop_and_transcribe()
+
+        assert events == ["stop", "transcribe", "beep"]
+
+    @patch("cli._cprint")
+    @patch("cli.os.unlink")
+    @patch("cli.os.path.isfile", return_value=True)
+    @patch("hermes_cli.config.load_config", return_value={"stt": {}})
+    @patch("tools.voice_mode.transcribe_recording",
+           return_value={"success": True, "transcript": ""})
+    @patch("tools.voice_mode.play_beep")
+    def test_empty_transcript_not_queued(self, _beep, _tr, _cfg, _isf, _unl, _cp):
+        recorder = MagicMock()
+        recorder.stop.return_value = "/tmp/test.wav"
+        cli = _make_voice_cli(_voice_recording=True, _voice_recorder=recorder)
+        cli._voice_stop_and_transcribe()
+        assert cli._pending_input.empty()
+        _beep.assert_not_called()
 
     def test_non_local_stt_keeps_generic_transcribing_status(self):
         recorder = MagicMock()
