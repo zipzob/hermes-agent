@@ -396,6 +396,49 @@ class TestContinuousLoopSimulation:
 
         voice.stop_continuous()
 
+    def test_cancel_without_transcription_does_not_play_completion_beep(
+        self, fake_recorder, monkeypatch
+    ):
+        import hermes_cli.voice as voice
+
+        events = []
+        monkeypatch.setattr(
+            voice,
+            "_play_beep",
+            lambda frequency, count=1: events.append((frequency, count)),
+        )
+
+        voice.start_continuous(on_transcript=lambda _text: None)
+        events.clear()  # Ignore the recording-start cue.
+        voice.stop_continuous(force_transcribe=False)
+
+        assert fake_recorder.cancelled == 1
+        assert events == []
+
+    def test_auto_restart_false_stops_after_first_transcript(self, fake_recorder, monkeypatch):
+        import hermes_cli.voice as voice
+
+        monkeypatch.setattr(
+            voice,
+            "transcribe_recording",
+            lambda _p: {"success": True, "transcript": "single shot"},
+        )
+        monkeypatch.setattr(voice, "is_whisper_hallucination", lambda _t: False)
+
+        transcripts = []
+        statuses = []
+
+        voice.start_continuous(
+            on_transcript=lambda t: transcripts.append(t),
+            on_status=lambda s: statuses.append(s),
+            auto_restart=False,
+        )
+        fake_recorder.last_callback()
+
+        assert transcripts == ["single shot"]
+        assert fake_recorder.start_calls == 1
+        assert statuses == ["listening", "transcribing", "idle"]
+        assert voice.is_continuous_active() is False
 
     def test_auto_restart_false_retains_silent_strikes_across_starts(
         self, fake_recorder, monkeypatch

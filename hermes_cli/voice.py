@@ -663,10 +663,6 @@ def stop_continuous(force_transcribe: bool = False) -> None:
     with _continuous_lock:
         _continuous_stopping = False
 
-    # Audible "recording stopped" cue (CLI parity: same 660 Hz × 2 the
-    # silence-auto-stop path plays).
-    _play_beep(frequency=660, count=2)
-
     if on_status:
         try:
             on_status("idle")
