@@ -168,7 +168,7 @@ voice:
   record_key: "ctrl+b"
   max_recording_seconds: 120
   auto_tts: false
-  beep_enabled: true
+  beep_enabled: true            # Set false to disable start/completion sounds
   silence_threshold: 200
   silence_duration: 3.0
 
