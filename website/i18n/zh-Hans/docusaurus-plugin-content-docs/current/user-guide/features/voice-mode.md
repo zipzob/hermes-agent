@@ -155,7 +155,7 @@ hermes                # 启动交互式 CLI
 
 如果 15 秒内完全未检测到语音，录音自动停止。
 
-`silence_threshold` 和 `silence_duration` 均可在 `config.yaml` 中配置。也可通过 `voice.beep_enabled: false` 禁用录音开始/结束提示音。
+`silence_threshold` 和 `silence_duration` 均可在 `config.yaml` 中配置。单次提示音表示开始录音，双提示音仅在 STT 返回可用文本后播放，不再仅因录音停止而播放。可通过 `voice.beep_enabled: false` 禁用这两种提示音。
 
 ### 流式 TTS
 
@@ -389,7 +389,7 @@ voice:
   record_key: "ctrl+b"            # 开始/停止录音的按键
   max_recording_seconds: 120       # 最大录音时长
   auto_tts: false                  # 启用语音模式时自动开启 TTS
-  beep_enabled: true               # 播放录音开始/结束提示音
+  beep_enabled: true               # 播放录音开始/STT 完成提示音
   silence_threshold: 200           # 静音判定的 RMS 电平（0-32767）
   silence_duration: 3.0            # 自动停止前的静音秒数
 

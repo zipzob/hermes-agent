@@ -263,10 +263,10 @@ def _beeps_enabled() -> bool:
 
 
 def _play_beep(frequency: int, count: int = 1) -> None:
-    """Audible cue matching cli.py's record/stop beeps.
+    """Audible cue matching cli.py's recording/STT-complete beeps.
 
-    880 Hz single-beep on start (cli.py:_voice_start_recording line 7532),
-    660 Hz double-beep on stop (cli.py:_voice_stop_and_transcribe line 7585).
+    880 Hz single-beep on recording start,
+    660 Hz double-beep after usable text returns from STT.
     Best-effort — sounddevice failures are silently swallowed so the
     voice loop never breaks because a speaker was unavailable.
     """
@@ -640,7 +640,8 @@ def stop_continuous(force_transcribe: bool = False) -> None:
                             except Exception:
                                 pass
 
-                    _play_beep(frequency=660, count=2)
+                    if transcript:
+                        _play_beep(frequency=660, count=2)
                     with _continuous_lock:
                         _continuous_stopping = False
                     if on_status:
@@ -719,10 +720,6 @@ def _continuous_on_silence() -> None:
         f"_continuous_on_silence: rec.stop -> {wav_path!r} (peak_rms={peak_rms})"
     )
 
-    # CLI parity: double 660 Hz beep after the stream stops (safe from the
-    # CoreAudio conflict that blocks pre-start beeps).
-    _play_beep(frequency=660, count=2)
-
     transcript: Optional[str] = None
 
     if wav_path:
@@ -793,6 +790,11 @@ def _continuous_on_silence() -> None:
             on_transcript(transcript)
         except Exception as e:
             logger.warning("on_transcript callback raised: %s", e)
+
+    # Confirm that STT returned usable text. Do not play this cue merely
+    # because capture stopped: that falsely suggests transcription finished.
+    if transcript:
+        _play_beep(frequency=660, count=2)
 
     if should_halt:
         _debug(
