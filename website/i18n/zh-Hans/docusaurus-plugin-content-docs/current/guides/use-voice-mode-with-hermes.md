@@ -164,7 +164,7 @@ voice:
   record_key: "ctrl+b"
   max_recording_seconds: 120
   auto_tts: false
-  beep_enabled: true
+  beep_enabled: true            # 设为 false 可禁用开始/完成提示音
   silence_threshold: 200
   silence_duration: 3.0
 

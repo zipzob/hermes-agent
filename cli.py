@@ -12465,14 +12465,6 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
             wav_path = self._voice_recorder.stop()
 
-            # Audio cue: double beep after stream stopped (no CoreAudio conflict)
-            if self._voice_beeps_enabled():
-                try:
-                    from tools.voice_mode import play_beep
-                    play_beep(frequency=660, count=2)
-                except Exception:
-                    pass
-
             if wav_path is None:
                 _cprint(f"{_DIM}No speech detected.{_RST}")
                 return
@@ -12507,6 +12499,15 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     self._app.invalidate()
                 self._pending_input.put(_VoiceInputMessage(transcript))
                 submitted = True
+                # Confirm that STT returned usable text. This intentionally
+                # follows transcription instead of merely signalling that
+                # recording stopped.
+                if self._voice_beeps_enabled():
+                    try:
+                        from tools.voice_mode import play_beep
+                        play_beep(frequency=660, count=2)
+                    except Exception:
+                        pass
             elif result.get("success"):
                 _cprint(f"{_DIM}No speech detected.{_RST}")
             else:
