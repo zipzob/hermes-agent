@@ -1345,7 +1345,25 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
                                 function_result += subdir_hints
 
                         _tool_content = agent._tool_result_content_for_active_model(name, function_result)
-                        messages.append(make_tool_result_message(name, _tool_content, tc.id))
+                        tool_message = make_tool_result_message(name, _tool_content, tc.id)
+                        messages.append(tool_message)
+                        risk_metadata = tool_message.get("_tool_output_risk")
+                        if (
+                            risk_metadata is not None
+                            and risk_metadata.get("risk") != "low"
+                            and agent.tool_progress_callback
+                        ):
+                            try:
+                                agent.tool_progress_callback(
+                                    "tool.output_risk",
+                                    name,
+                                    None,
+                                    None,
+                                    tool_call_id=tc.id,
+                                    risk_metadata=risk_metadata,
+                                )
+                            except Exception as cb_err:
+                                logging.debug("Tool output risk callback error: %s", cb_err)
                         emitted_indices.add(completed_i)
                         _flush_session_db_after_tool_progress(
                             agent,
