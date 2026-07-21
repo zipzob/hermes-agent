@@ -198,15 +198,17 @@ class TestDetectAudioEnvironment:
         assert result["warnings"] == []
         assert any("SSH" in n for n in result.get("notices", []))
 
-    def test_wsl_without_pulse_blocks_voice(self, monkeypatch, tmp_path):
-        """WSL without PULSE_SERVER should block voice mode."""
+    def test_wsl_without_pulse_and_no_fallback_blocks_voice(self, monkeypatch, tmp_path):
+        """WSL without forwarded sound and without TTS fallback should block voice mode."""
         monkeypatch.delenv("SSH_CLIENT", raising=False)
         monkeypatch.delenv("SSH_TTY", raising=False)
         monkeypatch.delenv("SSH_CONNECTION", raising=False)
         monkeypatch.delenv("PULSE_SERVER", raising=False)
+        monkeypatch.delenv("PIPEWIRE_REMOTE", raising=False)
         monkeypatch.setattr("tools.voice_mode._pulse_socket_reachable", lambda: False)
         monkeypatch.setattr("tools.voice_mode._import_audio",
                             lambda: (MagicMock(), MagicMock()))
+        monkeypatch.setattr("tools.voice_mode._wsl_powershell_tts_available", lambda: False)
 
         proc_version = tmp_path / "proc_version"
         proc_version.write_text("Linux 5.15.0-microsoft-standard-WSL2")
@@ -224,6 +226,177 @@ class TestDetectAudioEnvironment:
         assert result["available"] is False
         assert any("WSL" in w for w in result["warnings"])
         assert any("PulseAudio" in w for w in result["warnings"])
+
+    def test_wsl_with_pulse_allows_voice(self, monkeypatch, tmp_path):
+        """WSL with PULSE_SERVER set should NOT block voice mode."""
+        monkeypatch.delenv("SSH_CLIENT", raising=False)
+        monkeypatch.delenv("SSH_TTY", raising=False)
+        monkeypatch.delenv("SSH_CONNECTION", raising=False)
+        monkeypatch.setenv("PULSE_SERVER", "unix:/mnt/wslg/PulseServer")
+        monkeypatch.setattr("tools.voice_mode._import_audio",
+                            lambda: (MagicMock(), MagicMock()))
+
+        proc_version = tmp_path / "proc_version"
+        proc_version.write_text("Linux 5.15.0-microsoft-standard-WSL2")
+
+        _real_open = open
+        def _fake_open(f, *a, **kw):
+            if f == "/proc/version":
+                return _real_open(str(proc_version), *a, **kw)
+            return _real_open(f, *a, **kw)
+
+        with patch("builtins.open", side_effect=_fake_open):
+            from tools.voice_mode import detect_audio_environment
+            result = detect_audio_environment()
+
+        assert result["available"] is True
+        assert result["warnings"] == []
+        assert any("WSL" in n for n in result.get("notices", []))
+
+    def test_wsl_with_pipewire_remote_allows_voice(self, monkeypatch, tmp_path):
+        """WSL with PIPEWIRE_REMOTE set should not require PULSE_SERVER."""
+        monkeypatch.delenv("SSH_CLIENT", raising=False)
+        monkeypatch.delenv("SSH_TTY", raising=False)
+        monkeypatch.delenv("SSH_CONNECTION", raising=False)
+        monkeypatch.delenv("PULSE_SERVER", raising=False)
+        monkeypatch.setenv("PIPEWIRE_REMOTE", "/run/user/1000/pipewire-0")
+        monkeypatch.setattr("tools.voice_mode._pulse_socket_reachable", lambda: False)
+        monkeypatch.setattr("hermes_constants.is_container", lambda: False)
+        monkeypatch.setattr("tools.voice_mode._import_audio",
+                            lambda: (MagicMock(), MagicMock()))
+
+        proc_version = tmp_path / "proc_version"
+        proc_version.write_text("Linux 5.15.0-microsoft-standard-WSL2")
+
+        real_open = open
+        def fake_open(file, *args, **kwargs):
+            if file == "/proc/version":
+                return real_open(str(proc_version), *args, **kwargs)
+            return real_open(file, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=fake_open):
+            from tools.voice_mode import detect_audio_environment
+            result = detect_audio_environment()
+
+        assert result["available"] is True
+        assert result["warnings"] == []
+        assert any("PipeWire" in n for n in result.get("notices", []))
+
+    def test_wsl_device_query_fails_with_pulse_continues(self, monkeypatch, tmp_path):
+        """WSL device query failure should not block if PULSE_SERVER is set."""
+        monkeypatch.delenv("SSH_CLIENT", raising=False)
+        monkeypatch.delenv("SSH_TTY", raising=False)
+        monkeypatch.delenv("SSH_CONNECTION", raising=False)
+        monkeypatch.setenv("PULSE_SERVER", "unix:/mnt/wslg/PulseServer")
+
+        mock_sd = MagicMock()
+        mock_sd.query_devices.side_effect = Exception("device query failed")
+        monkeypatch.setattr("tools.voice_mode._import_audio",
+                            lambda: (mock_sd, MagicMock()))
+
+        proc_version = tmp_path / "proc_version"
+        proc_version.write_text("Linux 5.15.0-microsoft-standard-WSL2")
+
+        _real_open = open
+        def _fake_open(f, *a, **kw):
+            if f == "/proc/version":
+                return _real_open(str(proc_version), *a, **kw)
+            return _real_open(f, *a, **kw)
+
+        with patch("builtins.open", side_effect=_fake_open):
+            from tools.voice_mode import detect_audio_environment
+            result = detect_audio_environment()
+
+        assert result["available"] is True
+        assert any("device query failed" in n for n in result.get("notices", []))
+
+    def test_device_query_fails_without_pulse_blocks(self, monkeypatch):
+        """Device query failure without PULSE_SERVER should block."""
+        monkeypatch.delenv("SSH_CLIENT", raising=False)
+        monkeypatch.delenv("SSH_TTY", raising=False)
+        monkeypatch.delenv("SSH_CONNECTION", raising=False)
+        monkeypatch.delenv("PULSE_SERVER", raising=False)
+        monkeypatch.setattr("tools.voice_mode._pulse_socket_reachable", lambda: False)
+
+        mock_sd = MagicMock()
+        mock_sd.query_devices.side_effect = Exception("device query failed")
+        monkeypatch.setattr("tools.voice_mode._import_audio",
+                            lambda: (mock_sd, MagicMock()))
+
+        from tools.voice_mode import detect_audio_environment
+        result = detect_audio_environment()
+
+        assert result["available"] is False
+        assert any("PortAudio" in w for w in result["warnings"])
+
+    def test_termux_import_error_shows_termux_install_guidance(self, monkeypatch):
+        monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
+        monkeypatch.setenv("PREFIX", "/data/data/com.termux/files/usr")
+        monkeypatch.delenv("SSH_CLIENT", raising=False)
+        monkeypatch.delenv("SSH_TTY", raising=False)
+        monkeypatch.delenv("SSH_CONNECTION", raising=False)
+        monkeypatch.setattr("tools.voice_mode._import_audio", lambda: (_ for _ in ()).throw(ImportError("no audio libs")))
+        monkeypatch.setattr("tools.voice_mode._termux_microphone_command", lambda: None)
+
+        from tools.voice_mode import detect_audio_environment
+        result = detect_audio_environment()
+
+        assert result["available"] is False
+        assert any("pkg install python-numpy portaudio" in w for w in result["warnings"])
+        assert any("python -m pip install sounddevice" in w for w in result["warnings"])
+
+    def test_termux_api_package_without_android_app_blocks_voice(self, monkeypatch):
+        monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
+        monkeypatch.setenv("PREFIX", "/data/data/com.termux/files/usr")
+        monkeypatch.delenv("SSH_CLIENT", raising=False)
+        monkeypatch.delenv("SSH_TTY", raising=False)
+        monkeypatch.delenv("SSH_CONNECTION", raising=False)
+        monkeypatch.setattr("tools.voice_mode._termux_microphone_command", lambda: "/data/data/com.termux/files/usr/bin/termux-microphone-record")
+        monkeypatch.setattr("tools.voice_mode._termux_api_app_installed", lambda: False)
+        monkeypatch.setattr("tools.voice_mode._import_audio", lambda: (_ for _ in ()).throw(ImportError("no audio libs")))
+
+        from tools.voice_mode import detect_audio_environment
+        result = detect_audio_environment()
+
+        assert result["available"] is False
+        assert any("Termux:API Android app is not installed" in w for w in result["warnings"])
+
+
+    def test_docker_with_pulse_server_allows_voice(self, monkeypatch):
+        """Docker with PULSE_SERVER set should NOT block voice mode (#21203)."""
+        monkeypatch.delenv("SSH_CLIENT", raising=False)
+        monkeypatch.delenv("SSH_TTY", raising=False)
+        monkeypatch.delenv("SSH_CONNECTION", raising=False)
+        monkeypatch.setenv("PULSE_SERVER", "unix:/run/user/1000/pulse/native")
+        monkeypatch.delenv("PIPEWIRE_REMOTE", raising=False)
+        monkeypatch.setattr("hermes_constants.is_container", lambda: True)
+        monkeypatch.setattr("tools.voice_mode._import_audio",
+                            lambda: (MagicMock(), MagicMock()))
+
+        from tools.voice_mode import detect_audio_environment
+        result = detect_audio_environment()
+
+        assert result["available"] is True
+        assert result["warnings"] == []
+        assert any("container" in n.lower() for n in result.get("notices", []))
+
+    def test_docker_with_pipewire_remote_allows_voice(self, monkeypatch):
+        """Docker with PIPEWIRE_REMOTE set should NOT block voice mode (#21203)."""
+        monkeypatch.delenv("SSH_CLIENT", raising=False)
+        monkeypatch.delenv("SSH_TTY", raising=False)
+        monkeypatch.delenv("SSH_CONNECTION", raising=False)
+        monkeypatch.delenv("PULSE_SERVER", raising=False)
+        monkeypatch.setenv("PIPEWIRE_REMOTE", "/run/user/1000/pipewire-0")
+        monkeypatch.setattr("hermes_constants.is_container", lambda: True)
+        monkeypatch.setattr("tools.voice_mode._import_audio",
+                            lambda: (MagicMock(), MagicMock()))
+
+        from tools.voice_mode import detect_audio_environment
+        result = detect_audio_environment()
+
+        assert result["available"] is True
+        assert result["warnings"] == []
+        assert any("container" in n.lower() for n in result.get("notices", []))
 
     def test_docker_with_pipewire_remote_and_no_devices_allows_voice(self, monkeypatch):
         """PIPEWIRE_REMOTE should bypass empty PortAudio device lists in Docker."""
