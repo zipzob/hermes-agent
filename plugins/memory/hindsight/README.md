@@ -118,6 +118,29 @@ Config file: `~/.hermes/hindsight/config.json`
 | `llm_model` | per-provider | Model name (e.g. `gpt-4o-mini`, `qwen/qwen3.5-9b`) |
 | `llm_base_url` | — | Endpoint URL for `openai_compatible` (e.g. `http://192.168.1.10:8080/v1`) |
 
+#### Local runtime limits
+
+Embedded Hindsight defaults target hosted or unconstrained inference: 10 worker
+slots and up to 32 concurrent LLM calls. When Hindsight shares a constrained
+local Ollama GPU with interactive or vision tools, set explicit limits in
+`config.json`:
+
+| Key | Upstream default | Description |
+|-----|------------------|-------------|
+| `worker_max_slots` | `10` | Maximum concurrent background tasks |
+| `worker_consolidation_max_slots` | `2` | Slots reserved for consolidation; set to `0` when `worker_max_slots` is below `2` |
+| `worker_retain_max_slots` | `0` | Slots reserved for retain operations |
+| `llm_max_concurrent` | `32` | Maximum concurrent LLM requests across operations |
+| `retain_llm_max_concurrent` | inherits global | Retain-specific LLM limit |
+| `consolidation_llm_max_concurrent` | inherits global | Consolidation-specific LLM limit |
+| `llm_max_retries` | `3` | LLM retries after the first attempt |
+| `worker_task_retry_backoff_seconds` | `60` | Delay before retrying failed background tasks |
+
+For a 6 GB GPU shared with model-switching workloads, start with one worker and
+one LLM request, no reserved slots, and a longer retry backoff. Stop the embedded
+daemon with `hindsight-embed -p <profile> daemon stop` before an exclusive vision
+batch; restart it afterward with `hindsight-embed -p <profile> daemon start`.
+
 The LLM API key is stored in `~/.hermes/.env` as `HINDSIGHT_LLM_API_KEY`.
 
 ## Tools
