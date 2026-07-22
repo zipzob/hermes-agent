@@ -454,6 +454,29 @@ class TestConfig:
         assert env["HINDSIGHT_EMBED_DAEMON_IDLE_TIMEOUT"] == "0"
 
 
+    def test_embedded_profile_env_includes_local_runtime_limits(self):
+        env = _build_embedded_profile_env({
+            "llm_provider": "ollama",
+            "llm_model": "small-local-model",
+            "llm_max_concurrent": 1,
+            "llm_max_retries": 1,
+            "worker_max_slots": 1,
+            "worker_consolidation_max_slots": 0,
+            "worker_retain_max_slots": 0,
+            "worker_task_retry_backoff_seconds": 300,
+            "retain_llm_max_concurrent": 1,
+            "consolidation_llm_max_concurrent": 1,
+        })
+
+        assert env["HINDSIGHT_API_LLM_MAX_CONCURRENT"] == "1"
+        assert env["HINDSIGHT_API_LLM_MAX_RETRIES"] == "1"
+        assert env["HINDSIGHT_API_WORKER_MAX_SLOTS"] == "1"
+        assert env["HINDSIGHT_API_WORKER_CONSOLIDATION_MAX_SLOTS"] == "0"
+        assert env["HINDSIGHT_API_WORKER_RETAIN_MAX_SLOTS"] == "0"
+        assert env["HINDSIGHT_API_WORKER_TASK_RETRY_BACKOFF_SECONDS"] == "300"
+        assert env["HINDSIGHT_API_RETAIN_LLM_MAX_CONCURRENT"] == "1"
+        assert env["HINDSIGHT_API_CONSOLIDATION_LLM_MAX_CONCURRENT"] == "1"
+
     def test_get_client_passes_idle_timeout_to_hindsight_embedded(self, monkeypatch):
         captured = {}
 
