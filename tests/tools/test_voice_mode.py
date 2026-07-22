@@ -1074,6 +1074,25 @@ class TestMaxRecordingCap:
 class TestPlaybackInterrupt:
     """Verify that TTS playback can be interrupted."""
 
+    def test_recorder_shutdown_kills_pulse_fallback(self, tmp_path):
+        from tools.voice_mode import AudioRecorder
+
+        fallback = tmp_path / "fallback.wav"
+        fallback.write_bytes(b"recording")
+        proc = MagicMock()
+        recorder = AudioRecorder()
+        recorder._fallback_process = proc
+        recorder._fallback_path = str(fallback)
+        recorder._stream = "pulse-fallback"
+
+        recorder.shutdown()
+
+        proc.kill.assert_called_once()
+        proc.wait.assert_called_once_with(timeout=2)
+        assert recorder._fallback_process is None
+        assert recorder._stream is None
+        assert not fallback.exists()
+
     def test_stop_playback_terminates_process(self):
         from tools.voice_mode import stop_playback, _playback_lock
         import tools.voice_mode as vm
@@ -1087,6 +1106,7 @@ class TestPlaybackInterrupt:
         stop_playback()
 
         mock_proc.terminate.assert_called_once()
+        mock_proc.wait.assert_called_once_with(timeout=2)
 
         with _playback_lock:
             assert vm._active_playback is None
