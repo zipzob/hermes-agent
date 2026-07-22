@@ -273,6 +273,7 @@ export interface SessionUsageResponse {
   cost_status?: 'estimated' | 'exact'
   cost_usd?: number
   credits_lines?: string[]
+  governor_status?: string
   input?: number
   model?: string
   output?: number
