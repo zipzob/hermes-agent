@@ -5070,6 +5070,16 @@ def _get_usage(agent) -> dict:
         usage["active_subagents"] = _async_active_count()
     except Exception:
         pass
+    # Compact plugin status rides the existing usage updates so the Ink TUI
+    # can show the same governor item as the classic CLI. Bounded and fail-open.
+    try:
+        from hermes_cli.plugins import get_status_items
+
+        status_items = get_status_items()
+        if status_items:
+            usage["governor_status"] = status_items[0][:40]
+    except Exception:
+        pass
     # Dev-only live credits-spent readout (L0 usage-aware-credits). Gated on
     # HERMES_DEV_CREDITS so the payload stays clean when the flag is off.
     if is_truthy_value(os.environ.get("HERMES_DEV_CREDITS")):

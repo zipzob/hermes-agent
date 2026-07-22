@@ -26,6 +26,7 @@ import type {
   GatewayEvent,
   SessionActiveListResponse,
   SessionCloseResponse,
+  SessionUsageResponse,
   TerminalResizeResponse
 } from '../gatewayTypes.js'
 import { useGitBranch } from '../hooks/useGitBranch.js'
@@ -636,6 +637,33 @@ export function useMainApp(gw: GatewayClient) {
       clearInterval(timer)
     }
   }, [gw, ui.sid])
+
+  // A governor plugin item starts as Q? while its provider refresh runs in a
+  // background thread. Poll only when that item exists, then patch only on a
+  // value change so idle quota updates appear without repaint flicker.
+  useEffect(() => {
+    if (!ui.sid || !ui.usage.governor_status) return
+
+    let stopped = false
+    const refresh = () => {
+      gw.request<SessionUsageResponse>('session.usage', { session_id: getUiState().sid })
+        .then(raw => {
+          const result = asRpcResult<SessionUsageResponse>(raw)
+          const next = result?.governor_status
+          if (!stopped && next && next !== getUiState().usage.governor_status) {
+            patchUiState(state => ({ ...state, usage: { ...state.usage, governor_status: next } }))
+          }
+        })
+        .catch(() => {})
+    }
+
+    refresh()
+    const timer = setInterval(refresh, 5000)
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
+  }, [gw, ui.sid, ui.usage.governor_status])
 
   // Tab title: `⚠` waiting on approval/sudo/secret/clarify, `⏳` busy, `✓` idle.
   // Format: `<marker> <session name> · <model> · <cwd>` — name/cwd omitted when absent.
