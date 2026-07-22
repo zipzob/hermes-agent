@@ -9,6 +9,7 @@ Dependencies (optional):
     or: uv sync --extra voice
 """
 
+import atexit
 import difflib
 import logging
 import math
@@ -1274,11 +1275,10 @@ class AudioRecorder:
         logger.info("Voice recording cancelled")
 
     def shutdown(self) -> None:
-        """Release the audio stream.  Call when voice mode is disabled."""
-        with self._lock:
-            self._recording = False
-            self._frames = []
-            self._on_silence_stop = None
+        """Release audio resources and terminate any Pulse fallback recorder."""
+        self.cancel()
+        if self._stream == "pulse-fallback":
+            self._stream = None
         # Close stream OUTSIDE the lock to avoid deadlock with audio callback
         self._close_stream_with_timeout()
         logger.info("AudioRecorder shut down")
@@ -1678,7 +1678,11 @@ def stop_playback() -> None:
     if proc and proc.poll() is None:
         try:
             proc.terminate()
+            proc.wait(timeout=2)
             logger.info("Audio playback interrupted")
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=2)
         except Exception:
             pass
     # Also stop sounddevice playback if active
@@ -1699,13 +1703,7 @@ def _is_wsl() -> bool:
 
 
 def _is_wsl2_env() -> bool:
-    """Return True when running inside WSL2 (Windows Subsystem for Linux 2).
-
-    Reads /proc/version and checks for the Microsoft kernel signature.
-    Returns False on any error (non-WSL Linux, Docker, SSH, etc.).
-    Extracted as a module-level function so tests can patch it directly
-    without fighting builtins.open patching complexity.
-    """
+    """Return True when running inside Windows Subsystem for Linux 2."""
     try:
         with open("/proc/version", encoding="utf-8", errors="replace") as _fv:
             return "microsoft" in _fv.read().lower()
@@ -1714,18 +1712,15 @@ def _is_wsl2_env() -> bool:
 
 
 def _wsl_powershell_tts_available() -> bool:
-    """Return True when the WSL2 PowerShell TTS playback fallback can be used.
-
-    This only covers OUTPUT (TTS playback via Media.SoundPlayer on the
-    Windows host) -- it does NOT make microphone recording work. A caller
-    using this to relax the audio-environment gate must still surface the
-    existing PulseAudio-bridge guidance for recording/STT.
-    """
+    """Return whether WSL2 can use the Windows-host TTS fallback."""
     return bool(
         _is_wsl2_env()
         and shutil.which("powershell.exe")
         and shutil.which("ffmpeg")
     )
+
+
+atexit.register(stop_playback)
 
 
 def play_audio_file(file_path: str) -> bool:
