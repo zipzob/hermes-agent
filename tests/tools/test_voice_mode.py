@@ -54,6 +54,7 @@ def temp_voice_dir(tmp_path, monkeypatch):
 @pytest.fixture
 def mock_sd(monkeypatch):
     """Mock _import_audio to return (mock_sd, real_np) so lazy imports work."""
+    monkeypatch.delenv("PULSE_SERVER", raising=False)
     mock = MagicMock()
     try:
         import numpy as real_np
