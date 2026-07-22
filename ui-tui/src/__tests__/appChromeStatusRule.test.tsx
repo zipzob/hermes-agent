@@ -130,7 +130,7 @@ describe('StatusRule session title', () => {
 
 describe('StatusRule resource governor indicator', () => {
   it('renders projected quota risk as a warning, not current exhaustion', () => {
-    const governor = 'bal G11→75Y S19→100R C94'
+    const governor = 'bal G7d11→75Y S5h80→100R C94'
     const element = StatusRule({
       ...baseProps,
       cols: 120,
@@ -142,7 +142,7 @@ describe('StatusRule resource governor indicator', () => {
   })
 
   it('renders exhausted quota as an error', () => {
-    const governor = 'bal G11→75Y S100→100E C94'
+    const governor = 'bal G7d11→75Y S5h100→100E C94'
     const element = StatusRule({
       ...baseProps,
       cols: 120,
