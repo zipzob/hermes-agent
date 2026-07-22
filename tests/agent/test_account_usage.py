@@ -78,6 +78,62 @@ def test_codex_usage_prefers_explicit_live_agent_credentials(monkeypatch, codex_
     assert calls[0]["headers"]["Authorization"] == "Bearer live-agent-token"
 
 
+def test_codex_usage_labels_duration_when_primary_is_weekly(monkeypatch, codex_usage_payload):
+    calls = []
+    codex_usage_payload["rate_limit"] = {
+        "primary_window": {
+            "used_percent": 20,
+            "reset_at": 1785104392,
+            "limit_window_seconds": 604800,
+        },
+        "secondary_window": None,
+    }
+    monkeypatch.setattr(
+        account_usage.httpx,
+        "Client",
+        lambda timeout: _FakeClient(calls, codex_usage_payload),
+    )
+    snapshot = account_usage.fetch_account_usage(
+        "openai-codex",
+        base_url="https://chatgpt.com/backend-api/codex",
+        api_key="live-agent-token",
+    )
+    assert snapshot is not None
+    assert [window.label for window in snapshot.windows] == ["Weekly"]
+
+
+def test_codex_usage_includes_model_specific_additional_limits(monkeypatch, codex_usage_payload):
+    calls = []
+    codex_usage_payload["additional_rate_limits"] = [
+        {
+            "limit_name": "GPT-5.3-Codex-Spark",
+            "metered_feature": "codex_bengalfox",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 62,
+                    "reset_at": 1785104904,
+                    "limit_window_seconds": 604800,
+                },
+                "secondary_window": None,
+            },
+        }
+    ]
+    monkeypatch.setattr(
+        account_usage.httpx,
+        "Client",
+        lambda timeout: _FakeClient(calls, codex_usage_payload),
+    )
+    snapshot = account_usage.fetch_account_usage(
+        "openai-codex",
+        base_url="https://chatgpt.com/backend-api/codex",
+        api_key="live-agent-token",
+    )
+    assert snapshot is not None
+    assert snapshot.windows[-1].label == "GPT-5.3-Codex-Spark weekly"
+    assert snapshot.windows[-1].used_percent == 62
+    assert snapshot.windows[-1].window_seconds == 604800
+
+
 def test_codex_usage_falls_back_to_native_credential_pool(monkeypatch, codex_usage_payload):
     calls = []
     monkeypatch.setattr(

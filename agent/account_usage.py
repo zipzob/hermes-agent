@@ -28,6 +28,7 @@ class AccountUsageWindow:
     used_percent: Optional[float] = None
     reset_at: Optional[datetime] = None
     detail: Optional[str] = None
+    window_seconds: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -525,18 +526,53 @@ def _fetch_codex_account_usage(
     payload = response.json() or {}
     rate_limit = payload.get("rate_limit") or {}
     windows: list[AccountUsageWindow] = []
-    for key, label in (("primary_window", "Session"), ("secondary_window", "Weekly")):
+    for key, fallback_label in (("primary_window", "Session"), ("secondary_window", "Weekly")):
         window = rate_limit.get(key) or {}
         used = window.get("used_percent")
         if used is None:
             continue
+        duration = window.get("limit_window_seconds")
+        label = fallback_label
+        if isinstance(duration, (int, float)):
+            if duration >= 6 * 24 * 60 * 60:
+                label = "Weekly"
+            elif duration <= 6 * 60 * 60:
+                label = "Session"
         windows.append(
             AccountUsageWindow(
                 label=label,
                 used_percent=float(used),
                 reset_at=_parse_dt(window.get("reset_at")),
+                window_seconds=int(duration) if isinstance(duration, (int, float)) else None,
             )
         )
+    additional = payload.get("additional_rate_limits") or []
+    if isinstance(additional, list):
+        for item in additional:
+            if not isinstance(item, dict):
+                continue
+            limit_name = str(item.get("limit_name") or "Additional Codex limit").strip()
+            extra_rate_limit = item.get("rate_limit") or {}
+            for key in ("primary_window", "secondary_window"):
+                window = extra_rate_limit.get(key) or {}
+                used = window.get("used_percent")
+                if not isinstance(used, (int, float)):
+                    continue
+                duration = window.get("limit_window_seconds")
+                period = ""
+                if isinstance(duration, (int, float)):
+                    if duration >= 6 * 24 * 60 * 60:
+                        period = " weekly"
+                    elif duration <= 6 * 60 * 60:
+                        period = " session"
+                windows.append(
+                    AccountUsageWindow(
+                        label=f"{limit_name}{period}",
+                        used_percent=float(used),
+                        reset_at=_parse_dt(window.get("reset_at")),
+                        window_seconds=int(duration) if isinstance(duration, (int, float)) else None,
+                    )
+                )
     details: list[str] = []
     reset_credits = payload.get("rate_limit_reset_credits") or {}
     banked = reset_credits.get("available_count")
@@ -597,8 +633,8 @@ def redeem_codex_reset_credit(
 
     1. ``GET .../usage`` — read the current windows + banked credit count.
     2. Guard: zero banked credits → refuse. No window fully used and not
-       ``force`` → refuse with a warning (a banked reset restores the WHOLE
-       5h + weekly allowance; burning it early wastes it). The backend has
+       ``force`` → refuse with a warning (a banked reset restores the full
+       provider-reported windows; burning it early wastes it). The backend has
        the same protection (``nothing_to_reset`` doesn't consume the
        credit), but failing fast client-side gives a clearer message.
     3. ``POST .../rate-limit-reset-credits/consume`` with a fresh UUID
@@ -659,8 +695,8 @@ def redeem_codex_reset_credit(
                 return CodexResetRedeemResult(
                     status="not_exhausted",
                     message=(
-                        f"⚠️ Not redeeming: {usage_note}. A banked reset restores your FULL "
-                        f"5h + weekly limits, so spending it now would waste most of it. "
+                        f"⚠️ Not redeeming: {usage_note}. A banked reset restores your full "
+                        f"provider-reported limits, so spending it now would waste most of it. "
                         f"You have {available} reset{plural} banked. "
                         f"Use `/usage reset --force` to redeem anyway."
                     ),

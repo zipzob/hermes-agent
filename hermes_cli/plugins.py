@@ -3384,6 +3384,14 @@ class PluginContext:
         )
         return count
 
+    def register_status_item(self, name: str, callback: Callable[[], str]) -> None:
+        """Register a compact, read-only item for the interactive status bar."""
+        clean = name.strip().lower()
+        if not clean:
+            raise ValueError("status item name must not be empty")
+        self._manager._status_items[clean] = callback
+        logger.debug("Plugin %s registered status item: %s", self.manifest.name, clean)
+
     def register_hook(self, hook_name: str, callback: Callable) -> PluginRegistration:
         """Register a lifecycle hook callback.
 
@@ -3754,6 +3762,7 @@ class PluginManager:
         self._context_engine = None  # Set by a plugin via register_context_engine()
         self._plugin_commands: Dict[str, dict] = {}  # Slash commands registered by plugins
         self._system_prompt_sections: Dict[str, PluginSystemPromptSection] = {}
+        self._status_items: Dict[str, Callable[[], str]] = {}
         self._discovered: bool = False
         self._cli_ref = None  # Set by CLI after plugin discovery
         self._gateway_message_injector: tuple[object, Callable] | None = None
@@ -4173,6 +4182,7 @@ class PluginManager:
             self._plugin_platform_names.clear()
             self._cli_commands.clear()
             self._plugin_commands.clear()
+            self._status_items.clear()
             self._plugin_skills.clear()
             self._portable_mcp_servers.clear()
             self._aux_tasks.clear()
@@ -6003,6 +6013,16 @@ class PluginManager:
                 len(text),
             )
         return rendered
+        """Return bounded plugin status text; one broken item cannot break the TUI."""
+        items: List[str] = []
+        for callback in self._status_items.values():
+            try:
+                text = str(callback() or "").strip().replace("\n", " ")
+                if text:
+                    items.append(text[:40])
+            except Exception:
+                logger.debug("Plugin status item failed", exc_info=True)
+        return items
 
     def has_middleware(self, kind: str) -> bool:
         """Return True when at least one callback is registered for middleware."""
@@ -6572,6 +6592,11 @@ def fire_pre_command_hook(
                 )
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("pre_command hook dispatch failed (non-fatal): %s", exc)
+
+
+def get_status_items() -> List[str]:
+    """Return compact status-bar items registered by enabled plugins."""
+    return get_plugin_manager().status_items()
 
 
 _thread_tool_whitelist = threading.local()

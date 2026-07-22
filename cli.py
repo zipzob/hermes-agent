@@ -6591,6 +6591,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # Focus view badge (/focus). Persistent indicator so the reduced
             # output mode is never invisible. Display-only.
             "focus_label": "",
+            "plugin_status_items": [],
         }
 
         try:
@@ -6618,6 +6619,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 snapshot["battery_category"] = battery_category(_batt)
             except Exception:
                 pass
+
+        try:
+            from hermes_cli.plugins import get_status_items
+            snapshot["plugin_status_items"] = get_status_items()
+        except Exception:
+            pass
 
         # Count live /bg tasks. The dict entry is removed in the
         # task thread's finally block, so len() reflects truly-running tasks.
@@ -7518,8 +7525,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         Available fields: model, context_detail, context_pct, cache_hit,
         latency, tps, compressions, bg_tasks, bg_processes, bg_subagents,
-        goal, duration, prompt_elapsed, idle_since, focus, yolo, stash,
-        battery, title, total_tokens.
+        goal, plugin_status, duration, prompt_elapsed, idle_since, focus, yolo,
+        stash, battery, title, total_tokens.
         ``total_tokens`` is opt-in only (never shown by default).
         The field order is fixed; the config controls visibility only.
         """
@@ -7604,6 +7611,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     parts.append(f"⛓ {bg_subagent_count}")
                 if goal_segment:
                     parts.append(goal_segment)
+                if _ok("plugin_status"):
+                    parts.extend(snapshot.get("plugin_status_items", [])[:1])
                 if _ok("duration"):
                     parts.append(duration_label)
                 if focus_label:
@@ -7652,6 +7661,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 parts.append(f"⛓ {bg_subagent_count}")
             if goal_segment:
                 parts.append(goal_segment)
+            if _ok("plugin_status"):
+                parts.extend(snapshot.get("plugin_status_items", [])[:1])
             if _ok("duration"):
                 parts.append(duration_label)
             prompt_elapsed = snapshot.get("prompt_elapsed")
@@ -7757,6 +7768,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         _append(frags, " · ", ("class:status-bar-strong", f"⛓ {bg_subagent_count}"))
                     if goal_segment:
                         _append(frags, " · ", ("class:status-bar-strong", goal_segment))
+                    if _ok("plugin_status"):
+                        for item in snapshot.get("plugin_status_items", [])[:1]:
+                            _append(frags, " · ", ("class:status-bar-strong", item))
                     if _ok("duration"):
                         _append(frags, " · ", ("class:status-bar-dim", duration_label))
                     if focus_label:
@@ -7814,6 +7828,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         _append(frags, " │ ", ("class:status-bar-strong", f"⛓ {bg_subagent_count}"))
                     if goal_segment:
                         _append(frags, " │ ", ("class:status-bar-strong", goal_segment))
+                    if _ok("plugin_status"):
+                        for item in snapshot.get("plugin_status_items", [])[:1]:
+                            _append(frags, " │ ", ("class:status-bar-strong", item))
                     if _ok("duration"):
                         _append(frags, " │ ", ("class:status-bar-dim", duration_label))
                     # Position 7: per-prompt elapsed timer (live or frozen)
