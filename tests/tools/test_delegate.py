@@ -22,6 +22,7 @@ from tools.delegate_tool import (
     DELEGATE_TASK_SCHEMA,
     DelegateEvent,
     _get_max_concurrent_children,
+    _delegation_model,
     _load_config,
     delegate_task,
     _build_child_agent,
@@ -71,9 +72,11 @@ class TestDelegateRequirements(unittest.TestCase):
         self.assertNotIn("toolsets", props["tasks"]["items"]["properties"])
         self.assertIn("model", props)
         self.assertIn("provider", props)
+        self.assertIn("complexity", props)
         task_props = props["tasks"]["items"]["properties"]
         self.assertIn("model", task_props)
         self.assertIn("provider", task_props)
+        self.assertIn("complexity", task_props)
         # max_iterations is intentionally NOT exposed to the model — it's
         # config-authoritative via delegation.max_iterations so users get
         # predictable budgets.
@@ -85,6 +88,31 @@ class TestDelegateRequirements(unittest.TestCase):
         self.assertNotIn("acp_command", props["tasks"]["items"]["properties"])
         self.assertNotIn("acp_args", props["tasks"]["items"]["properties"])
         self.assertNotIn("maxItems", props["tasks"])  # removed — limit is now runtime-configurable
+
+    def test_complexity_policy_keeps_mini_simple_only(self):
+        cfg = {
+            "model": "gpt-5.3-codex-spark",
+            "simple_model": "gpt-5.4-mini",
+            "worker_model": "gpt-5.3-codex-spark",
+        }
+        self.assertEqual(_delegation_model(cfg, None, "simple"), "gpt-5.4-mini")
+        self.assertEqual(_delegation_model(cfg, None, "standard"), "gpt-5.3-codex-spark")
+        self.assertEqual(_delegation_model(cfg, "gpt-5.4-mini", "complex"), "gpt-5.3-codex-spark")
+        self.assertEqual(_delegation_model(cfg, "gpt-5.6-sol", "complex"), "gpt-5.6-sol")
+
+    def test_registry_passes_top_level_complexity(self):
+        from tools.registry import registry
+
+        with patch("tools.delegate_tool.delegate_task", return_value="ok") as mock_delegate:
+            self.assertEqual(
+                registry.dispatch(
+                    "delegate_task",
+                    {"goal": "review", "complexity": "complex"},
+                    parent_agent=_make_mock_parent(),
+                ),
+                "ok",
+            )
+        self.assertEqual(mock_delegate.call_args.kwargs["complexity"], "complex")
 
     def test_top_level_description_compact_and_complete(self):
         """The top-level description must stay compact while keeping every
@@ -294,6 +322,8 @@ class TestDelegateTask(unittest.TestCase):
         self.assertEqual(len(result["results"]), 1)
         self.assertEqual(result["results"][0]["status"], "completed")
         self.assertEqual(result["results"][0]["summary"], "Done!")
+        self.assertTrue(result["verification_required"])
+        self.assertIn("independently inspect", result["verification_instruction"])
         mock_run.assert_called_once()
 
     @patch("tools.delegate_tool._run_single_child")
@@ -356,7 +386,7 @@ class TestDelegateTask(unittest.TestCase):
         parent = _make_mock_parent()
         tasks = [
             {"goal": "local first pass", "model": "qwen3.5:4b", "provider": "Windows Ollama"},
-            {"goal": "remote check", "model": "gpt-5.4-mini", "provider": "openai-codex"},
+            {"goal": "remote check", "complexity": "simple", "model": "gpt-5.4-mini", "provider": "openai-codex"},
         ]
 
         with patch("tools.delegate_tool._resolve_delegation_credentials") as resolve:

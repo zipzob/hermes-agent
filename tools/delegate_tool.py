@@ -2776,6 +2776,28 @@ def _recover_tasks_from_json_string(
     return parsed, None
 
 
+def _delegation_complexity(value: Any) -> str:
+    normalized = str(value or "standard").strip().lower()
+    if normalized in {"trivial", "low", "simple"}:
+        return "simple"
+    if normalized in {"high", "hard", "complex"}:
+        return "complex"
+    return "standard"
+
+
+def _delegation_model(cfg: Dict[str, Any], requested: Any, complexity: Any) -> Optional[str]:
+    """Keep Mini behind the explicit simple-task threshold."""
+    level = _delegation_complexity(complexity)
+    requested_model = str(requested or "").strip()
+    simple_model = str(cfg.get("simple_model") or "gpt-5.4-mini").strip()
+    worker_model = str(cfg.get("worker_model") or cfg.get("model") or "").strip()
+    if requested_model and "mini" not in requested_model.lower():
+        return requested_model
+    if level == "simple":
+        return requested_model or simple_model or worker_model or None
+    return worker_model or None
+
+
 def delegate_task(
     goal: Optional[str] = None,
     context: Optional[str] = None,
@@ -2786,6 +2808,7 @@ def delegate_task(
     model: Optional[str] = None,
     provider: Optional[str] = None,
     parent_agent=None,
+    complexity: Optional[str] = None,
 ) -> str:
     """
     Spawn one or more child agents to handle delegated tasks.
@@ -2858,8 +2881,11 @@ def delegate_task(
         task_cfg = dict(cfg)
         if provider or task.get("provider"):
             task_cfg["provider"] = task.get("provider") or provider
-        if model or task.get("model"):
-            task_cfg["model"] = task.get("model") or model
+        task_cfg["model"] = _delegation_model(
+            cfg,
+            task.get("model") or model,
+            task.get("complexity") or complexity,
+        )
         return _resolve_delegation_credentials(task_cfg, parent_agent)
 
     # Normalize to task list
@@ -2881,7 +2907,12 @@ def delegate_task(
             )
         task_list = tasks
     elif goal and isinstance(goal, str) and goal.strip():
-        task_list = [{"goal": goal, "context": context, "role": top_role}]
+        task_list = [{
+            "goal": goal,
+            "context": context,
+            "role": top_role,
+            "complexity": _delegation_complexity(complexity),
+        }]
     else:
         return tool_error("Provide either 'goal' (single task) or 'tasks' (batch).")
 
@@ -3149,6 +3180,11 @@ def delegate_task(
         combined: Dict[str, Any] = {
             "results": results,
             "total_duration_seconds": total_duration,
+            "verification_required": True,
+            "verification_instruction": (
+                "Main agent must independently inspect the child evidence/diff and "
+                "run or confirm deterministic checks before accepting the result."
+            ),
         }
         if live_paths:
             combined["live_transcripts"] = list(live_paths)
@@ -3819,9 +3855,14 @@ DELEGATE_TASK_SCHEMA = {
                             "enum": ["leaf", "orchestrator"],
                             "description": "Per-task role override. See top-level 'role' for semantics.",
                         },
+                        "complexity": {
+                            "type": "string",
+                            "enum": ["simple", "standard", "complex"],
+                            "description": "Use simple only for bounded, easily verified work eligible for Mini. Standard/complex use the configured worker model.",
+                        },
                         "model": {
                             "type": "string",
-                            "description": "Per-task model override. Use cheap/local models for simple work; stronger models only when needed.",
+                            "description": "Per-task model override. Mini is policy-limited to complexity=simple; standard/complex use the stronger worker model.",
                         },
                         "provider": {
                             "type": "string",
@@ -3840,8 +3881,15 @@ DELEGATE_TASK_SCHEMA = {
                 "enum": ["leaf", "orchestrator"],
                 "description": "(rebuilt at get_definitions() time)",
             },
+            "complexity": {
+                "type": "string",
+                "enum": ["simple", "standard", "complex"],
+                "description": (
+                    "Delegated-task complexity. 'simple' permits GPT-5.4 Mini; "
+                    "omitted/standard and complex use the configured stronger worker model."
+                ),
+            },
             "background": {
-                "type": "boolean",
                 "description": (
                     "DEPRECATED / IGNORED. Top-level single and batch "
                     "delegations run in the background automatically — you do "
@@ -3854,7 +3902,7 @@ DELEGATE_TASK_SCHEMA = {
             },
             "model": {
                 "type": "string",
-                "description": "Model override for child agents. Prefer cheap/local models for simple tasks; omit to use delegation config.",
+                "description": "Model override for child agents. Mini overrides are accepted only when complexity=simple; omit to use complexity policy.",
             },
             "provider": {
                 "type": "string",
@@ -3923,6 +3971,7 @@ registry.register(
         model=args.get("model"),
         provider=args.get("provider"),
         parent_agent=kw.get("parent_agent"),
+        complexity=args.get("complexity"),
     ),
     check_fn=check_delegate_requirements,
     emoji="🔀",
