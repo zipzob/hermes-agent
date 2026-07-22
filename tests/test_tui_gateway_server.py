@@ -15183,6 +15183,18 @@ def test_get_usage_includes_active_subagents(monkeypatch):
     assert usage["active_subagents"] == 4
 
 
+def test_get_usage_includes_bounded_governor_status(monkeypatch):
+    import hermes_cli.plugins as plugins_mod
+
+    monkeypatch.setattr(
+        plugins_mod,
+        "get_status_items",
+        lambda: ["bal G14→56G S63→100R? C94"],
+    )
+    usage = server._get_usage(_BareAgent())
+    assert usage["governor_status"] == "bal G14→56G S63→100R? C94"
+
+
 def test_get_usage_active_subagents_zero(monkeypatch):
     import tools.async_delegation as ad_mod
     monkeypatch.setattr(ad_mod, "active_count", lambda: 0)

@@ -258,6 +258,14 @@ function ctxBar(pct: number | undefined, w = 10) {
   return '█'.repeat(filled) + '░'.repeat(w - filled)
 }
 
+function governorStatusColor(value: string, t: Theme) {
+  if (/[GS]\d+(?:→\d+)?E/.test(value)) return t.color.error
+  if (/[GS]\d+(?:→\d+)?[ROY]/.test(value)) return t.color.warn
+  if (value.includes('?')) return t.color.muted
+
+  return t.color.statusGood
+}
+
 // `minLeftContent` is the display width of the high-priority left segments
 // (status indicator + model + context). Reserving it makes the cwd/branch
 // segment on the right yield FIRST on narrow terminals, instead of squeezing
@@ -502,6 +510,7 @@ export function StatusRule({
 
   const bar = !segs.compactCtx && usage.context_max ? ctxBar(pct) : ''
   const modelText = modelLabel(model, modelReasoningEffort, modelFast)
+  const governorText = String(usage.governor_status ?? '').trim()
 
   // Battery read-out — the first (pinned) status-bar element when enabled.
   const showBattery = !!battery && battery.available && battery.percent != null
@@ -538,7 +547,8 @@ export function StatusRule({
     slotWidth +
     stringWidth(' │ ') +
     stringWidth(modelText) +
-    (ctxLabel ? stringWidth(' │ ') + stringWidth(ctxLabel) : 0)
+    (ctxLabel ? stringWidth(' │ ') + stringWidth(ctxLabel) : 0) +
+    (governorText ? stringWidth(' │ ') + stringWidth(governorText) : 0)
 
   const { leftWidth, rightWidth, separatorWidth } = statusRuleWidths(cols, cwdLabel, essentialWidth)
 
@@ -668,6 +678,12 @@ export function StatusRule({
             <Text color={t.color.muted} wrap="truncate-end">
               {' │ '}
               {ctxLabel}
+            </Text>
+          ) : null}
+          {governorText ? (
+            <Text color={governorStatusColor(governorText, t)} wrap="truncate-end">
+              {' │ '}
+              {governorText}
             </Text>
           ) : null}
         </Box>

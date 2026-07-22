@@ -193,6 +193,7 @@ export interface Usage {
   cost_status?: string
   cost_usd?: number
   dev_credits_spent_micros?: number
+  governor_status?: string
   input: number
   output: number
   reasoning?: number

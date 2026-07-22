@@ -1177,6 +1177,14 @@ class PluginContext:
             display_name,
         )
 
+    def register_status_item(self, name: str, callback: Callable[[], str]) -> None:
+        """Register a compact, read-only item for the interactive status bar."""
+        clean = name.strip().lower()
+        if not clean:
+            raise ValueError("status item name must not be empty")
+        self._manager._status_items[clean] = callback
+        logger.debug("Plugin %s registered status item: %s", self.manifest.name, clean)
+
     def register_hook(self, hook_name: str, callback: Callable) -> None:
         """Register a lifecycle hook callback.
 
@@ -1279,6 +1287,7 @@ class PluginManager:
         self._cli_commands: Dict[str, dict] = {}
         self._context_engine = None  # Set by a plugin via register_context_engine()
         self._plugin_commands: Dict[str, dict] = {}  # Slash commands registered by plugins
+        self._status_items: Dict[str, Callable[[], str]] = {}
         self._discovered: bool = False
         self._cli_ref = None  # Set by CLI after plugin discovery
         # Plugin skill registry: qualified name → metadata dict.
@@ -1319,6 +1328,7 @@ class PluginManager:
             self._plugin_platform_names.clear()
             self._cli_commands.clear()
             self._plugin_commands.clear()
+            self._status_items.clear()
             self._plugin_skills.clear()
             self._aux_tasks.clear()
             self._slack_action_handlers.clear()
@@ -1952,6 +1962,18 @@ class PluginManager:
         """Return True when at least one callback is registered for a hook."""
         return bool(self._hooks.get(hook_name))
 
+    def status_items(self) -> List[str]:
+        """Return bounded plugin status text; one broken item cannot break the TUI."""
+        items: List[str] = []
+        for callback in self._status_items.values():
+            try:
+                text = str(callback() or "").strip().replace("\n", " ")
+                if text:
+                    items.append(text[:40])
+            except Exception:
+                logger.debug("Plugin status item failed", exc_info=True)
+        return items
+
     def has_middleware(self, kind: str) -> bool:
         """Return True when at least one callback is registered for middleware."""
         return bool(self._middleware.get(kind))
@@ -2096,6 +2118,11 @@ def has_middleware(kind: str) -> bool:
 def has_hook(hook_name: str) -> bool:
     """Return True when a loaded plugin handles a hook."""
     return get_plugin_manager().has_hook(hook_name)
+
+
+def get_status_items() -> List[str]:
+    """Return compact status-bar items registered by enabled plugins."""
+    return get_plugin_manager().status_items()
 
 
 _thread_tool_whitelist = threading.local()
