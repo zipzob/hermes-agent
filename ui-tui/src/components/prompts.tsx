@@ -1,5 +1,5 @@
-import { Box, Text, useInput, wrapAnsi } from '@hermes/ink'
-import { useState } from 'react'
+import { Box, invalidatePrevFrame, Text, useInput, useStdout, wrapAnsi } from '@hermes/ink'
+import { useLayoutEffect, useState } from 'react'
 
 import { isMac } from '../lib/platform.js'
 import type { Theme } from '../theme.js'
@@ -83,6 +83,22 @@ export function approvalAction(
 export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptProps) {
   const [sel, setSel] = useState(0)
   const opts = approvalOptions(req)
+  const { stdout } = useStdout()
+
+  // Approval rows sit above a live transcript/status surface. Rebuild the
+  // renderer's previous frame when the highlight moves or this tall prompt
+  // unmounts, so cached overlay cells cannot be blitted into adjacent rows.
+  useLayoutEffect(() => {
+    if (stdout) {
+      invalidatePrevFrame(stdout)
+    }
+
+    return () => {
+      if (stdout) {
+        invalidatePrevFrame(stdout)
+      }
+    }
+  }, [sel, stdout])
 
   useInput((ch, key) => {
     const action = approvalAction(ch, key, sel, opts)
