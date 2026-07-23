@@ -1273,16 +1273,22 @@ export default class Ink {
   }
 
   /**
-   * Mark the previous frame as untrustworthy for blit, forcing the next
-   * render to do a full-damage diff instead of the per-node fast path.
+   * Mark the previous frame as untrustworthy for blit. In alt-screen mode,
+   * also erase and repaint on the next frame: a virtual full-damage diff
+   * cannot remove a glyph that exists only on the physical terminal.
    *
-   * Lighter than forceRedraw() — no screen clear, no extra write. Call
-   * from a useLayoutEffect cleanup when unmounting a tall overlay: the
-   * blit fast path can copy stale cells from the overlay frame into rows
-   * the shrunken layout no longer reaches, leaving a ghost title/divider.
-   * onRender resets the flag at frame end so it's one-shot.
+   * This is lifecycle-scoped (overlay mount/change/unmount), not a global
+   * redraw loop. The clear and repaint share the normal synchronized output
+   * buffer, unlike forceRedraw() which clears immediately in a separate write.
    */
   invalidatePrevFrame(): void {
+    if (this.altScreenActive && this.options.stdout.isTTY && !this.isUnmounted && !this.isPaused) {
+      this.resetFramesForAltScreen()
+      this.needsEraseBeforePaint = true
+
+      return
+    }
+
     this.prevFrameContaminated = true
   }
 
