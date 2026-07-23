@@ -92,8 +92,8 @@ def _codex_window_period(seconds: Any, fallback: str) -> str:
     return f"{value}-second"
 
 
-def _virtual_daily_pace(window: AccountUsageWindow) -> Optional[tuple[float, float, float]]:
-    """Return daily budget, average daily burn, and schedule delta in percentage points."""
+def _virtual_daily_pace(window: AccountUsageWindow) -> Optional[tuple[float, float, float, float]]:
+    """Return daily budget, burn, schedule delta, and percent of daily pace."""
     if (
         window.used_percent is None
         or not window.reset_at
@@ -109,7 +109,8 @@ def _virtual_daily_pace(window: AccountUsageWindow) -> Optional[tuple[float, flo
     elapsed_days = elapsed_seconds / (24 * 60 * 60)
     average_daily = float(window.used_percent) / elapsed_days
     expected_used = 100.0 * elapsed_seconds / window.window_seconds
-    return daily_budget, average_daily, float(window.used_percent) - expected_used
+    daily_pace_percent = average_daily / daily_budget * 100.0
+    return daily_budget, average_daily, float(window.used_percent) - expected_used, daily_pace_percent
 
 
 def _format_reset(dt: Optional[datetime]) -> str:
@@ -147,16 +148,18 @@ def render_account_usage_lines(snapshot: Optional[AccountUsageSnapshot], *, mark
         else:
             remaining = max(0, round(100 - float(window.used_percent)))
             used = max(0, round(float(window.used_percent)))
-            base = f"{window.label}: {remaining}% remaining ({used}% used)"
+            over = max(0, used - 100)
+            overage = f"; {over}% over limit" if over else ""
+            base = f"{window.label}: {remaining}% remaining ({used}% used{overage})"
             if float(window.used_percent) >= 100:
                 base += " • LIMIT REACHED"
         pace = _virtual_daily_pace(window)
         if pace:
-            daily_budget, average_daily, schedule_delta = pace
+            daily_budget, average_daily, schedule_delta, daily_pace_percent = pace
             position = "over" if schedule_delta >= 0 else "under"
             base += (
                 f" • virtual daily {daily_budget:.1f}% budget vs {average_daily:.1f}% used/day"
-                f" ({abs(schedule_delta):.1f}pp {position} pace)"
+                f" ({daily_pace_percent:.1f}% of daily pace; {abs(schedule_delta):.1f}pp {position})"
             )
         if window.reset_at:
             base += f" • resets {_format_reset(window.reset_at)}"

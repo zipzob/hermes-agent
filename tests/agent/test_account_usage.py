@@ -184,7 +184,21 @@ def test_weekly_window_renders_virtual_daily_pace(monkeypatch):
 
     rendered = "\n".join(account_usage.render_account_usage_lines(snapshot))
     assert "virtual daily 14.3% budget vs 20.0% used/day" in rendered
-    assert "5.7pp over pace" in rendered
+    assert "140.0% of daily pace; 5.7pp over" in rendered
+
+
+def test_usage_renderer_preserves_over_100_percent():
+    snapshot = account_usage.AccountUsageSnapshot(
+        provider="openai-codex",
+        source="usage_api",
+        fetched_at=datetime.now(timezone.utc),
+        windows=(account_usage.AccountUsageWindow(label="Daily", used_percent=127),),
+    )
+
+    rendered = "\n".join(account_usage.render_account_usage_lines(snapshot))
+
+    assert "Daily: 0% remaining (127% used; 27% over limit)" in rendered
+    assert "LIMIT REACHED" in rendered
 
 
 def test_codex_usage_includes_model_specific_additional_limits(monkeypatch, codex_usage_payload):
