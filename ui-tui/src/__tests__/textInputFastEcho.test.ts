@@ -206,6 +206,11 @@ describe('supportsFastEchoTerminal', () => {
     }
   })
 
+  it('disables fast-echo under WSL cursor-proxy layers', () => {
+    expect(supportsFastEchoTerminal({ WSL_DISTRO_NAME: 'FedoraLinux-44' } as NodeJS.ProcessEnv)).toBe(false)
+    expect(supportsFastEchoTerminal({ WSL_INTEROP: '/run/WSL/123_interop' } as NodeJS.ProcessEnv)).toBe(false)
+  })
+
   it('disables fast-echo in Apple Terminal', () => {
     expect(supportsFastEchoTerminal({ TERM_PROGRAM: 'Apple_Terminal' } as NodeJS.ProcessEnv)).toBe(false)
   })
