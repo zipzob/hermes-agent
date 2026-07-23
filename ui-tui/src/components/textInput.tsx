@@ -516,6 +516,13 @@ export function supportsFastEchoTerminal(env: NodeJS.ProcessEnv = process.env): 
     return false
   }
 
+  // WSL sits behind an additional ConPTY/web-terminal layer that can move the
+  // physical cursor without Ink seeing it. Direct echo then leaves prompt
+  // fragments on adjacent rows; keep all cursor writes inside Ink instead.
+  if ((env.WSL_DISTRO_NAME ?? '').trim() || (env.WSL_INTEROP ?? '').trim()) {
+    return false
+  }
+
   // Terminal.app still shows paint/cursor artifacts under the fast-echo
   // bypass path. Fall back to the normal Ink render path there.
   if ((env.TERM_PROGRAM ?? '').trim() === 'Apple_Terminal') {
