@@ -509,6 +509,13 @@ export function canFastBackspaceShape(current: string, cursor: number, columns?:
 }
 
 export function supportsFastEchoTerminal(env: NodeJS.ProcessEnv = process.env): boolean {
+  // Diagnostic escape hatch for terminal stacks we do not identify reliably
+  // (notably WSL/ConPTY combinations). The normal Ink path is slower but owns
+  // all cursor movement, making this a useful A/B test for paint drift.
+  if (/^(?:0|false|no|off)$/i.test((env.HERMES_TUI_FAST_ECHO ?? '').trim())) {
+    return false
+  }
+
   // Terminal.app still shows paint/cursor artifacts under the fast-echo
   // bypass path. Fall back to the normal Ink render path there.
   if ((env.TERM_PROGRAM ?? '').trim() === 'Apple_Terminal') {
