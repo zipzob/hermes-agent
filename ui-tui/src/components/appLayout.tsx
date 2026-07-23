@@ -16,6 +16,7 @@ import { PLACEHOLDER } from '../content/placeholders.js'
 import { prevRenderedMsg } from '../domain/blockLayout.js'
 import {
   COMPOSER_PROMPT_GAP_WIDTH,
+  composerContentColumns,
   composerPromptWidth,
   inputVisualHeight,
   stableComposerColumns
@@ -402,7 +403,7 @@ const ComposerPane = memo(function ComposerPane({
               onMouseDrag={dragFromPromptRow}
               onMouseUp={endInputDrag}
               position="relative"
-              width={Math.max(1, composer.cols - 2)}
+              width={composerContentColumns(composer.cols)}
             >
               <Box width={promptWidth}>
                 {sh ? (
@@ -486,11 +487,13 @@ const StatusRulePane = memo(function StatusRulePane({
 
   return (
     <Box marginTop={at === 'top' ? 1 : 0}>
+      {/* StatusRule lives inside ComposerPane's paddingX={1}; budget against
+          that inner width so its right edge is not clipped by two cells. */}
       <StatusRule
         battery={ui.battery ? ui.batteryStatus : null}
         bgCount={ui.bgTasks.size}
         busy={ui.busy}
-        cols={composer.cols}
+        cols={composerContentColumns(composer.cols)}
         cwdLabel={status.cwdLabel}
         focusView={ui.focusView}
         indicatorStyle={ui.indicatorStyle}
