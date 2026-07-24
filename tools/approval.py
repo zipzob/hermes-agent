@@ -3649,6 +3649,13 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
     notify callback raised.  Persistence of an approved choice and building
     the final tool-facing result dict remain the caller's responsibility.
     """
+    # Give every interactive transport one absolute wall-clock expiry.  A
+    # monotonic deadline is right for the blocking wait below, but clients need
+    # a portable value they can render and count down from.
+    timeout = _get_approval_timeout()
+    approval_data = dict(approval_data)
+    approval_data.setdefault("expires_at_ms", int((time.time() + max(timeout, 0)) * 1000))
+
     command = approval_data.get("command", "")
     description = approval_data.get("description", "")
     primary_key = approval_data.get("pattern_key", "")
@@ -3701,8 +3708,6 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
     # every ~10s to the agent's inactivity tracker — otherwise the gateway
     # watchdog kills the agent while the user is still responding. Mirrors
     # _wait_for_process() cadence.
-    timeout = _get_approval_timeout()
-
     try:
         from tools.environments.base import touch_activity_if_due
     except Exception:  # pragma: no cover
