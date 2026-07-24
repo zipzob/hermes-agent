@@ -12462,6 +12462,47 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             self._pending_tool_info.setdefault(function_name, []).append(
                 function_args if function_args is not None else {}
             )
+            # "all" is deliberately concise. In "verbose", commit the full,
+            # redacted input to scrollback so complex terminal commands and
+            # code snippets remain reviewable after the spinner advances.
+            if self.tool_progress_mode == "verbose" and function_args:
+                try:
+                    from agent.display import redact_tool_args_for_display
+
+                    display_args = redact_tool_args_for_display(
+                        function_name, function_args
+                    ) or function_args
+                    primary_key = (
+                        "command" if function_name == "terminal"
+                        else "code" if function_name == "execute_code"
+                        else None
+                    )
+                    if primary_key and isinstance(display_args.get(primary_key), str):
+                        rendered = (
+                            f"  {_DIM}┊ {function_name} {primary_key}:{_RST}\n"
+                            f"{display_args[primary_key]}"
+                        )
+                        remaining_args = {
+                            key: value
+                            for key, value in display_args.items()
+                            if key != primary_key
+                        }
+                        if remaining_args:
+                            rendered += "\n" + json.dumps(
+                                remaining_args, indent=2, ensure_ascii=False
+                            )
+                    else:
+                        rendered = (
+                            f"  {_DIM}┊ {function_name} arguments:{_RST}\n"
+                            + json.dumps(display_args, indent=2, ensure_ascii=False)
+                        )
+                    _cprint(rendered)
+                except Exception:
+                    logger.debug(
+                        "Verbose tool-input rendering failed for %s",
+                        function_name,
+                        exc_info=True,
+                    )
             self._invalidate()
 
     def _on_tool_start(self, tool_call_id: str, function_name: str, function_args: dict):
@@ -13756,7 +13797,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
     def _get_approval_display_fragments(self):
         """Render the dangerous-command approval panel for the prompt_toolkit UI.
 
-        Layout priority: title + command + choices must always render, even if
+        Layout priority: title + expiry + command + choices must always render, even if
         the terminal is short or the description is long. Description is placed
         at the bottom of the panel and gets truncated to fit the remaining row
         budget. This prevents HSplit from clipping approve/deny off-screen when
@@ -13799,6 +13840,17 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         show_full = state.get("show_full", False)
 
         title = "⚠️  Dangerous Command"
+        # The approval callback repaints this panel once per second while it
+        # waits. Make the deadline explicit so a user can tell whether the
+        # modal is still actionable instead of discovering a timeout after
+        # attempting to respond.
+        import time as _time
+        remaining_seconds = max(0, int(self._approval_deadline - _time.monotonic()))
+        remaining_minutes, remaining_seconds = divmod(remaining_seconds, 60)
+        expiry_text = (
+            f"Expires in: {remaining_minutes}m {remaining_seconds:02d}s "
+            "(no response: deny)"
+        )
         cmd_display = command
         choice_labels = {
             "once": "Allow once",
@@ -13808,7 +13860,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             "view": "Show full command",
         }
 
-        preview_lines = _wrap_panel_text(description, 60)
+        preview_lines = _wrap_panel_text(expiry_text, 60)
+        preview_lines.extend(_wrap_panel_text(description, 60))
         preview_lines.extend(_wrap_panel_text(cmd_display, 60))
         for i, choice in enumerate(choices):
             prefix = '❯ ' if i == selected else '  '
@@ -13821,7 +13874,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         box_width = _panel_box_width(title, preview_lines)
         inner_text_width = max(8, box_width - 2)
 
-        # Pre-wrap the mandatory content — command + choices must always render.
+        # Pre-wrap the mandatory content — expiry + command + choices must
+        # always render.
+        expiry_wrapped = _wrap_panel_text(expiry_text, inner_text_width)
         cmd_wrapped = _wrap_panel_text(cmd_display, inner_text_width)
         if not show_full and "view" in choices and len(cmd_wrapped) > 4:
             cmd_wrapped = cmd_wrapped[:3] + _wrap_panel_text(
@@ -13849,7 +13904,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         # Budget vertical space so HSplit never clips the command or choices.
         # Panel chrome (full layout with separators):
-        #   top border + title + blank_after_title
+        #   top border + title + expiry + blank_after_title
         #   + blank_between_cmd_choices + bottom border = 5 rows.
         # In tight terminals we collapse to:
         #   top border + title + bottom border = 3 rows (no blanks).
@@ -13864,7 +13919,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         reserved_below = 6
 
         available = max(0, term_rows - reserved_below)
-        mandatory_full = chrome_full + len(cmd_wrapped) + len(choice_wrapped)
+        mandatory_full = (
+            chrome_full + len(expiry_wrapped) + len(cmd_wrapped) + len(choice_wrapped)
+        )
 
         # If the full-chrome panel doesn't fit, drop the separator blanks.
         # This keeps the command and every choice on-screen in compact terminals.
@@ -13874,7 +13931,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # If the command itself is too long to leave room for choices (e.g. user
         # hit "view" on a multi-hundred-character command), truncate it so the
         # approve/deny buttons still render. Keep at least 1 row of command.
-        max_cmd_rows = max(1, available - chrome_rows - len(choice_wrapped))
+        max_cmd_rows = max(
+            1, available - chrome_rows - len(expiry_wrapped) - len(choice_wrapped)
+        )
         if len(cmd_wrapped) > max_cmd_rows:
             keep = max(1, max_cmd_rows - 1) if max_cmd_rows > 1 else 1
             cmd_wrapped = cmd_wrapped[:keep] + _wrap_panel_text(
@@ -13884,7 +13943,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         # Allocate any remaining rows to description. The extra -1 in full mode
         # accounts for the blank separator between choices and description.
-        mandatory_no_desc = chrome_rows + len(cmd_wrapped) + len(choice_wrapped)
+        mandatory_no_desc = (
+            chrome_rows + len(expiry_wrapped) + len(cmd_wrapped) + len(choice_wrapped)
+        )
         desc_sep_cost = 0 if use_compact_chrome else 1
         available_for_desc = available - mandatory_no_desc - desc_sep_cost
         # Even on huge terminals, cap description height so the panel stays compact.
@@ -13895,15 +13956,19 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             desc_wrapped = []
         elif len(desc_wrapped) > available_for_desc:
             keep = max(1, available_for_desc - 1)
-            desc_wrapped = desc_wrapped[:keep] + ["… (description truncated)"]
+            desc_wrapped = desc_wrapped[:keep] + _wrap_panel_text(
+                "… (description truncated)", inner_text_width
+            )
 
-        # Render: title → command → choices → description (description last so
+        # Render: title → expiry → command → choices → description (description last so
         # any remaining overflow clips from the bottom of the least-critical
         # content, never from the command or choices). Use compact chrome (no
         # blank separators) when the terminal is tight.
         lines = []
         lines.append(('class:approval-border', '╭' + ('─' * box_width) + '╮\n'))
         _append_panel_line(lines, 'class:approval-border', 'class:approval-title', title, box_width)
+        for wrapped in expiry_wrapped:
+            _append_panel_line(lines, 'class:approval-border', 'class:approval-desc', wrapped, box_width)
         if not use_compact_chrome:
             _append_blank_panel_line(lines, 'class:approval-border', box_width)
 
