@@ -1168,6 +1168,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         return
       case 'approval.request': {
         const description = String(ev.payload.description ?? 'dangerous command')
+        const expiresAtMs = Number(ev.payload.expires_at_ms)
         // Only an explicit false (tirith warning) drops the permanent-allow option.
         const allowPermanent = ev.payload.allow_permanent !== false
 
@@ -1177,6 +1178,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
             choices: ev.payload.choices,
             command: String(ev.payload.command ?? ''),
             description,
+            expiresAtMs: Number.isFinite(expiresAtMs) ? expiresAtMs : undefined,
             smartDenied: ev.payload.smart_denied === true
           }
         })

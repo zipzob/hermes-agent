@@ -409,6 +409,10 @@ class TestGatewayApprovalAllowPermanent:
         payload = self._capture_gateway_payload("rm -rf /important", "gw-allow-perm")
         assert payload["command"] == "rm -rf /important"
         assert payload["allow_permanent"] is True
+        # Every interactive renderer gets one absolute deadline so it can make
+        # the fail-closed timeout visible instead of silently expiring.
+        assert isinstance(payload["expires_at_ms"], int)
+        assert payload["expires_at_ms"] > 0
 
     @patch(_TIRITH_PATCH,
            return_value=_tirith_result("warn",
