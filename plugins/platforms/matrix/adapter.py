@@ -46,7 +46,8 @@ Environment variables:
                               Require reaction controls to come from the original requester
                               when requester metadata is available (default: true)
     MATRIX_APPROVAL_TIMEOUT_SECONDS
-                              Reaction approval/model-picker timeout (default: 300)
+                              Optional reaction approval/model-picker timeout override.
+                              Defaults to approvals.timeout from config.yaml.
 """
 
 from __future__ import annotations
@@ -1319,10 +1320,12 @@ class MatrixAdapter(BasePlatformAdapter):
             "MATRIX_APPROVAL_REQUIRE_SENDER", "true"
         ).lower() in ("true", "1", "yes")
         try:
+            from tools.approval import get_approval_timeout
+            configured_timeout = get_approval_timeout()
             self._approval_timeout_seconds = int(
-                os.getenv("MATRIX_APPROVAL_TIMEOUT_SECONDS", "300")
+                os.getenv("MATRIX_APPROVAL_TIMEOUT_SECONDS", str(configured_timeout))
             )
-        except ValueError:
+        except (ValueError, TypeError):
             self._approval_timeout_seconds = 300
         self._model_picker_prompts_by_event: Dict[str, _MatrixModelPickerPrompt] = {}
         self._choice_picker_prompts_by_event: Dict[str, _MatrixChoicePickerPrompt] = {}

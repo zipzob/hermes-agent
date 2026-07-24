@@ -2977,6 +2977,15 @@ def _get_approval_timeout() -> int:
         return 300
 
 
+def get_approval_timeout() -> int:
+    """Return the configured approval wait in seconds for UI adapters.
+
+    Gateway adapters with independent interactive controls use this so their
+    button/reaction lifetime matches the agent's actual approval wait.
+    """
+    return _get_approval_timeout()
+
+
 def _get_cron_approval_mode() -> str:
     """Read the cron approval mode from config. Returns 'deny' or 'approve'."""
     try:
