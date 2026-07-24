@@ -708,6 +708,7 @@ export type GatewayEvent =
         choices?: string[]
         command: string
         description: string
+        expires_at_ms?: number
         smart_denied?: boolean
       }
       session_id?: string
