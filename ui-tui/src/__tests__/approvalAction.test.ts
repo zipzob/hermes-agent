@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { approvalAction, approvalOptions } from '../components/prompts.js'
+import { approvalAction, approvalOptions, formatApprovalExpiry } from '../components/prompts.js'
 
 describe('approvalAction — pure key dispatch for ApprovalPrompt', () => {
+  it('formats a visible fail-closed approval expiry countdown', () => {
+    expect(formatApprovalExpiry(915_000, 0)).toBe('Expires in: 15m 15s (no response: deny)')
+    expect(formatApprovalExpiry(1_000, 1_500)).toBe('Expires in: 0m 00s (no response: deny)')
+  })
+
   it('maps Esc to deny — parity with global Ctrl+C cancellation', () => {
     expect(approvalAction('', { escape: true }, 0)).toEqual({ kind: 'choose', choice: 'deny' })
     expect(approvalAction('', { escape: true }, 2)).toEqual({ kind: 'choose', choice: 'deny' })

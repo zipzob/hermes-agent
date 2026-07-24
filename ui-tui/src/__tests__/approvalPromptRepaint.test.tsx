@@ -31,6 +31,41 @@ import { DEFAULT_THEME } from '../theme.js'
 const tick = () => new Promise<void>(resolve => setImmediate(resolve))
 
 describe('ApprovalPrompt frame invalidation', () => {
+  it('renders the backend expiry as visible fail-closed text', async () => {
+    const stdout = new PassThrough()
+    const stdin = new PassThrough()
+    const stderr = new PassThrough()
+    let output = ''
+
+    Object.assign(stdout, { columns: 100, isTTY: false, rows: 30 })
+    Object.assign(stdin, { isTTY: false })
+    Object.assign(stderr, { isTTY: false })
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+
+    const instance = renderSync(
+      <ApprovalPrompt
+        cols={100}
+        onChoice={() => {}}
+        req={{ allowPermanent: true, command: 'echo test', description: 'test command', expiresAtMs: Date.now() + 15 * 60_000 }}
+        t={DEFAULT_THEME}
+      />,
+      {
+        patchConsole: false,
+        stderr: stderr as NodeJS.WriteStream,
+        stdin: stdin as NodeJS.ReadStream,
+        stdout: stdout as NodeJS.WriteStream
+      }
+    )
+
+    await tick()
+    expect(output).toContain('Expires in: 15m')
+    expect(output).toContain('(no response: deny)')
+    instance.unmount()
+    instance.cleanup()
+  })
+
   it('invalidates cached rows when selection moves and when the prompt unmounts', async () => {
     const stdout = new PassThrough()
     const stdin = new PassThrough()

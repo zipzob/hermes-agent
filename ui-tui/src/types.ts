@@ -100,6 +100,7 @@ export interface ApprovalReq {
   choices?: string[]
   command: string
   description: string
+  expiresAtMs?: number
   smartDenied?: boolean
 }
 

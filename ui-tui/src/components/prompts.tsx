@@ -1,5 +1,5 @@
 import { Box, invalidatePrevFrame, Text, useInput, useStdout, wrapAnsi } from '@hermes/ink'
-import { useLayoutEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useState } from 'react'
 
 import { isMac } from '../lib/platform.js'
 import { clarifyBatchRevisitState } from '../lib/text.js'
@@ -81,8 +81,17 @@ export function approvalAction(
   return { kind: 'noop' }
 }
 
+export function formatApprovalExpiry(expiresAtMs: number, nowMs = Date.now()): string {
+  const remaining = Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1000))
+  const minutes = Math.floor(remaining / 60)
+  const seconds = remaining % 60
+
+  return `Expires in: ${minutes}m ${seconds.toString().padStart(2, '0')}s (no response: deny)`
+}
+
 export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptProps) {
   const [sel, setSel] = useState(0)
+  const [nowMs, setNowMs] = useState(() => Date.now())
   const opts = approvalOptions(req)
   const { stdout } = useStdout()
 
@@ -100,6 +109,17 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
       }
     }
   }, [sel, stdout])
+
+  useEffect(() => {
+    if (!req.expiresAtMs) {
+      return
+    }
+
+    setNowMs(Date.now())
+    const timer = setInterval(() => setNowMs(Date.now()), 1_000)
+
+    return () => clearInterval(timer)
+  }, [req.expiresAtMs])
 
   useInput((ch, key) => {
     const action = approvalAction(ch, key, sel, opts)
@@ -142,6 +162,8 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
           </Text>
         ) : null}
       </Box>
+
+      {req.expiresAtMs ? <Text color={t.color.warn}>{formatApprovalExpiry(req.expiresAtMs, nowMs)}</Text> : null}
 
       <Text />
 
