@@ -115,6 +115,25 @@ class TestToolProgressScrollback:
 
         assert mock_print.call_count == 2
 
+    def test_verbose_mode_commits_scrollback_line(self):
+        """In 'verbose' mode, tool.completed commits a persistent scrollback line.
+
+        Regression: 'verbose' used to be omitted from the scrollback gate on
+        the premise that run_agent renders verbose output. That premise is
+        false in the interactive CLI — run_agent's verbose prints are gated on
+        ``not quiet_mode`` and the interactive CLI runs quiet_mode=True. So a
+        non-streaming model call (MoA aggregator, copilot-acp) under 'verbose'
+        rendered each tool only into the self-overwriting spinner, building no
+        scrollable history. 'verbose' is strictly more than 'all', so it must
+        commit at least the same line.
+        """
+        cli = _make_cli(tool_progress="verbose")
+        with patch.object(_cli_mod, "_cprint") as mock_print:
+            cli._on_tool_progress("tool.started", "terminal", "ls", {"command": "ls"})
+            cli._on_tool_progress("tool.completed", "terminal", None, None, duration=0.5, is_error=False)
+
+        assert mock_print.call_count == 2  # full input block + completion line
+        assert "terminal command:" in mock_print.call_args_list[0].args[0]
 
     def test_verbose_mode_commits_every_call(self):
         """In 'verbose' mode, consecutive same-tool calls each commit a line.
@@ -129,10 +148,46 @@ class TestToolProgressScrollback:
             cli._on_tool_progress("tool.started", "terminal", "echo two", {"command": "echo two"})
             cli._on_tool_progress("tool.completed", "terminal", None, None, duration=0.1, is_error=False)
 
-        assert mock_print.call_count == 2
+        assert mock_print.call_count == 4  # one input block + completion per call
 
 
 
+    def test_verbose_mode_config_does_not_enable_global_debug_logging(self):
+        """Verbose tool display must not enable process-wide DEBUG logging."""
+        cli = _make_cli(tool_progress="verbose")
+
+        assert cli.tool_progress_mode == "verbose"
+        assert cli.verbose is False
+
+    def test_verbose_mode_prints_full_multiline_terminal_command_on_start(self):
+        cli = _make_cli(tool_progress="verbose")
+        command = "set -euo pipefail\nprintf 'node: '; node --version\nnpm test"
+
+        with patch.object(_cli_mod, "_cprint") as mock_print:
+            cli._on_tool_progress(
+                "tool.started", "terminal", command, {"command": command}
+            )
+
+        printed = "\n".join(str(call.args[0]) for call in mock_print.call_args_list)
+        assert "terminal command:" in printed
+        assert "set -euo pipefail" in printed
+        assert "printf 'node: '; node --version" in printed
+        assert "npm test" in printed
+
+    def test_explicit_verbose_argument_wins_over_config(self):
+        """Explicit verbose=True from the CLI flag still enables DEBUG logging
+        regardless of tool_progress_mode."""
+        cli = _make_cli(tool_progress="off", verbose=True)
+
+        assert cli.tool_progress_mode == "off"
+        assert cli.verbose is True
+
+    def test_explicit_non_verbose_argument_keeps_debug_logging_off(self):
+        """Explicit verbose=False overrides any default to enable DEBUG."""
+        cli = _make_cli(tool_progress="verbose", verbose=False)
+
+        assert cli.tool_progress_mode == "verbose"
+        assert cli.verbose is False
 
     def test_pending_info_stores_on_started(self):
         """tool.started stores args for later use by tool.completed."""
