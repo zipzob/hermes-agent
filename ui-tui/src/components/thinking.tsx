@@ -92,6 +92,7 @@ function TreeTextRow({
   color,
   content,
   dimColor,
+  onClick,
   rails = [],
   t,
   wrap = 'wrap-trim'
@@ -100,6 +101,7 @@ function TreeTextRow({
   color: string
   content: ReactNode
   dimColor?: boolean
+  onClick?: () => void
   rails?: TreeRails
   t: Theme
   wrap?: 'truncate-end' | 'wrap' | 'wrap-trim'
@@ -116,7 +118,7 @@ function TreeTextRow({
 
   return (
     <TreeRow branch={branch} rails={rails} t={t}>
-      {text}
+      <Box onClick={onClick}>{text}</Box>
     </TreeRow>
   )
 }
@@ -177,6 +179,8 @@ interface DetailRow {
   content: ReactNode
   dimColor?: boolean
   key: string
+  onClick?: () => void
+  payload?: boolean
 }
 
 function Detail({
@@ -184,10 +188,11 @@ function Detail({
   color,
   content,
   dimColor,
+  onClick,
   rails = [],
   t
 }: DetailRow & { branch?: TreeBranch; rails?: TreeRails; t: Theme }) {
-  return <TreeTextRow branch={branch} color={color} content={content} dimColor={dimColor} rails={rails} t={t} />
+  return <TreeTextRow branch={branch} color={color} content={content} dimColor={dimColor} onClick={onClick} rails={rails} t={t} />
 }
 
 function StreamCursor({
@@ -740,6 +745,7 @@ export const ToolTrail = memo(function ToolTrail({
   const [openSubagents, setOpenSubagents] = useState(visible.subagents === 'expanded')
   const [deepSubagents, setDeepSubagents] = useState(visible.subagents === 'expanded')
   const [openMeta, setOpenMeta] = useState(visible.activity === 'expanded')
+  const [openPayloads, setOpenPayloads] = useState<Set<string>>(() => new Set())
 
   useEffect(() => {
     if (!tools.length || (visible.tools !== 'expanded' && !openTools)) {
@@ -820,7 +826,8 @@ export const ToolTrail = memo(function ToolTrail({
           color: parsed.mark === '✗' ? t.color.error : t.color.muted,
           content: parsed.detail,
           dimColor: parsed.mark !== '✗',
-          key: `tr-${i}-d`
+          key: `tr-${i}-d`,
+          payload: /^(Args|Error|Result):\n/.test(parsed.detail)
         })
       }
 
@@ -874,7 +881,8 @@ export const ToolTrail = memo(function ToolTrail({
               color: t.color.muted,
               content: `Args:\n${boundedLiveRenderText(tool.verboseArgs)}`,
               dimColor: true,
-              key: `${tool.id}-args`
+              key: `${tool.id}-args`,
+              payload: true
             }
           ]
         : [],
@@ -1086,9 +1094,46 @@ export const ToolTrail = memo(function ToolTrail({
             const branch: TreeBranch = index === groups.length - 1 ? 'last' : 'mid'
             const childRails = nextTreeRails(rails, branch)
             const hasInlineSubagents = inlineDelegateKey === group.key
+
+            const payloadDetails = group.details.filter(detail => detail.payload)
+            const plainDetails = group.details.filter(detail => !detail.payload)
+            const payloadOpen = openPayloads.has(group.key)
+
+            const renderedDetails: DetailRow[] = payloadDetails.length
+              ? [
+                  ...plainDetails,
+                  {
+                    color: t.color.muted,
+                    content: (
+                      <>
+                        <Text color={t.color.accent}>{payloadOpen ? '▾ ' : '▸ '}</Text>
+                        <Text color={t.color.muted} dim>
+                          Payload
+                        </Text>
+                      </>
+                    ),
+                    dimColor: true,
+                    key: `${group.key}-payload`,
+                    onClick: () =>
+                      setOpenPayloads(previous => {
+                        const next = new Set(previous)
+
+                        if (next.has(group.key)) {
+                          next.delete(group.key)
+                        } else {
+                          next.add(group.key)
+                        }
+
+                        return next
+                      })
+                  },
+                  ...(payloadOpen ? payloadDetails : [])
+                ]
+              : plainDetails
             // Surface the /agents hint the moment a delegate group appears —
             // while it's still in-flight and before any subagent has
             // registered — so users can open the live monitor immediately.
+
             const isDelegateGroup = group.label.startsWith('Delegate Task')
 
             return (
@@ -1110,10 +1155,10 @@ export const ToolTrail = memo(function ToolTrail({
                   rails={rails}
                   t={t}
                 />
-                {group.details.map((detail, detailIndex) => (
+                {renderedDetails.map((detail, detailIndex) => (
                   <Detail
                     {...detail}
-                    branch={detailIndex === group.details.length - 1 && !hasInlineSubagents ? 'last' : 'mid'}
+                    branch={detailIndex === renderedDetails.length - 1 && !hasInlineSubagents ? 'last' : 'mid'}
                     key={detail.key}
                     rails={childRails}
                     t={t}
