@@ -165,6 +165,20 @@ function sourceLabel(source: string): string {
   }
 }
 
+function messageContentToText(content: SessionMessage["content"]): string {
+  if (content === null) return "";
+  if (typeof content === "string") return content;
+  if (typeof content === "number" || typeof content === "boolean") return String(content);
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => messageContentToText(item as SessionMessage["content"]))
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (typeof content === "object") return JSON.stringify(content, null, 2);
+  return String(content);
+}
+
 /** Render an FTS5 snippet with highlighted matches.
  *  The backend wraps matches in >>> and <<< delimiters. */
 function SnippetHighlight({ snippet }: { snippet: string }) {
@@ -340,6 +354,7 @@ function MessageBubble({
   // + <original assistant reply>``. We split it back into two visual
   // rows here so the operator's actual answer survives as a readable
   // bubble next to the (clearly-labelled) handoff metadata (#29824).
+  const messageText = messageContentToText(msg.content);
   const compactionSplit =
     typeof msg.content === "string"
       ? splitCompactionContent(msg.content)
@@ -380,8 +395,8 @@ function MessageBubble({
 
   // Check if any search term appears as a prefix of any word in content
   const isHit = (() => {
-    if (!highlight || !msg.content) return false;
-    const content = msg.content.toLowerCase();
+    if (!highlight || !messageText) return false;
+    const content = messageText.toLowerCase();
     const terms = highlight.toLowerCase().split(/\s+/).filter(Boolean);
     return terms.some((term) => content.includes(term));
   })();
@@ -408,13 +423,13 @@ function MessageBubble({
           </span>
         )}
       </div>
-      {msg.content &&
+      {messageText &&
         (msg.role === "system" ? (
           <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
-            {msg.content}
+            {messageText}
           </div>
         ) : (
-          <Markdown content={msg.content} highlightTerms={highlightTerms} />
+          <Markdown content={messageText} highlightTerms={highlightTerms} />
         ))}
       {msg.tool_calls && msg.tool_calls.length > 0 && (
         <div className="mt-1">
