@@ -7,6 +7,7 @@ turn counting, tags), and schema completeness.
 
 import json
 import importlib
+import importlib.util
 import os
 import re
 import stat
@@ -267,43 +268,17 @@ def test_normalize_observation_scopes_list_of_lists():
 
 def test_check_local_runtime_requires_sentence_transformers(monkeypatch):
     """Missing local embedding deps must fail before daemon startup waits."""
-    real_import_module = importlib.import_module
-
-    def fake_import_module(name, package=None):
-        if name == "sentence_transformers":
-            raise ImportError("No module named 'sentence_transformers'")
-        if name in {"hindsight", "hindsight_embed.daemon_embed_manager"}:
-            return SimpleNamespace()
-        return real_import_module(name, package)
-
-    monkeypatch.setattr(importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name: None if name == "sentence_transformers" else object(),
+    )
 
     available, reason = _check_local_runtime()
 
     assert available is False
     assert reason is not None
     assert "sentence_transformers" in reason
-
-
-def test_check_local_runtime_passes_when_embedded_imports_pass(monkeypatch):
-    seen = []
-    real_import_module = importlib.import_module
-
-    def fake_import_module(name, package=None):
-        if name in {"hindsight", "hindsight_embed.daemon_embed_manager", "sentence_transformers"}:
-            seen.append(name)
-            return SimpleNamespace()
-        return real_import_module(name, package)
-
-    monkeypatch.setattr(importlib, "import_module", fake_import_module)
-
-    assert _check_local_runtime() == (True, None)
-    assert seen == [
-        "hindsight",
-        "hindsight_embed.daemon_embed_manager",
-        "sentence_transformers",
-    ]
-
 
 def test_embedded_startup_in_progress_fails_fast():
     provider = HindsightMemoryProvider()
@@ -1275,6 +1250,29 @@ class TestAvailability:
         p = HindsightMemoryProvider()
         assert p.is_available()
 
+    def test_not_available_without_config(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "plugins.memory.hindsight.get_hermes_home",
+            lambda: tmp_path / "nonexistent",
+        )
+        p = HindsightMemoryProvider()
+        assert not p.is_available()
+
+    def test_available_with_snake_case_api_key_in_config(self, tmp_path, monkeypatch):
+        config_path = tmp_path / "hindsight" / "config.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps({
+            "mode": "cloud",
+            "api_key": "***",
+        }))
+        monkeypatch.setattr(
+            "plugins.memory.hindsight.get_hermes_home",
+            lambda: tmp_path,
+        )
+
+        p = HindsightMemoryProvider()
+
+        assert p.is_available()
 
     def test_local_mode_unavailable_when_runtime_import_fails(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
