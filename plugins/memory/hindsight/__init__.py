@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import importlib
+import importlib.util
 import json
 import logging
 import os
@@ -129,25 +130,17 @@ def _export_port_health_grace_timeout(config: dict[str, Any]) -> None:
 
 
 def _check_local_runtime() -> tuple[bool, str | None]:
-    """Return whether local embedded Hindsight imports cleanly.
-
-    On older CPUs, importing the local Hindsight stack can raise a runtime
-    error from NumPy before the daemon starts. Treat that as "unavailable"
-    so Hermes can degrade gracefully instead of repeatedly trying to start
-    a broken local memory backend.
-
-    The embedded daemon computes embeddings via ``sentence_transformers``
-    (transformers + huggingface-hub). Importing ``hindsight`` /
-    ``hindsight_embed`` alone succeeds even when that stack is broken, so
-    without importing it here the probe would falsely report the backend
-    healthy and ``hermes memory status`` would stay green while the daemon
-    aborts at startup on every retain/recall. Import it too so the probe (and
-    status) reports the real ImportError.
-    """
+    """Return whether the embedded runtime stack is importable."""
+    modules = (
+        "hindsight",
+        "hindsight_embed.daemon_embed_manager",
+        "sentence_transformers",
+    )
     try:
-        importlib.import_module("hindsight")
-        importlib.import_module("hindsight_embed.daemon_embed_manager")
-        importlib.import_module("sentence_transformers")
+        for name in modules:
+            if importlib.util.find_spec(name) is None:
+                return False, f"No module named {name!r}"
+            importlib.import_module(name)
         return True, None
     except Exception as exc:
         return False, str(exc)
@@ -765,7 +758,6 @@ class HindsightMemoryProvider(MemoryProvider):
         self._idle_timeout = _DEFAULT_IDLE_TIMEOUT
         self._embedded_startup_lock = threading.Lock()
         self._embedded_startup_in_progress = False
-        self._embedded_startup_succeeded = False
         self._embedded_failure_at = 0.0
         self._embedded_failure_reason = ""
         self._embedded_failure_cooldown = _DEFAULT_EMBEDDED_FAILURE_COOLDOWN
@@ -1239,14 +1231,12 @@ class HindsightMemoryProvider(MemoryProvider):
     def _mark_embedded_started(self) -> None:
         with self._embedded_startup_lock:
             self._embedded_startup_in_progress = False
-            self._embedded_startup_succeeded = True
             self._embedded_failure_reason = ""
             self._embedded_failure_at = 0.0
 
     def _mark_embedded_failed(self, reason: BaseException | str) -> None:
         with self._embedded_startup_lock:
             self._embedded_startup_in_progress = False
-            self._embedded_startup_succeeded = False
             self._embedded_failure_reason = str(reason) or type(reason).__name__
             self._embedded_failure_at = time.monotonic()
 
