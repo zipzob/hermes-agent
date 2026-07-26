@@ -1989,9 +1989,15 @@ export interface WhatsAppOnboardingApplyResponse {
   restart_error?: string;
 }
 
+export type SessionContentAtom = string | number | boolean | null;
+export type SessionContent =
+  | SessionContentAtom
+  | Array<SessionContent>
+  | { [key: string]: SessionContent };
+
 export interface SessionMessage {
   role: "user" | "assistant" | "system" | "tool";
-  content: string | null;
+  content: SessionContent;
   tool_calls?: Array<{
     id: string;
     function: { name: string; arguments: string };
