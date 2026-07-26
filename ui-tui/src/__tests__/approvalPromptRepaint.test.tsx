@@ -25,12 +25,53 @@ vi.mock('@hermes/ink', async importOriginal => {
   }
 })
 
-import { ApprovalPrompt } from '../components/prompts.js'
+import { approvalPanelWidth, ApprovalPrompt } from '../components/prompts.js'
 import { DEFAULT_THEME } from '../theme.js'
 
 const tick = () => new Promise<void>(resolve => setImmediate(resolve))
 
 describe('ApprovalPrompt frame invalidation', () => {
+  it('invalidates cached rows on each expiry repaint', async () => {
+    vi.useFakeTimers()
+    const stdout = new PassThrough()
+    const stdin = new PassThrough()
+    const stderr = new PassThrough()
+
+    Object.assign(stdout, { columns: 100, isTTY: false, rows: 30 })
+    Object.assign(stdin, { isTTY: false })
+    Object.assign(stderr, { isTTY: false })
+    harness.invalidations = 0
+
+    const instance = renderSync(
+      <ApprovalPrompt
+        cols={100}
+        onChoice={() => {}}
+        req={{ allowPermanent: true, command: 'echo test', description: 'test command', expiresAtMs: Date.now() + 15 * 60_000 }}
+        t={DEFAULT_THEME}
+      />,
+      {
+        patchConsole: false,
+        stderr: stderr as NodeJS.WriteStream,
+        stdin: stdin as NodeJS.ReadStream,
+        stdout: stdout as NodeJS.WriteStream
+      }
+    )
+
+    try {
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(harness.invalidations).toBeGreaterThan(1)
+    } finally {
+      instance.unmount()
+      instance.cleanup()
+      vi.useRealTimers()
+    }
+  })
+
+  it('caps approval dialog width on wide terminals while preserving narrow terminals', () => {
+    expect(approvalPanelWidth(200)).toBe(96)
+    expect(approvalPanelWidth(30)).toBe(26)
+  })
+
   it('renders the backend expiry as visible fail-closed text', async () => {
     const stdout = new PassThrough()
     const stdin = new PassThrough()
