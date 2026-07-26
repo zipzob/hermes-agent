@@ -1717,8 +1717,25 @@ def _tui_need_npm_install(root: Path) -> bool:
     def comparable(pkg: dict) -> dict:
         return {k: v for k, v in pkg.items() if k not in _NPM_LOCK_RUNTIME_KEYS}
 
+    workspace_prefix = None
+    if ws_root != root:
+        try:
+            workspace_prefix = root.relative_to(ws_root).as_posix()
+        except ValueError:
+            pass
+
     for name, pkg in wanted.items():
         if not name:
+            continue
+
+        # A scoped `npm install --workspace ui-tui` intentionally omits other
+        # workspaces and their dependencies from the hidden lockfile. Compare
+        # the selected workspace plus packages npm actually installed for it.
+        if workspace_prefix and not (
+            name in installed
+            or name == workspace_prefix
+            or name.startswith(f"{workspace_prefix}/")
+        ):
             continue
 
         if not isinstance(pkg, dict):
@@ -2114,12 +2131,9 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
             return [str(tsx), "src/entry.tsx"], tui_dir
         return [npm, "start"], tui_dir
 
-    # Desktop/dev launches retain the historical "always rebuild" behaviour.
-    # Termux cold starts use the freshness check because esbuild startup is
-    # expensive on old mobile CPUs.
-    should_build = True
-    if termux_startup:
-        should_build = did_install or termux_need_rebuild
+    # The bundle is self-contained; rebuild only after an install or when an
+    # input is newer. Rebuilding unchanged sources added seconds to every chat.
+    should_build = did_install or _tui_need_rebuild(tui_dir)
 
     if should_build:
         npm = _node_bin("npm")
