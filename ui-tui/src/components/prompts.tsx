@@ -14,6 +14,7 @@ const APPROVAL_OPTS_NO_ALWAYS = APPROVAL_OPTS.filter(o => o !== 'always')
 const APPROVAL_OPTS_SMART_DENY = ['once', 'deny'] as const
 const LABELS = { always: 'Always allow', deny: 'Deny', once: 'Allow once', session: 'Allow this session' } as const
 const CMD_PREVIEW_LINES = 10
+const APPROVAL_PANEL_MAX_WIDTH = 96
 
 type ApprovalChoice = 'always' | 'deny' | 'once' | 'session'
 
@@ -88,6 +89,10 @@ export function formatApprovalExpiry(expiresAtMs: number, nowMs = Date.now()): s
   return `Expires in: ${minutes}m ${seconds.toString().padStart(2, '0')}s (no response: deny)`
 }
 
+export function approvalPanelWidth(cols: number): number {
+  return Math.max(20, Math.min(cols - 4, APPROVAL_PANEL_MAX_WIDTH))
+}
+
 export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptProps) {
   const [sel, setSel] = useState(0)
   const [nowMs, setNowMs] = useState(() => Date.now())
@@ -95,8 +100,8 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
   const { stdout } = useStdout()
 
   // Approval rows sit above a live transcript/status surface. Rebuild the
-  // renderer's previous frame when the highlight moves or this tall prompt
-  // unmounts, so cached overlay cells cannot be blitted into adjacent rows.
+  // renderer's previous frame when any part of this tall prompt changes, so
+  // cached tree rails cannot be blitted into newly streamed rows below it.
   useLayoutEffect(() => {
     if (stdout) {
       invalidatePrevFrame(stdout)
@@ -107,7 +112,7 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
         invalidatePrevFrame(stdout)
       }
     }
-  }, [sel, stdout])
+  }, [nowMs, sel, stdout])
 
   useEffect(() => {
     if (!req.expiresAtMs) {
@@ -130,10 +135,10 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
     }
   })
 
-  // Wrap long single-line commands to the panel width instead of clipping the
-  // tail (mirrors the CLI approval panel fix — the full command must be
-  // reviewable before approving). Border + paddingX + inner padding ≈ 8 cols.
-  const innerWidth = Math.max(20, cols - 8)
+  // Keep the confirmation focused on wide terminals while preserving enough
+  // room to inspect multi-line commands. Border + paddingX + inner padding.
+  const panelWidth = approvalPanelWidth(cols)
+  const innerWidth = Math.max(20, panelWidth - 6)
 
   const rawLines = req.command
     .split('\n')
@@ -143,7 +148,7 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
   const overflow = rawLines.length - shown.length
 
   return (
-    <Box borderColor={t.color.warn} borderStyle="double" flexDirection="column" paddingX={1}>
+    <Box alignSelf="center" borderColor={t.color.warn} borderStyle="double" flexDirection="column" paddingX={1} width={panelWidth}>
       <Text bold color={t.color.warn}>
         ⚠ approval required · {req.description}
       </Text>
