@@ -259,9 +259,17 @@ function ctxBar(pct: number | undefined, w = 10) {
 }
 
 function governorStatusColor(value: string, t: Theme) {
-  if (/[GS](?:\d+[hd])?\d+(?:→\d+)?E/.test(value)) return t.color.error
-  if (/[GS](?:\d+[hd])?\d+(?:→\d+)?[ROY]/.test(value)) return t.color.warn
-  if (value.includes('?')) return t.color.muted
+  if (/[GS](?:\d+[hd])?\d+(?:→\d+)?E/.test(value)) {
+    return t.color.error
+  }
+
+  if (/[GS](?:\d+[hd])?\d+(?:→\d+)?[ROY]/.test(value)) {
+    return t.color.warn
+  }
+
+  if (value.includes('?')) {
+    return t.color.muted
+  }
 
   return t.color.statusGood
 }
