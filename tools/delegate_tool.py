@@ -3137,6 +3137,8 @@ def delegate_task(
     role: Optional[str] = None,
     background: Optional[bool] = None,
     output_schema: Optional[Dict[str, Any]] = None,
+    model: Optional[str] = None,
+    provider: Optional[str] = None,
     parent_agent=None,
 ) -> str:
     """
@@ -3206,15 +3208,13 @@ def delegate_task(
         )
     effective_max_iter = default_max_iter
 
-    # Resolve delegation credentials (provider:model pair).
-    # When delegation.provider is configured, this resolves the full credential
-    # bundle (base_url, api_key, api_mode) via the same runtime provider system
-    # used by CLI/gateway startup.  When unconfigured, returns None values so
-    # children inherit from the parent.
-    try:
-        creds = _resolve_delegation_credentials(cfg, parent_agent)
-    except ValueError as exc:
-        return tool_error(str(exc))
+    def _task_creds(task: Dict[str, Any]) -> Dict[str, Any]:
+        task_cfg = dict(cfg)
+        if provider or task.get("provider"):
+            task_cfg["provider"] = task.get("provider") or provider
+        if model or task.get("model"):
+            task_cfg["model"] = task.get("model") or model
+        return _resolve_delegation_credentials(task_cfg, parent_agent)
 
     # Normalize to task list
     max_children = _get_max_concurrent_children()
@@ -3330,6 +3330,7 @@ def delegate_task(
     # toolset resolution never leaks into the parent (shared with the plugin
     # subagent-lifecycle API).
     children = []
+    dispatch_model: Optional[str] = None
     for i, t in enumerate(task_list):
         # Per-task role beats top-level; normalise again so unknown
         # per-task values warn and degrade to leaf uniformly.
@@ -3342,6 +3343,11 @@ def delegate_task(
             from tools.delegation_output_schema import append_output_contract
 
             _child_context = append_output_contract(_child_context, _task_schema)
+        try:
+            creds = _task_creds(t)
+        except ValueError as exc:
+            return tool_error(str(exc))
+        dispatch_model = creds["model"]
         child = _build_child_preserving_parent_tools(
             task_index=i,
             goal=t["goal"],
@@ -3371,10 +3377,6 @@ def delegate_task(
             except Exception:
                 logger.debug("Could not attach output schema to child %d", i)
         # Tee the child's progress events into its live transcript log.
-        # wrap_progress_callback preserves the inner callback contract
-        # (including the _flush attribute) and never lets writer failures
-        # reach the agent loop. When no parent display exists the inner
-        # callback is None and the wrapper still records events.
         _writer = live_writers[i] if i < len(live_writers) else None
         if _writer is not None:
             child.tool_progress_callback = wrap_progress_callback(
@@ -3744,7 +3746,7 @@ def delegate_task(
             # parent's toolsets (no model-facing toolsets arg).
             toolsets=None,
             role=top_role,
-            model=creds["model"],
+            model=dispatch_model,
             session_key=_session_key,
             origin_ui_session_id=_origin_ui_session_id,
             origin_session_id=_wake_sid,
@@ -4254,6 +4256,14 @@ DELEGATE_TASK_SCHEMA = {
                                 "require only fields you will actually read."
                             ),
                         },
+                        "model": {
+                            "type": "string",
+                            "description": "Per-task model override. Use cheap/local models for simple work; stronger models only when needed.",
+                        },
+                        "provider": {
+                            "type": "string",
+                            "description": "Per-task provider override, e.g. a configured custom provider such as Windows Ollama or openai-codex.",
+                        },
                     },
                     "required": ["goal"],
                 },
@@ -4286,6 +4296,14 @@ DELEGATE_TASK_SCHEMA = {
                     "Setting this has no effect; the parameter remains only for "
                     "backward compatibility."
                 ),
+            },
+            "model": {
+                "type": "string",
+                "description": "Model override for child agents. Prefer cheap/local models for simple tasks; omit to use delegation config.",
+            },
+            "provider": {
+                "type": "string",
+                "description": "Provider override for child agents, e.g. Windows Ollama or openai-codex. Omit to use delegation config.",
             },
         },
         "required": [],
@@ -4348,6 +4366,8 @@ registry.register(
         role=args.get("role"),
         background=_model_background_value(args, kw.get("parent_agent")),
         output_schema=args.get("output_schema"),
+        model=args.get("model"),
+        provider=args.get("provider"),
         parent_agent=kw.get("parent_agent"),
     ),
     check_fn=check_delegate_requirements,
