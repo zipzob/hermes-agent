@@ -115,6 +115,22 @@ class TestWebUIBuildNeeded:
 
 
 
+def test_workspace_scoped_install_preserves_sibling_dependencies(tmp_path):
+    web_dir, _ = _make_web_dir(tmp_path)
+    (web_dir / "package-lock.json").write_text("{}", encoding="utf-8")
+    install_ok = __import__("subprocess").CompletedProcess([], 0, stdout="", stderr="")
+
+    with patch("hermes_cli.main.subprocess.run", return_value=install_ok) as mock_run:
+        result = _run_npm_install_deterministic(
+            "/usr/bin/npm", web_dir, extra_args=("--workspace", "web")
+        )
+
+    assert result.returncode == 0
+    cmd = mock_run.call_args.args[0]
+    assert cmd[:2] == ["/usr/bin/npm", "install"]
+    assert "--no-save" in cmd
+
+
 class TestBuildWebUISkipsWhenFresh:
 
 
