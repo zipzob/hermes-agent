@@ -5570,11 +5570,11 @@ def _run_npm_install_deterministic(
     """Run a deterministic npm install that does not mutate ``package-lock.json``.
 
     Prefers ``npm ci`` (strict, lockfile-preserving) when a lockfile is present;
-    falls back to ``npm install`` only if ``npm ci`` fails (e.g. lockfile out of
-    sync on a WIP checkout).  Without this, ``npm install`` on npm ≥ 10 silently
-    rewrites committed lockfiles (stripping ``"peer": true`` etc.), which leaves
-    the working tree dirty and causes the next ``hermes update`` to stash the
-    lockfile — repeatedly.
+    falls back to ``npm install`` when ``npm ci`` fails or the install is scoped
+    to a workspace. A scoped ``npm ci`` removes dependencies installed for
+    sibling workspaces, so sequential TUI/web refreshes can report success while
+    leaving the TUI unusable. ``npm install --no-save`` preserves those siblings
+    without rewriting the committed lockfile.
 
     ``--include=dev`` is forced on every invocation: the callers are frontend
     builds (web UI / TUI / desktop workspaces), and those builds need the dev
@@ -5610,7 +5610,10 @@ def _run_npm_install_deterministic(
 
     def _attempt(npm_exe: str) -> subprocess.CompletedProcess:
         lockfile = cwd / "package-lock.json"
-        if lockfile.exists():
+        workspace_scoped = "--workspace" in extra_args or any(
+            arg.startswith("--workspace=") for arg in extra_args
+        )
+        if lockfile.exists() and not workspace_scoped:
             ci_result = _run([npm_exe, "ci", "--include=dev", *extra_args])
             if ci_result.returncode == 0:
                 return ci_result
