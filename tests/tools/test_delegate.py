@@ -1493,6 +1493,32 @@ class TestDelegationReasoningEffort(unittest.TestCase):
 class TestDispatchDelegateTask(unittest.TestCase):
     """Tests for the _dispatch_delegate_task helper and full param forwarding."""
 
+    def test_top_level_routing_fields_are_forwarded(self):
+        """The live model path preserves documented delegation routing fields."""
+        import run_agent
+
+        captured = {}
+
+        def fake_delegate_task(**kwargs):
+            captured.update(kwargs)
+            return "{}"
+
+        parent = _make_mock_parent(depth=0)
+        with patch("tools.delegate_tool.delegate_task", fake_delegate_task):
+            run_agent.AIAgent._dispatch_delegate_task(
+                parent,
+                {
+                    "goal": "verify routing",
+                    "complexity": "simple",
+                    "model": "gpt-5.4-mini",
+                    "provider": "openai-codex",
+                },
+            )
+
+        self.assertEqual(captured["complexity"], "simple")
+        self.assertEqual(captured["model"], "gpt-5.4-mini")
+        self.assertEqual(captured["provider"], "openai-codex")
+
     def test_model_acp_args_not_forwarded(self):
         """The live model dispatch path strips hidden ACP transport args."""
         import run_agent
