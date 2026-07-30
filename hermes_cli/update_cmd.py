@@ -3272,10 +3272,7 @@ def _mark_skip_upstream_prompt():
         pass
 
 def _sync_fork_with_upstream(git_cmd: list[str], cwd: Path) -> bool:
-    """Attempt to push updated main to origin (sync fork).
-
-    Returns True if push succeeded, False otherwise.
-    """
+    """Attempt to push updated main to origin (sync fork)."""
     try:
         result = subprocess.run(
             git_cmd + ["push", "origin", "main", "--force-with-lease"],
@@ -3295,19 +3292,20 @@ def _sync_with_upstream_if_needed(
     assume_yes: bool = False,
     input_fn=None,
 ) -> bool:
-    """Check if fork is behind upstream and sync if safe.
+    """Check a fork against upstream and replay its overlay when needed.
 
     This implements the fork upstream sync logic:
     - If upstream remote doesn't exist, ask user if they want to add it
     - Compare origin/main with upstream/main
-    - If origin/main is strictly behind upstream/main, pull from upstream
+    - If upstream is ahead, rebase the local overlay onto upstream/main
     - Try to sync fork back to origin if possible
 
     Returns True when origin/main was actually verified against the official
     upstream/main, False when the check never happened (prompt skipped or
     declined, remote add failed, fetch or compare failed) so the caller can
     avoid reporting the checkout as up to date on the strength of an origin
-    comparison alone (#97052 review).
+    comparison alone (#97052 review). Local history is preserved by rebasing
+    the overlay and synchronizing origin with ``--force-with-lease``.
     """
     has_upstream = _has_upstream_remote(git_cmd, cwd)
 
@@ -3384,49 +3382,76 @@ def _sync_with_upstream_if_needed(
         print("  ✗ Failed to fetch upstream. Skipping upstream sync.")
         return False
 
-    # Compare origin/main with upstream/main
-    origin_ahead = _count_commits_between(git_cmd, cwd, "upstream/main", "origin/main")
-    upstream_ahead = _count_commits_between(
-        git_cmd, cwd, "origin/main", "upstream/main"
-    )
+    # Capture the exact local tip before any history rewrite so every failure
+    # path can restore it.
+    pre_rebase_sha = _capture_head_sha(git_cmd, cwd)
+    if pre_rebase_sha is None:
+        print("  ✗ Could not capture pre-sync HEAD. Skipping upstream sync.")
+        return False
 
+    # Compare both directions. A fork overlay is expected to be ahead of
+    # upstream; unlike the old fast-forward flow, that is replayed, not skipped.
+    origin_ahead = _count_commits_between(git_cmd, cwd, "upstream/main", "origin/main")
+    upstream_ahead = _count_commits_between(git_cmd, cwd, "origin/main", "upstream/main")
     if origin_ahead < 0 or upstream_ahead < 0:
         print("  ✗ Could not compare branches. Skipping upstream sync.")
         return False
 
-    # If origin/main has commits not on upstream, don't trample
-    if origin_ahead > 0:
-        print()
-        print(f"ℹ Your fork has {origin_ahead} commit(s) not on upstream.")
-        print("  Skipping upstream sync to preserve your changes.")
-        print("  If you want to merge upstream changes, run:")
-        print("    git pull upstream main")
-        return True
-
-    # If upstream is not ahead, fork is up to date
     if upstream_ahead == 0:
         print("  ✓ Fork is up to date with upstream")
         return True
 
-    # origin/main is strictly behind upstream/main (can fast-forward)
     print()
     print(f"→ Fork is {upstream_ahead} commit(s) behind upstream")
-    print("→ Pulling from upstream...")
+    print("→ Replaying local overlay onto upstream/main...")
 
-    try:
+    rebase_result = subprocess.run(
+        git_cmd + ["rebase", "upstream/main"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if rebase_result.returncode != 0:
+        # Preserve local edits: abort the rebase and restore original commit tip.
         subprocess.run(
-            git_cmd + ["pull", "--ff-only", "upstream", "main"],
+            git_cmd + ["rebase", "--abort"],
             cwd=cwd,
             check=True,
             **_no_prompt_git_kwargs(),
         )
-    except subprocess.CalledProcessError:
-        print(
-            "  ✗ Failed to pull from upstream. You may need to resolve conflicts manually."
+        subprocess.run(
+            git_cmd + ["reset", "--hard", pre_rebase_sha],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
+        print("  ⚠ Rebase onto upstream/main hit a conflict; keeping local state.")
+        print("  Fork history was not rewritten and local changes were not discarded.")
         return False
 
-    print("  ✓ Updated from upstream")
+    # If replay introduced syntax breakage, rollback to the original checkout.
+    syntax_ok, failing_path, syntax_error = _validate_critical_files_syntax(cwd)
+    if not syntax_ok:
+        subprocess.run(
+            git_cmd + ["reset", "--hard", pre_rebase_sha],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        print("  ⚠ Upstream replay failed syntax check.")
+        print(f"    First failure: {failing_path}")
+        if syntax_error:
+            for line in str(syntax_error).splitlines()[:3]:
+                print(f"      {line}")
+        return False
+
+    print("  ✓ Replayed local overlay onto upstream")
 
     # Try to sync fork back to origin
     print("→ Syncing fork...")
