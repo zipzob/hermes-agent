@@ -1080,13 +1080,6 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
                         agent._current_tool = None
                         agent._touch_activity(f"tool completed: {name} ({tool_duration:.1f}s)")
 
-                        if not blocked and agent.tool_complete_callback:
-                            try:
-                                display_args = _redact_tool_args_for_display(name, args) or args
-                                agent.tool_complete_callback(tc.id, name, display_args, function_result)
-                            except Exception as cb_err:
-                                logging.debug(f"Tool complete callback error: {cb_err}")
-
                         function_result = maybe_persist_tool_result(
                             content=function_result,
                             tool_name=name,
@@ -1106,6 +1099,20 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
                         tool_message = make_tool_result_message(name, _tool_content, tc.id)
                         messages.append(tool_message)
                         risk_metadata = tool_message.get("_tool_output_risk")
+                        if not _flush_session_db_after_tool_progress(
+                            agent,
+                            messages,
+                            stage=f"tool result {name}",
+                        ):
+                            return
+
+                        if not blocked and agent.tool_complete_callback:
+                            try:
+                                display_args = _redact_tool_args_for_display(name, args) or args
+                                agent.tool_complete_callback(tc.id, name, display_args, function_result)
+                            except Exception as cb_err:
+                                logging.debug(f"Tool complete callback error: {cb_err}")
+
                         if (
                             risk_metadata is not None
                             and risk_metadata.get("risk") != "low"
@@ -1123,13 +1130,7 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
                             except Exception as cb_err:
                                 logging.debug("Tool output risk callback error: %s", cb_err)
                         emitted_indices.add(completed_i)
-                        _flush_session_db_after_tool_progress(
-                            agent,
-                            messages,
-                            stage=f"tool result {name}",
-                        )
                         agent._apply_pending_steer_to_tool_results(messages, 1)
-
                     if not not_done:
                         break
 
