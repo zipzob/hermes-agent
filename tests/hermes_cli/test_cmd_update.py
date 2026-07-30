@@ -4,6 +4,7 @@ import hashlib
 import subprocess
 from types import SimpleNamespace
 from unittest.mock import patch
+from pathlib import Path
 
 import pytest
 
@@ -377,6 +378,159 @@ class TestConfigVersionCheckUsesFreshModules:
             update_cmd._run_config_check_fresh()
 
         mock_reload.assert_called_once()
+
+
+class TestCmdUpdateForkUpstreamRebaseSync:
+    """Fork-aware upstream sync keeps local overlays and force-pushes with lease."""
+
+    @staticmethod
+    def _git(path: Path, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", *args],
+            cwd=str(path),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True,
+        )
+
+    @staticmethod
+    def _init_repo(path: Path) -> None:
+        if not path.exists():
+            path.mkdir()
+        if not (path / ".git").exists():
+            TestCmdUpdateForkUpstreamRebaseSync._git(path, "init")
+        TestCmdUpdateForkUpstreamRebaseSync._git(
+            path, "config", "user.email", "forker@example.com"
+        )
+        TestCmdUpdateForkUpstreamRebaseSync._git(
+            path, "config", "user.name", "Fork CI"
+        )
+
+    @staticmethod
+    def _commit(path: Path, name: str, body: str, message: str) -> str:
+        (path / name).write_text(body, encoding="utf-8")
+        TestCmdUpdateForkUpstreamRebaseSync._git(path, "add", name)
+        TestCmdUpdateForkUpstreamRebaseSync._git(path, "commit", "-m", message)
+        return TestCmdUpdateForkUpstreamRebaseSync._git(path, "rev-parse", "HEAD").stdout.strip()
+
+    @staticmethod
+    def _clone(src: Path, dst: Path) -> None:
+        subprocess.run(
+            ["git", "clone", str(src), str(dst)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    @staticmethod
+    def _run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            cmd,
+            cwd=str(cwd) if cwd is not None else None,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True,
+        )
+
+    def _seed_origin_and_upstream(self, tmp_path: Path):
+        upstream_bare = tmp_path / "upstream.git"
+        origin_bare = tmp_path / "origin.git"
+        base = tmp_path / "base"
+
+        # Seed upstream with an initial commit.
+        self._run(["git", "init", "--bare", str(upstream_bare)])
+
+        self._init_repo(base)
+        self._commit(base, "shared.txt", "base\n", "seed: base")
+        self._git(base, "branch", "-M", "main")
+        self._git(base, "remote", "add", "origin", str(upstream_bare))
+        self._git(base, "push", "origin", "main")
+
+        # Copy upstream baseline into a fork-style origin.
+        self._run(["git", "clone", "--bare", str(upstream_bare), str(origin_bare)])
+
+        fork = tmp_path / "fork"
+        self._clone(origin_bare, fork)
+        self._git(fork, "remote", "add", "upstream", str(upstream_bare))
+        return upstream_bare, origin_bare, fork
+
+    def test_upstream_rebase_preserves_overlay_and_repushes(self, tmp_path):
+        upstream_bare, origin_bare, fork = self._seed_origin_and_upstream(tmp_path)
+
+        self._commit(fork, "overlay.txt", "fork-overlay\n", "fork: overlay")
+        pre_sync_head = self._git(fork, "rev-parse", "HEAD").stdout.strip()
+
+        # Advance upstream without mutating fork checkout.
+        upstream_editor = tmp_path / "upstream-editor"
+        self._clone(upstream_bare, upstream_editor)
+        self._init_repo(upstream_editor)
+        self._commit(upstream_editor, "upstream.txt", "upstream-only\n", "upstream: replay")
+        self._git(upstream_editor, "push", "origin", "main")
+
+        from hermes_cli import main as hm
+
+        hm._sync_with_upstream_if_needed(["git"], fork)
+
+        post_sync_head = self._git(fork, "rev-parse", "HEAD").stdout.strip()
+        assert post_sync_head != pre_sync_head
+
+        # Verify fork overlay and upstream change both reached the fork remote.
+        verify = tmp_path / "origin-verify"
+        self._clone(origin_bare, verify)
+        assert (verify / "overlay.txt").read_text(encoding="utf-8").strip() == "fork-overlay"
+        assert (verify / "upstream.txt").read_text(encoding="utf-8").strip() == "upstream-only"
+
+    def test_upstream_conflict_keeps_overlay_and_rolls_back(self, tmp_path):
+        upstream_bare, _origin_bare, fork = self._seed_origin_and_upstream(tmp_path)
+
+        self._commit(fork, "shared.txt", "fork-conflict\n", "fork: conflict")
+        pre = self._git(fork, "rev-parse", "HEAD").stdout.strip()
+        pre_content = (fork / "shared.txt").read_text(encoding="utf-8")
+
+        upstream_editor = tmp_path / "upstream-editor"
+        self._clone(upstream_bare, upstream_editor)
+        self._init_repo(upstream_editor)
+        (upstream_editor / "shared.txt").write_text("upstream-base\n", encoding="utf-8")
+        self._git(upstream_editor, "add", "shared.txt")
+        self._git(upstream_editor, "commit", "-m", "upstream: conflicting")
+        self._git(upstream_editor, "push", "origin", "main")
+
+        from hermes_cli import main as hm
+
+        hm._sync_with_upstream_if_needed(["git"], fork)
+
+        assert pre == self._git(fork, "rev-parse", "HEAD").stdout.strip()
+        assert (fork / "shared.txt").read_text(encoding="utf-8") == pre_content
+
+    @patch("hermes_cli.main._sync_fork_with_upstream")
+    @patch(
+        "hermes_cli.update_cmd._validate_critical_files_syntax",
+        return_value=(False, "hermes_cli/main.py", "syntax boom"),
+    )
+    def test_upstream_replay_syntax_failure_rolls_back_and_skips_push(
+        self, _mock_validate, mock_push, tmp_path
+    ):
+        upstream_bare, _origin_bare, fork = self._seed_origin_and_upstream(tmp_path)
+
+        self._commit(fork, "overlay.txt", "fork-overlay\n", "fork: overlay")
+        pre = self._git(fork, "rev-parse", "HEAD").stdout.strip()
+
+        upstream_editor = tmp_path / "upstream-editor"
+        self._clone(upstream_bare, upstream_editor)
+        self._init_repo(upstream_editor)
+        self._commit(upstream_editor, "upstream.txt", "upstream-only\n", "upstream: replay")
+        self._git(upstream_editor, "push", "origin", "main")
+
+        from hermes_cli import main as hm
+
+        hm._sync_with_upstream_if_needed(["git"], fork)
+
+        assert pre == self._git(fork, "rev-parse", "HEAD").stdout.strip()
+        mock_push.assert_not_called()
 
 
 class TestCmdUpdateProfileSkillSync:
