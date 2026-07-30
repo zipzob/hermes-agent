@@ -87,30 +87,26 @@
   }
 
   // Order matches BOARD_COLUMNS in plugin_api.py.
-  const COLUMN_ORDER = ["triage", "todo", "scheduled", "ready", "running", "review", "blocked", "done"];
+  const COLUMN_ORDER = ["triage", "todo", "ready", "running", "blocked", "done"];
   // English fallback dictionaries — used when the i18n catalog is missing
   // a key, and as defaults for the get*() helpers below so callers running
   // outside any React component (where there's no `t`) still get sane text.
   const FALLBACK_COLUMN_LABEL = {
     triage: "Triage",
     todo: "Todo",
-    scheduled: "Scheduled",
     ready: "Ready",
     running: "In Progress",
-    review: "Review",
-    blocked: "Waiting",
+    blocked: "Blocked",
     done: "Done",
     archived: "Archived",
   };
   const FALLBACK_COLUMN_HELP = {
-    triage: "Inbox / not yet shaped",
-    todo: "Accepted backlog; not started and not dispatchable yet",
-    scheduled: "Time/date-bound follow-up",
-    ready: "Ready for dispatcher pickup",
-    running: "Actively being worked",
-    review: "Output exists and needs human/applicant review before send/commit",
-    blocked: "Waiting on recruiter, user decision, or external eligibility/package answer",
-    done: "Completed/submitted/closed with outcome",
+    triage: "Raw ideas — a specifier will flesh out the spec",
+    todo: "Waiting on dependencies or unassigned",
+    ready: "Dependencies satisfied; assign a profile to dispatch",
+    running: "Claimed by a worker — in-flight",
+    blocked: "Worker asked for human input",
+    done: "Completed",
     archived: "Archived",
   };
   const FALLBACK_DESTRUCTIVE = {
@@ -118,13 +114,10 @@
     archived: "Archive this task? It disappears from the default board view.",
     blocked: "Mark this task as blocked? The worker's claim is released.",
   };
-  FALLBACK_COLUMN_LABEL.waiting = FALLBACK_COLUMN_LABEL.blocked;
-  FALLBACK_COLUMN_HELP.waiting = FALLBACK_COLUMN_HELP.blocked;
   const FALLBACK_DIAGNOSTIC_EVENT_LABELS = {
     completion_blocked_hallucination: "⚠ Completion blocked — phantom card ids",
     suspected_hallucinated_references: "⚠ Prose referenced phantom card ids",
   };
-  FALLBACK_DESTRUCTIVE.blocked = "Move this task to Waiting? Use this only for an actual external wait, not for parking backlog work.";
   const FALLBACK_TRASH = {
     label: "Trash",
     title: "Drag a card here to permanently delete it",
@@ -140,7 +133,6 @@
     archived: "confirmArchive",
     blocked: "confirmBlocked",
   };
-  DESTRUCTIVE_KEYS.waiting = "confirmBlocked";
 
   function getColumnLabel(t, status) {
     return tx(t, "columnLabels." + status, FALLBACK_COLUMN_LABEL[status] || status);
@@ -162,10 +154,8 @@
   const COLUMN_DOT = {
     triage: "hermes-kanban-dot-triage",
     todo: "hermes-kanban-dot-todo",
-    scheduled: "hermes-kanban-dot-scheduled",
     ready: "hermes-kanban-dot-ready",
     running: "hermes-kanban-dot-running",
-    review: "hermes-kanban-dot-review",
     blocked: "hermes-kanban-dot-blocked",
     done: "hermes-kanban-dot-done",
     archived: "hermes-kanban-dot-archived",
@@ -2273,28 +2263,18 @@
         onClick: function () { props.onApply({ status: "todo" }); },
         size: "sm",
         title: "Move selected tasks to Todo.",
-      }, "→ Todo"),
-      h(Button, {
-        onClick: function () { props.onApply({ status: "scheduled" }); },
-        size: "sm",
-        title: "Move selected tasks to Scheduled for time/date-bound follow-up.",
-      }, "→ Scheduled"),
+      }, "→ todo"),
       h(Button, {
         onClick: function () { props.onApply({ status: "ready" }); },
         size: "sm",
         title: "Move selected tasks to Ready. Ready tasks are picked up by the dispatcher on the next tick.",
-      }, "→ Ready"),
-      h(Button, {
-        onClick: function () { props.onApply({ status: "review" }); },
-        size: "sm",
-        title: "Move selected tasks to Review for human/applicant review before send/commit.",
-      }, "→ Review"),
+      }, "→ ready"),
       h(Button, {
         onClick: function () { props.onApply({ status: "blocked" },
-          `Move ${props.count} task(s) to Waiting?`); },
+          `Block ${props.count} task(s)?`); },
         size: "sm",
-        title: "Move selected tasks to Waiting for actual external input.",
-      }, "Waiting"),
+        title: "Block selected tasks. Releases any active claims.",
+      }, "Block"),
       h(Button, {
         onClick: function () { props.onApply({ status: "ready" },
           `Unblock ${props.count} task(s)?`); },
@@ -4411,21 +4391,18 @@
       h("div", { className: "hermes-kanban-actions" },
         specifyButton,
         decomposeButton,
-        b("→ Triage",  { status: "triage" },   task.status !== "triage"),
-        b("→ Todo",    { status: "todo" },     task.status !== "todo"),
-        b("→ Scheduled", { status: "scheduled" }, task.status !== "scheduled"),
-        b("→ Ready",   { status: "ready" },    task.status !== "ready"),
-        b("→ Review",  { status: "review" },   task.status !== "review"),
+        b("→ triage",  { status: "triage" },   task.status !== "triage"),
+        b("→ ready",   { status: "ready" },    task.status !== "ready"),
         // No direct → running button: /tasks/:id PATCH rejects status=running
         // with 400 (issue #19535). Tasks enter running only through the
         // dispatcher's claim_task path, which atomically creates the run row,
         // claim lock, and worker process metadata.
-        b(tx(t, "block", "Waiting"),     { status: "blocked" },
-          task.status === "running" || task.status === "ready" || task.status === "review",
+        b(tx(t, "block", "Block"),     { status: "blocked" },
+          task.status === "running" || task.status === "ready",
           getDestructiveConfirm(t, "blocked")),
         b(tx(t, "unblock", "Unblock"),   { status: "ready" },    task.status === "blocked"),
         b(tx(t, "complete", "Complete"),  { status: "done" },
-          task.status === "running" || task.status === "ready" || task.status === "review" || task.status === "blocked",
+          task.status === "running" || task.status === "ready" || task.status === "blocked",
           getDestructiveConfirm(t, "done")),
         b(tx(t, "archive", "Archive"),   { status: "archived" }, task.status !== "archived",
           getDestructiveConfirm(t, "archived")),
