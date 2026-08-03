@@ -5996,17 +5996,34 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
 
         def _do(conn):
             active_lock = conn.execute(
-                "SELECT holder FROM compression_locks "
-                "WHERE session_id = ? AND expires_at > ?",
-                (session_id, time.time()),
+                "SELECT holder, expires_at FROM compression_locks "
+                "WHERE session_id = ?",
+                (session_id,),
             ).fetchone()
             if (
                 active_lock is not None
                 and active_lock["holder"] != compression_lock_holder
             ):
-                raise SessionCompressionInProgressError(
-                    f"Session {session_id!r} is being compressed by another writer"
-                )
+                lock_holder = active_lock["holder"]
+                if (
+                    float(active_lock["expires_at"]) <= time.time()
+                    or _compression_lock_holder_process_is_dead(lock_holder)
+                ):
+                    conn.execute(
+                        "DELETE FROM compression_locks "
+                        "WHERE session_id = ? AND holder = ?",
+                        (session_id, lock_holder),
+                    )
+                    logger.warning(
+                        "Reclaimed stale compression lock before transcript "
+                        "append for session=%s (holder=%s)",
+                        session_id,
+                        lock_holder,
+                    )
+                else:
+                    raise SessionCompressionInProgressError(
+                        f"Session {session_id!r} is being compressed by another writer"
+                    )
             session = conn.execute(
                 "SELECT ended_at, end_reason FROM sessions WHERE id = ?",
                 (session_id,),

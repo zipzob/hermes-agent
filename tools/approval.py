@@ -4098,6 +4098,27 @@ def check_execute_code_guard(code: str, env_type: str,
     if _YOLO_MODE_FROZEN or is_current_session_yolo_enabled() or approval_mode == "off":
         return {"approved": True, "message": None}
 
+    # Cron's explicit policy is a stronger boundary than delegated-child
+    # auto-approval. Scheduled runs may delegate, but remain non-interactive.
+    if _is_cron_approval_context():
+        if _get_cron_approval_mode() == "deny":
+            return {
+                "approved": False,
+                "message": (
+                    "BLOCKED: execute_code runs arbitrary local Python "
+                    "(including subprocess calls that bypass shell-string "
+                    "approval checks). Cron jobs run without a user present "
+                    "to approve it. Use normal tools instead, or set "
+                    "approvals.cron_mode: approve only if this cron profile "
+                    "is intentionally trusted."
+                ),
+                "pattern_key": pattern_key,
+                "description": description,
+                "outcome": "blocked",
+                "user_consent": False,
+            }
+        return {"approved": True, "message": None}
+
     # delegate_task children cannot answer prompts.  They inherit the parent's
     # gateway ContextVars for completion routing, which previously made this
     # guard enqueue an interactive request and sleep for approvals.timeout (900s
@@ -4136,26 +4157,6 @@ def check_execute_code_guard(code: str, env_type: str,
 
     is_gateway = _is_gateway_approval_context()
     is_ask = env_var_enabled("HERMES_EXEC_ASK")
-
-    # Cron: no user is present to approve arbitrary code.
-    if _is_cron_approval_context():
-        if _get_cron_approval_mode() == "deny":
-            return {
-                "approved": False,
-                "message": (
-                    "BLOCKED: execute_code runs arbitrary local Python "
-                    "(including subprocess calls that bypass shell-string "
-                    "approval checks). Cron jobs run without a user present "
-                    "to approve it. Use normal tools instead, or set "
-                    "approvals.cron_mode: approve only if this cron profile "
-                    "is intentionally trusted."
-                ),
-                "pattern_key": pattern_key,
-                "description": description,
-                "outcome": "blocked",
-                "user_consent": False,
-            }
-        return {"approved": True, "message": None}
 
     # Only gateway/ask contexts get the one-shot whole-script approval.
     #   * CLI interactive: the script's terminal() calls are guarded per-call
