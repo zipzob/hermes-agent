@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+import hermes_state
 from hermes_state import SessionDB
 
 
@@ -162,3 +163,26 @@ def test_compression_lease_blocks_non_owner_but_allows_owner_flush(
         compression_lock_holder="winner",
     )
     assert [m["content"] for m in db.get_messages("leased")] == ["winner flush"]
+
+
+def test_append_reclaims_live_lease_left_by_dead_gateway_process(
+    db: SessionDB, monkeypatch
+) -> None:
+    """A replacement TUI must not lose turns behind its dead predecessor's lease."""
+    db.create_session("resumed", source="tui")
+    dead_holder = "pid=12345:tid=7:agent=abc:nonce=deadbeef"
+    assert db.try_acquire_compression_lock(
+        "resumed", dead_holder, ttl_seconds=600
+    )
+    monkeypatch.setattr(
+        hermes_state,
+        "_compression_lock_holder_process_is_dead",
+        lambda holder: holder == dead_holder,
+    )
+
+    db.append_message("resumed", "user", "continue after reconnect")
+
+    assert [m["content"] for m in db.get_messages("resumed")] == [
+        "continue after reconnect"
+    ]
+    assert db.get_compression_lock_holder("resumed") is None
