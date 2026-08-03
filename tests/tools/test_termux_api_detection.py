@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import subprocess
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, mock_open
 
 import pytest
 
@@ -166,6 +166,7 @@ class TestDetectAudioEnvironmentTermuxFallback:
         monkeypatch.delenv("SSH_CLIENT", raising=False)
         monkeypatch.delenv("SSH_TTY", raising=False)
         monkeypatch.delenv("SSH_CONNECTION", raising=False)
+        monkeypatch.setattr("builtins.open", mock_open(read_data="Linux version"))
 
         # No sounddevice — we go down the Termux:API branch.
         monkeypatch.setattr(
