@@ -8,8 +8,10 @@ import type {
   SessionActiveListResponse,
   SessionCloseResponse,
   SessionDeleteResponse,
+  SessionInterruptResponse,
   SessionListItem,
-  SessionListResponse
+  SessionListResponse,
+  SessionSteerResponse
 } from '../gatewayTypes.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import type { Theme } from '../theme.js'
@@ -65,6 +67,49 @@ export const sessionRowKindAt = (index: number, liveCount: number): SessionRowKi
   return index - 1 < liveCount ? 'live' : 'history'
 }
 
+export type OrchestratorLiveAction = 'close' | 'interrupt' | 'steer'
+
+export const orchestratorLiveAction = (
+  key: string,
+  ctrl: boolean,
+  rowKind: SessionRowKind
+): null | OrchestratorLiveAction => {
+  if (rowKind !== 'live') {
+    return null
+  }
+
+  if (ctrl && key === 'd') {
+    return 'close'
+  }
+
+  if (!ctrl && key === 's') {
+    return 'steer'
+  }
+
+  if (!ctrl && key === 'x') {
+    return 'interrupt'
+  }
+
+  return null
+}
+
+export const sessionInterruptSucceeded = (response: SessionInterruptResponse) =>
+  response.status === 'interrupted' || response.ok === true
+
+export const requestSessionInterrupt = async (gw: GatewayClient, sessionId: string) => {
+  const raw = await gw.request<SessionInterruptResponse>('session.interrupt', { session_id: sessionId })
+  const result = asRpcResult<SessionInterruptResponse>(raw)
+
+  return Boolean(result && sessionInterruptSucceeded(result))
+}
+
+export const requestSessionSteer = async (gw: GatewayClient, sessionId: string, text: string) => {
+  const raw = await gw.request<SessionSteerResponse>('session.steer', { session_id: sessionId, text })
+  const result = asRpcResult<SessionSteerResponse>(raw)
+
+  return result?.status === 'queued'
+}
+
 export const relativeSessionAge = (ts?: number) => {
   if (!ts) {
     return ''
@@ -83,11 +128,47 @@ export const relativeSessionAge = (ts?: number) => {
   return `${Math.floor(days)}d ago`
 }
 
-/** Drop already-live sessions from the resumable history list (dedupe by id). */
+/** Drop already-live sessions from history by runtime id or durable session key. */
 export const resumableHistory = (history: readonly SessionListItem[], live: readonly SessionActiveItem[]) => {
-  const liveIds = new Set(live.map(s => s.id))
+  const liveIds = new Set(live.flatMap(s => [s.id, ...(s.session_key ? [s.session_key] : [])]))
 
   return history.filter(h => !liveIds.has(h.id))
+}
+
+type SessionLineageItem = Pick<SessionActiveItem, 'id' | 'parent_session_id' | 'session_key'>
+
+export const sessionLineageDepth = (row: SessionLineageItem, rows: readonly SessionLineageItem[]) => {
+  if (!row.parent_session_id) {
+    return 0
+  }
+
+  const byIdentity = new Map<string, SessionLineageItem>()
+
+  for (const candidate of rows) {
+    byIdentity.set(candidate.id, candidate)
+
+    if (candidate.session_key) {
+      byIdentity.set(candidate.session_key, candidate)
+    }
+  }
+
+  let depth = 0
+  let parentId: null | string | undefined = row.parent_session_id
+  const seen = new Set<string>([row.id, ...(row.session_key ? [row.session_key] : [])])
+
+  while (parentId && !seen.has(parentId)) {
+    depth++
+    seen.add(parentId)
+    parentId = byIdentity.get(parentId)?.parent_session_id
+  }
+
+  return depth
+}
+
+export const sessionLineagePrefix = (row: SessionLineageItem, rows: readonly SessionLineageItem[]) => {
+  const depth = sessionLineageDepth(row, rows)
+
+  return depth ? `${'  '.repeat(depth - 1)}↳ ` : ''
 }
 
 export const resumeRowContextHintSegments: OrchestratorHintSegment[] = [
@@ -121,6 +202,10 @@ export const orchestratorContextHintSegments = (newSelected: boolean): Orchestra
         { role: 'text', text: ' ' },
         { role: 'hotkey', text: 'Enter' },
         { role: 'text', text: ' switch · ' },
+        { role: 'hotkey', text: 's' },
+        { role: 'text', text: ' steer · ' },
+        { role: 'hotkey', text: 'x' },
+        { role: 'text', text: ' stop · ' },
         { role: 'hotkey', text: 'Ctrl+D' },
         { role: 'text', text: ' close' }
       ]
@@ -305,6 +390,10 @@ export function ActiveSessionSwitcher({
   const [draftModel, setDraftModel] = useState('')
   const [pickingModel, setPickingModel] = useState(false)
   const [closingId, setClosingId] = useState('')
+  const [actingId, setActingId] = useState('')
+  const [actionNotice, setActionNotice] = useState('')
+  const [steerTargetId, setSteerTargetId] = useState('')
+  const [steerDraft, setSteerDraft] = useState('')
   // When non-null, the user pressed `d` on this (history) session and we await
   // a second `d` to confirm deletion. Tracked by session id (not row index) so
   // the 1.5s live-status poll re-indexing rows can't redirect the delete to a
@@ -500,6 +589,65 @@ export function ActiveSessionSwitcher({
     }
   }, [closingId, currentSessionId, history.length, items, load, onClose, onNew, onSelect, rowKind, sel])
 
+  const submitSteer = useCallback(
+    async (value: string) => {
+      const text = value.trim()
+
+      if (!text || !steerTargetId || actingId) {
+        return
+      }
+
+      setActingId(steerTargetId)
+      setErr('')
+      setActionNotice('')
+
+      try {
+        if (!(await requestSessionSteer(gw, steerTargetId, text))) {
+          setErr('selected session is not accepting steering')
+
+          return
+        }
+
+        setActionNotice(`steer queued → ${steerTargetId}`)
+        setSteerTargetId('')
+        setSteerDraft('')
+        void load(true, false)
+      } catch (e: unknown) {
+        setErr(rpcErrorMessage(e))
+      } finally {
+        setActingId('')
+      }
+    },
+    [actingId, gw, load, steerTargetId]
+  )
+
+  const interruptSelected = useCallback(async () => {
+    const target = items[sel - 1]
+
+    if (!target || rowKind(sel) !== 'live' || actingId) {
+      return
+    }
+
+    setActingId(target.id)
+    setErr('')
+    setActionNotice('')
+
+    try {
+      if (!(await requestSessionInterrupt(gw, target.id))) {
+        setErr('selected session had no running turn to stop')
+
+        return
+      }
+
+      setActionNotice(`stop requested → ${target.id}`)
+      void load(true, false)
+    } catch (e: unknown) {
+      setErr(rpcErrorMessage(e))
+    } finally {
+      setActingId('')
+    }
+  }, [actingId, gw, items, load, rowKind, sel])
+
   const performDelete = useCallback(
     (id: string) => {
       const target = history.find(h => h.id === id)
@@ -564,7 +712,16 @@ export function ActiveSessionSwitcher({
   const draftHasText = Boolean(draft.trim())
 
   useInput((ch, key) => {
-    if (pickingModel || deleting) {
+    if (steerTargetId) {
+      if (key.escape) {
+        setSteerTargetId('')
+        setSteerDraft('')
+      }
+
+      return
+    }
+
+    if (pickingModel || deleting || actingId) {
       return
     }
 
@@ -611,6 +768,26 @@ export function ActiveSessionSwitcher({
       if (selectedKind === 'live') {
         void closeSelected()
       }
+
+      return
+    }
+
+    const liveAction = orchestratorLiveAction(lower, key.ctrl, selectedKind)
+
+    if (liveAction === 'steer') {
+      const target = items[sel - 1]
+
+      if (target) {
+        setActionNotice('')
+        setErr('')
+        setSteerTargetId(target.id)
+      }
+
+      return
+    }
+
+    if (liveAction === 'interrupt') {
+      void interruptSelected()
 
       return
     }
@@ -686,6 +863,7 @@ export function ActiveSessionSwitcher({
   const newRowTextColor = newRowStyle?.color
   const newRowMarkerColor = newSessionMarkerColor(t, newSelectedRow)
   const promptTitle = draftTitleFromPrompt(draft) || 'Start a new live session'
+  const lineageRows: SessionLineageItem[] = [...items, ...history]
 
   return (
     <Box flexDirection="column" width={width}>
@@ -695,6 +873,7 @@ export function ActiveSessionSwitcher({
       <Text color={t.color.muted}>{sessionsCountLabel(items.length, history.length)}</Text>
 
       {err && <Text color={t.color.label}>error: {err}</Text>}
+      {actionNotice && <Text color={t.color.ok}>{actionNotice}</Text>}
 
       <Box backgroundColor={newRowStyle?.backgroundColor} flexDirection="row" onClick={handleRowClick(0)} width="100%">
         <Text bold={newSelectedRow} color={newRowTextColor ?? t.color.muted}>
@@ -749,7 +928,7 @@ export function ActiveSessionSwitcher({
             ? 'press d again to delete'
             : deleting && selected
               ? 'deleting…'
-              : h.title || h.preview || '(untitled)'
+              : `${sessionLineagePrefix(h, lineageRows)}${h.title || h.preview || '(untitled)'}`
 
           return (
             <Box
@@ -803,7 +982,13 @@ export function ActiveSessionSwitcher({
         const s = items[i - 1]!
         const status = s.status ?? 'idle'
         const current = s.current || s.id === currentSessionId
-        const title = closingId === s.id ? 'closing…' : s.title || s.preview || '(untitled)'
+
+        const title =
+          closingId === s.id
+            ? 'closing…'
+            : actingId === s.id
+              ? 'working…'
+              : `${sessionLineagePrefix(s, lineageRows)}${s.title || s.preview || '(untitled)'}`
 
         return (
           <Box
@@ -862,7 +1047,21 @@ export function ActiveSessionSwitcher({
 
       {offset + VISIBLE < listLen && <Text color={t.color.muted}> ↓ {listLen - offset - VISIBLE} more</Text>}
 
-      {newSelected ? (
+      {steerTargetId ? (
+        <>
+          <Box marginTop={1}>
+            <Text color={t.color.label}>steer {steerTargetId} › </Text>
+            <TextInput
+              color={t.color.text}
+              columns={promptColumns}
+              onChange={setSteerDraft}
+              onSubmit={value => void submitSteer(value)}
+              value={steerDraft}
+            />
+          </Box>
+          <Text color={t.color.muted}>Enter queue · Esc cancel</Text>
+        </>
+      ) : newSelected ? (
         <>
           <Box marginTop={1}>
             <Text color={t.color.label}>prompt › </Text>
