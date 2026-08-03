@@ -12183,6 +12183,7 @@ def test_session_active_list_reports_live_sessions(monkeypatch):
     server._sessions["sid-b"] = _session(
         agent=types.SimpleNamespace(model="model-b"),
         history=[{"role": "assistant", "content": "writing code"}],
+        parent_session_id="key-a",
         running=True,
         session_key="key-b",
         created_at=11.0,
@@ -12210,6 +12211,7 @@ def test_session_active_list_reports_live_sessions(monkeypatch):
         "last_active": 20.0,
         "message_count": 1,
         "model": "model-a",
+        "parent_session_id": None,
         "preview": "find docs",
         "session_key": "key-a",
         "started_at": 10.0,
@@ -12218,6 +12220,7 @@ def test_session_active_list_reports_live_sessions(monkeypatch):
     }
     assert rows["sid-b"]["current"] is True
     assert rows["sid-b"]["status"] == "working"
+    assert rows["sid-b"]["parent_session_id"] == "key-a"
     assert rows["sid-b"]["title"] == "Implement"
     assert rows["sid-b"]["preview"] == "writing code"
 

@@ -201,6 +201,7 @@ def _(rid, params: dict) -> dict:
                             "preview": s.get("preview") or "",
                             "started_at": s.get("started_at") or 0,
                             "message_count": s.get("message_count") or 0,
+                            "parent_session_id": s.get("parent_session_id") or None,
                             "source": s.get("source") or "",
                         }
                         for s in rows

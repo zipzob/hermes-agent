@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   activeSessionCountLabel,
@@ -18,15 +18,22 @@ import {
   orchestratorGlobalHotkeyHint,
   orchestratorGlobalHotkeyHintSegments,
   orchestratorHintSegmentColor,
+  orchestratorLiveAction,
   orchestratorRowClickAction,
   orchestratorVisibleRowIndexes,
   relativeSessionAge,
+  requestSessionInterrupt,
+  requestSessionSteer,
   resumableHistory,
   selectedSessionRowStyle,
+  sessionInterruptSucceeded,
+  sessionLineageDepth,
+  sessionLineagePrefix,
   sessionRowKindAt,
   sessionsCountLabel
 } from '../components/activeSessionSwitcher.js'
 import { listRowStyle } from '../components/overlayPrimitives.js'
+import type { GatewayClient } from '../gatewayClient.js'
 import type { SessionActiveItem } from '../gatewayTypes.js'
 import type { SessionListItem } from '../gatewayTypes.js'
 import { DEFAULT_THEME } from '../theme.js'
@@ -40,7 +47,7 @@ describe('session orchestrator helpers', () => {
   })
 
   it('keeps session orchestrator hotkey hints short and contextual', () => {
-    expect(orchestratorContextHint(false)).toBe('Session row: Enter switch · Ctrl+D close')
+    expect(orchestratorContextHint(false)).toBe('Session row: Enter switch · s steer · x stop · Ctrl+D close')
     expect(orchestratorContextHint(true)).toBe('New row: type prompt · Enter start · Tab model')
     expect(orchestratorGlobalHotkeyHint).toBe('↑↓ move · Ctrl+N new · Ctrl+R refresh · Esc close')
     expect(orchestratorGlobalHotkeyHint.length).toBeLessThanOrEqual(56)
@@ -52,6 +59,10 @@ describe('session orchestrator helpers', () => {
       { role: 'text', text: ' ' },
       { role: 'hotkey', text: 'Enter' },
       { role: 'text', text: ' switch · ' },
+      { role: 'hotkey', text: 's' },
+      { role: 'text', text: ' steer · ' },
+      { role: 'hotkey', text: 'x' },
+      { role: 'text', text: ' stop · ' },
       { role: 'hotkey', text: 'Ctrl+D' },
       { role: 'text', text: ' close' }
     ])
@@ -163,6 +174,36 @@ describe('session orchestrator helpers', () => {
     expect(orchestratorRowClickAction(99, sessions)).toEqual({ action: 'select-new' })
   })
 
+  it('maps selected live-session hotkeys to direct interventions only', () => {
+    expect(orchestratorLiveAction('s', false, 'live')).toBe('steer')
+    expect(orchestratorLiveAction('x', false, 'live')).toBe('interrupt')
+    expect(orchestratorLiveAction('d', true, 'live')).toBe('close')
+    expect(orchestratorLiveAction('s', false, 'history')).toBeNull()
+    expect(orchestratorLiveAction('x', false, 'new')).toBeNull()
+  })
+
+  it('accepts the gateway interrupt contract and older ok-shaped responses', () => {
+    expect(sessionInterruptSucceeded({ status: 'interrupted' })).toBe(true)
+    expect(sessionInterruptSucceeded({ ok: true })).toBe(true)
+    expect(sessionInterruptSucceeded({})).toBe(false)
+  })
+
+  it('sends a direct interrupt to the selected shared gateway session', async () => {
+    const request = vi.fn(() => Promise.resolve({ status: 'interrupted' }))
+    const gw = { request } as unknown as GatewayClient
+
+    await expect(requestSessionInterrupt(gw, 'sid-other')).resolves.toBe(true)
+    expect(request).toHaveBeenCalledWith('session.interrupt', { session_id: 'sid-other' })
+  })
+
+  it('sends steering text without switching the selected gateway session', async () => {
+    const request = vi.fn(() => Promise.resolve({ status: 'queued', text: 'focus tests' }))
+    const gw = { request } as unknown as GatewayClient
+
+    await expect(requestSessionSteer(gw, 'sid-other', 'focus tests')).resolves.toBe(true)
+    expect(request).toHaveBeenCalledWith('session.steer', { session_id: 'sid-other', text: 'focus tests' })
+  })
+
   it('keeps fixed table columns from shrinking into adjacent columns', () => {
     expect(fixedSessionColumnStyle().flexShrink).toBe(0)
   })
@@ -200,6 +241,17 @@ describe('unified Sessions overlay helpers', () => {
     expect(resumableHistory(history, []).map(h => h.id)).toEqual(['a', 'b', 'c'])
   })
 
+  it('dedupes resumable history by a live runtime row durable session key', () => {
+    const history = [
+      { id: 'a', message_count: 1, preview: '', started_at: 0, title: 'A' },
+      { id: 'b', message_count: 2, preview: '', started_at: 0, title: 'B' }
+    ] satisfies SessionListItem[]
+
+    const live = [{ id: 'runtime-b', session_key: 'b', status: 'working' }] satisfies SessionActiveItem[]
+
+    expect(resumableHistory(history, live).map(h => h.id)).toEqual(['a'])
+  })
+
   it('labels live + resumable counts compactly', () => {
     expect(sessionsCountLabel(0, 0)).toBe('0 live · 0 resumable')
     expect(sessionsCountLabel(2, 7)).toBe('2 live · 7 resumable')
@@ -213,5 +265,23 @@ describe('unified Sessions overlay helpers', () => {
     expect(relativeSessionAge(nowSec - 3 * 86400)).toBe('3d ago')
     expect(relativeSessionAge(undefined)).toBe('')
     expect(relativeSessionAge(0)).toBe('')
+  })
+
+  it('derives durable branch depth from stored and live session identities', () => {
+    const rows = [
+      { id: 'live-root', session_key: 'root', status: 'idle' },
+      { id: 'live-child', parent_session_id: 'root', session_key: 'child', status: 'working' },
+      { id: 'history-grandchild', parent_session_id: 'child', status: 'idle' }
+    ] satisfies SessionActiveItem[]
+
+    expect(rows.map(row => sessionLineageDepth(row, rows))).toEqual([0, 1, 2])
+    expect(rows.map(row => sessionLineagePrefix(row, rows))).toEqual(['', '↳ ', '  ↳ '])
+  })
+
+  it('still marks a branch when its parent is outside the loaded window', () => {
+    const row = { id: 'branch', parent_session_id: 'older-root', status: 'idle' } satisfies SessionActiveItem
+
+    expect(sessionLineageDepth(row, [row])).toBe(1)
+    expect(sessionLineagePrefix(row, [row])).toBe('↳ ')
   })
 })

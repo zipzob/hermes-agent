@@ -69,3 +69,18 @@ def test_session_list_surfaces_all_user_facing_sources(monkeypatch):
     assert "tool-1" not in ids
 
 
+def test_session_list_preserves_branch_parent_for_tree_rendering(monkeypatch):
+    db = _StubDB(
+        [
+            {"id": "root", "source": "tui", "started_at": 9},
+            {"id": "branch", "parent_session_id": "root", "source": "tui", "started_at": 8},
+        ]
+    )
+    monkeypatch.setattr(server, "_get_db", lambda: db)
+
+    rows = {row["id"]: row for row in _call(limit=10)["result"]["sessions"]}
+
+    assert rows["root"]["parent_session_id"] is None
+    assert rows["branch"]["parent_session_id"] == "root"
+
+
