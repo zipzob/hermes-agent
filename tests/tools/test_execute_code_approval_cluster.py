@@ -329,6 +329,32 @@ def test_guard_parent_gateway_still_prompts_when_child_auto_approve_is_enabled(
     assert res["status"] == "pending_approval"
 
 
+def test_guard_cron_deny_precedes_delegated_child_auto_approve(
+    gw_session, monkeypatch
+):
+    monkeypatch.setenv("HERMES_CRON_SESSION", "1")
+    monkeypatch.setattr(A, "_get_cron_approval_mode", lambda: "deny")
+    monkeypatch.setattr(
+        A,
+        "_get_delegated_child_auto_approve",
+        lambda: True,
+        raising=False,
+    )
+    notified = []
+    with A._lock:
+        A._gateway_notify_cbs[gw_session] = notified.append
+
+    from agent.delegation_context import delegated_child_context
+
+    with delegated_child_context():
+        res = A.check_execute_code_guard("print('cron child')", "local")
+
+    assert res["approved"] is False
+    assert res["outcome"] == "blocked"
+    assert "Cron jobs run without a user present" in res["message"]
+    assert notified == []
+
+
 def test_guard_smart_mode(gw_session, monkeypatch):
     monkeypatch.setattr(A, "_get_approval_mode", lambda: "smart")
 
