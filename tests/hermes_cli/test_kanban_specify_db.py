@@ -46,8 +46,9 @@ def test_specify_promotes_triage_to_todo(kanban_home):
     assert ok is True
     with kb.connect() as conn:
         task = kb.get_task(conn, tid)
-    # No parents → recompute_ready should have flipped it past todo to ready.
-    assert task.status == "ready"
+    # Specifying accepts it into backlog; no dependency edge means there is
+    # no completion event that should auto-promote it to dispatch-ready.
+    assert task.status == "todo"
     assert task.title == "Refined: rough idea"
     assert "**Goal**" in (task.body or "")
 
