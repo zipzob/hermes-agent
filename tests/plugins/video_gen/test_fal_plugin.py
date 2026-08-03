@@ -72,14 +72,17 @@ class TestFamilyRouting:
         fake.submit = _submit  # type: ignore
         monkeypatch.setitem(sys.modules, "fal_client", fake)
 
-        # Reset the lazy global so it picks up our stub
+        # Inject the fake directly into the provider's lazy cache. Otherwise
+        # lazy_deps rejects the intentionally absent optional package before
+        # Python reaches the sys.modules stub.
         from plugins.video_gen import fal as fal_plugin
-        fal_plugin._fal_client = None
+        fal_plugin._fal_client = fake
         # Also reset the managed client cache
         fal_plugin._managed_fal_video_client = None
         fal_plugin._managed_fal_video_client_config = None
 
         monkeypatch.setenv("FAL_KEY", "test")
+        monkeypatch.setattr(fal_plugin, "_check_fal_video_available", lambda: True)
         # Force direct mode — no managed gateway
         monkeypatch.setattr(fal_plugin, "_resolve_managed_fal_video_gateway", lambda: None)
         return captured
@@ -91,7 +94,7 @@ class TestFamilyRouting:
             "a dog running",
             model="pixverse-v6",
         )
-        assert result["success"] is True
+        assert result["success"] is True, result
         assert with_fake_fal["endpoint"] == "fal-ai/pixverse/v6/text-to-video"
         assert result["modality"] == "text"
         assert with_fake_fal["arguments"]["prompt"] == "a dog running"
@@ -105,7 +108,7 @@ class TestFamilyRouting:
             model="pixverse-v6",
             image_url="https://example.com/dog.png",
         )
-        assert result["success"] is True
+        assert result["success"] is True, result
         assert with_fake_fal["endpoint"] == "fal-ai/pixverse/v6/image-to-video"
         assert result["modality"] == "image"
         assert with_fake_fal["arguments"]["image_url"] == "https://example.com/dog.png"
@@ -115,7 +118,7 @@ class TestFamilyRouting:
         from plugins.video_gen.fal import FALVideoGenProvider, FAL_FAMILIES, DEFAULT_MODEL
 
         result = FALVideoGenProvider().generate("a dog")
-        assert result["success"] is True
+        assert result["success"] is True, result
         expected_endpoint = FAL_FAMILIES[DEFAULT_MODEL]["text_endpoint"]
         assert with_fake_fal["endpoint"] == expected_endpoint
 
@@ -127,7 +130,7 @@ class TestFamilyRouting:
             "x",
             model="not-a-real-family",
         )
-        assert result["success"] is True
+        assert result["success"] is True, result
         expected_endpoint = FAL_FAMILIES[DEFAULT_MODEL]["text_endpoint"]
         assert with_fake_fal["endpoint"] == expected_endpoint
 
@@ -140,7 +143,7 @@ class TestFamilyRouting:
             model="seedance-2.0",
             image_url="https://example.com/dog.png",
         )
-        assert result["success"] is True
+        assert result["success"] is True, result
         assert with_fake_fal["endpoint"] == "bytedance/seedance-2.0/image-to-video"
         # Seedance uses regular image_url (not start_image_url)
         assert with_fake_fal["arguments"]["image_url"] == "https://example.com/dog.png"
