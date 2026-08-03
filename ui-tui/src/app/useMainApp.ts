@@ -163,6 +163,7 @@ export function useMainApp(gw: GatewayClient) {
       setCols(stdout.columns ?? 80)
       forceRedraw(stdout)
     }, RESIZE_COALESCE_MS)
+
     const sync = () => coalescer.schedule()
 
     stdout.on('resize', sync)
@@ -637,14 +638,18 @@ export function useMainApp(gw: GatewayClient) {
   // background thread. Poll only when that item exists, then patch only on a
   // value change so idle quota updates appear without repaint flicker.
   useEffect(() => {
-    if (!ui.sid || !ui.usage.governor_status) return
+    if (!ui.sid || !ui.usage.governor_status) {
+      return
+    }
 
     let stopped = false
+
     const refresh = () => {
       gw.request<SessionUsageResponse>('session.usage', { session_id: getUiState().sid })
         .then(raw => {
           const result = asRpcResult<SessionUsageResponse>(raw)
           const next = result?.governor_status
+
           if (!stopped && next && next !== getUiState().usage.governor_status) {
             patchUiState(state => ({ ...state, usage: { ...state.usage, governor_status: next } }))
           }
@@ -654,6 +659,7 @@ export function useMainApp(gw: GatewayClient) {
 
     refresh()
     const timer = setInterval(refresh, 5000)
+
     return () => {
       stopped = true
       clearInterval(timer)
