@@ -17,6 +17,9 @@ This is a fork-maintenance artifact. It maps the local overlay onto independentl
 - Added `contrib/autonomous-session-recovery` for delegated approval, dead compression-owner recovery, and detached-turn settlement cleanup; added `contrib/tui-todo-scroll` and `contrib/tui-session-tree-interventions` for the final August 3 TUI fixes.
 - Upstream already contains patch-equivalent queued-paste and collapsed-paste fixes, so those two integration commits were intentionally omitted rather than duplicated.
 - Reconstructed the integration overlay from the refreshed topic ranges on top of the frozen SHA. Topic ancestry, stack ancestry, and `git diff --check` passed before integration verification.
+- Post-replay integration exposed one real cross-topic regression: the refreshed concurrent tool-progress path drained `/steer` before aggregate tool-output budgeting and could lose the user intervention. `contrib/tool-executor-flush` now retains the steer until the existing post-budget finalizer; its 32-test segmentation suite passes.
+- Refreshed Kanban decompose/specify tests now follow the accepted-backlog contract on `contrib/kanban-persistence` (160 Kanban tests pass). New `contrib/test-isolation` injects the FAL fake client directly and isolates Iron Proxy OpenSSL and Termux/WSL host probes; all 15 files that failed during the first canonical pass subsequently passed after installing the repository-pinned FAL, Modal, Daytona, and Parallel Web SDKs.
+- Patch-provenance validation found every functional integration patch on a materialized `contrib/*` ref. The only integration-only commits before this ledger update are `d1f010ec4` (post-replay TUI hook style normalization) and `f28045aef` (refresh documentation).
 
 ## 2026-07-31 upstream refresh and residual-topic review
 
@@ -97,12 +100,13 @@ are local preparation branches only; no remote branch was pushed.
 | `contrib/update-managed-install` | `upstream/main` | Scoped extraction from the recovery and startup commits. |
 | `contrib/fork-update-rebase` | `upstream/main` | Fork overlay replay, rollback, and lease-protected origin synchronization. |
 | `contrib/wsl-voice` | `upstream/main` | Scoped Pulse fallback plus dependent voice lifecycle commits. |
-| `contrib/tool-executor-flush` | `upstream/main` | Completion flush and output-risk preservation. |
+| `contrib/tool-executor-flush` | `upstream/main` | Completion flush, output-risk preservation, and post-budget `/steer` delivery. |
 | `contrib/delegation-routing` | `upstream/main` | Scoped provider/model override plus policy enforcement. |
 | `contrib/hindsight-runtime` | `upstream/main` | Runtime failure/limits plus scoped startup optimization. |
 | `contrib/trace-upload-compat` | `upstream/main` | Resolved by upstream `40dc36a84`; current ref has zero fork commits. Original preserved at `backup/contrib-pre-20260727/trace-upload-compat`. |
 | `contrib/usage-governor` | `upstream/main` | End-to-end usage status contract and lint cleanup. |
-| `contrib/kanban-persistence` | `upstream/main` | Kanban persistence and test-contract adjustment. |
+| `contrib/kanban-persistence` | `upstream/main` | Kanban persistence and accepted-backlog test contract. |
+| `contrib/test-isolation` | `upstream/main` | Optional FAL routing fake plus host-independent Iron Proxy and Termux capability probes. |
 | `contrib/tui-input-recovery` | `upstream/main` | Input, overlay, resize, focus, and WSL echo behavior. A governor-poll hunk was intentionally excluded because it belongs to `contrib/usage-governor`. |
 | `contrib/autonomous-session-recovery` | `upstream/main` | Delegated-child approval recovery, dead compression-owner recovery, and detached-turn settlement cleanup. |
 | `contrib/tui-todo-scroll` | `upstream/main` | Keep active turn todos mounted while transcript history scrolls. |
