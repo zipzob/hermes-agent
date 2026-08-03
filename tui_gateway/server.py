@@ -272,6 +272,10 @@ _LONG_HANDLERS = frozenset(
         "session.active_list",
         "session.branch",
         "session.compress",
+        # Some providers implement agent.interrupt() with blocking transport or
+        # subprocess cleanup. Keep it off the sequential stdio RPC reader so a
+        # slow stop cannot prevent steer, approval, or follow-up RPCs arriving.
+        "session.interrupt",
         "session.list",
         "session.resume",
         "shell.exec",
@@ -1060,6 +1064,19 @@ def _schedule_ws_orphan_reap(sid: str) -> None:
     timer = threading.Timer(_WS_ORPHAN_REAP_GRACE_S, _reap)
     timer.daemon = True
     timer.start()
+
+
+def _reschedule_ws_orphan_reap_after_turn(sid: str, session: dict) -> None:
+    """Re-arm cleanup when a detached session outlived its first grace timer.
+
+    The disconnect timer intentionally spares an in-flight turn. If that timer
+    fires before the turn settles, no timer remains to observe ``running=False``
+    and the detached runtime otherwise survives until the hours-scale TTL reap.
+    A reattached transport is never scheduled; the timer also rechecks under
+    ``_session_resume_lock`` before claiming teardown.
+    """
+    if session.get("transport") is _detached_ws_transport:
+        _schedule_ws_orphan_reap(sid)
 
 
 def _close_sessions_for_transport(
@@ -10074,6 +10091,7 @@ def _run_prompt_submit(
             _retire_turn_marker(session, marker_key)
             session.pop("_auto_continue_scheduled", None)
             _emit_settled_session_info(sid, session, agent)
+            _reschedule_ws_orphan_reap_after_turn(sid, session)
 
         # A user prompt that arrived mid-turn (interrupt + queue) wins over
         # every auto follow-up below — drain it first and skip them this cycle;
