@@ -1300,7 +1300,6 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
                             except Exception as cb_err:
                                 logging.debug("Tool output risk callback error: %s", cb_err)
                         emitted_indices.add(completed_i)
-                        agent._apply_pending_steer_to_tool_results(messages, 1)
                     if not not_done:
                         break
 
