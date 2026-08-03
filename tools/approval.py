@@ -2831,6 +2831,30 @@ def _get_cron_approval_mode() -> str:
         return "deny"
 
 
+def _get_delegated_child_auto_approve() -> bool:
+    """Return the non-interactive execute-code policy for delegate_task children.
+
+    Delegated children inherit the parent's gateway routing context, but they do
+    not own an interactive approval surface.  Their terminal calls already use
+    a worker-local approve/deny callback selected by this same config key.  Keep
+    execute_code on the identical policy instead of waiting on the parent's
+    gateway approval queue until ``approvals.timeout``.
+    """
+    try:
+        from hermes_cli.config import load_config
+
+        config = load_config()
+        value = cfg_get(
+            config,
+            "delegation",
+            "subagent_auto_approve",
+            default=False,
+        )
+        return is_truthy_value(value)
+    except Exception:
+        return False
+
+
 def _strip_shell_comments(command: str) -> str:
     """Strip shell-style comments from a command before LLM assessment.
 
@@ -4073,6 +4097,42 @@ def check_execute_code_guard(code: str, env_type: str,
     approval_mode = _get_approval_mode()
     if _YOLO_MODE_FROZEN or is_current_session_yolo_enabled() or approval_mode == "off":
         return {"approved": True, "message": None}
+
+    # delegate_task children cannot answer prompts.  They inherit the parent's
+    # gateway ContextVars for completion routing, which previously made this
+    # guard enqueue an interactive request and sleep for approvals.timeout (900s
+    # in the incident configuration).  Resolve immediately using the same
+    # explicit delegation.subagent_auto_approve policy as terminal commands.
+    try:
+        from agent.delegation_context import is_delegated_child_context
+
+        delegated_child = is_delegated_child_context()
+    except Exception:
+        delegated_child = False
+    if delegated_child:
+        if _get_delegated_child_auto_approve():
+            logger.warning(
+                "Delegated child auto-approved execute_code script for session %s",
+                get_current_session_key(default=""),
+            )
+            return {
+                "approved": True,
+                "message": None,
+                "subagent_auto_approved": True,
+            }
+        return {
+            "approved": False,
+            "message": (
+                "BLOCKED: delegate_task children cannot request interactive "
+                "execute_code approval. Use ordinary scoped tools, or set "
+                "delegation.subagent_auto_approve: true only for trusted "
+                "autonomous workers."
+            ),
+            "pattern_key": pattern_key,
+            "description": description,
+            "outcome": "blocked",
+            "user_consent": False,
+        }
 
     is_gateway = _is_gateway_approval_context()
     is_ask = env_var_enabled("HERMES_EXEC_ASK")
