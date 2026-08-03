@@ -255,6 +255,80 @@ def test_guard_gateway_missing_notify_is_pending(gw_session):
     assert res["status"] == "pending_approval"
 
 
+@pytest.mark.parametrize(
+    ("auto_approve", "approved", "outcome"),
+    [
+        (False, False, "blocked"),
+        (True, True, None),
+    ],
+)
+def test_guard_delegated_child_never_waits_for_gateway_approval(
+    gw_session, monkeypatch, auto_approve, approved, outcome
+):
+    """Detached children have no interactive approval surface of their own.
+
+    Even though they inherit the parent's gateway session context for routing,
+    execute_code must honor delegation.subagent_auto_approve immediately rather
+    than enqueueing a request and blocking the child for approvals.timeout.
+    """
+    from agent.delegation_context import delegated_child_context
+
+    monkeypatch.setattr(
+        A,
+        "_get_delegated_child_auto_approve",
+        lambda: auto_approve,
+        raising=False,
+    )
+    notified = []
+    with A._lock:
+        A._gateway_notify_cbs[gw_session] = notified.append
+
+    with delegated_child_context():
+        res = A.check_execute_code_guard("print('child')", "local")
+
+    assert res["approved"] is approved
+    assert res.get("outcome") == outcome
+    assert notified == []
+    with A._lock:
+        assert A._gateway_queues.get(gw_session, []) == []
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        (False, False),
+        (True, True),
+        ("true", True),
+    ],
+)
+def test_delegated_child_execute_code_policy_reads_delegation_config(
+    monkeypatch, configured, expected
+):
+    monkeypatch.setattr(
+        "hermes_cli.config.load_config",
+        lambda: {"delegation": {"subagent_auto_approve": configured}},
+    )
+
+    assert A._get_delegated_child_auto_approve() is expected
+
+
+def test_guard_parent_gateway_still_prompts_when_child_auto_approve_is_enabled(
+    gw_session, monkeypatch
+):
+    """The delegation opt-in must never weaken the parent's approval gate."""
+    monkeypatch.setattr(
+        A,
+        "_get_delegated_child_auto_approve",
+        lambda: True,
+        raising=False,
+    )
+
+    res = A.check_execute_code_guard("print('parent')", "local")
+
+    assert res["approved"] is False
+    assert res["status"] == "pending_approval"
+
+
 def test_guard_smart_mode(gw_session, monkeypatch):
     monkeypatch.setattr(A, "_get_approval_mode", lambda: "smart")
 
