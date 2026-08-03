@@ -86,8 +86,9 @@ def test_specify_task_happy_path(kanban_home):
 
     with kb.connect() as conn:
         task = kb.get_task(conn, tid)
-    # Parent-free → recompute_ready promotes to ready.
-    assert task.status == "ready"
+    # Specifying accepts the task into backlog; dispatch remains an
+    # explicit operator decision for a parent-free task.
+    assert task.status == "todo"
     assert task.title == "Refined rough"
     assert "**Goal**" in (task.body or "")
 

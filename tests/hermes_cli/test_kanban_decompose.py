@@ -107,7 +107,9 @@ def test_decompose_with_fanout_creates_children(kanban_home):
         c0 = kb.get_task(conn, outcome.child_ids[0])
         c1 = kb.get_task(conn, outcome.child_ids[1])
     assert root.status == "todo"
-    assert c0.status == "ready"
+    # A decomposed child without internal parents is accepted backlog;
+    # operators explicitly promote it when it is ready to dispatch.
+    assert c0.status == "todo"
     assert c1.status == "todo"
     assert c0.assignee == "researcher"
     assert c1.assignee == "engineer"

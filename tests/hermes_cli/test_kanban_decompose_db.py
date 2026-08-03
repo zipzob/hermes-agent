@@ -60,8 +60,9 @@ def test_decompose_creates_children_and_promotes_root(kanban_home):
     # Root flipped to todo with orchestrator assignee, gated by children.
     assert root.status == "todo"
     assert root.assignee == "orchestrator"
-    # First child has no internal parents → ready on recompute_ready.
-    assert c0.status == "ready"
+    # First child has no internal parents, so it remains accepted backlog
+    # until an operator explicitly promotes it.
+    assert c0.status == "todo"
     assert c0.assignee == "researcher"
     # Second child has parents=[0] → stays in todo until c0 completes.
     assert c1.status == "todo"
