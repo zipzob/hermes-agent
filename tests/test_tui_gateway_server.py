@@ -5904,6 +5904,33 @@ def test_ws_orphan_activity_gate_unreadable_summary_stays_eligible(monkeypatch):
         get_activity_summary=lambda: {"seconds_since_activity": None}
     )
     assert server._ws_orphan_turn_activity_is_fresh({"agent": agent2}) is False
+def test_detached_turn_settlement_reschedules_ws_orphan_reap(monkeypatch):
+    """A turn still running at the first grace deadline must get a second reap."""
+    scheduled = []
+    session = _session(
+        transport=server._detached_ws_transport,
+        running=False,
+    )
+    monkeypatch.setattr(server, "_schedule_ws_orphan_reap", scheduled.append)
+
+    server._reschedule_ws_orphan_reap_after_turn("settled-orphan", session)
+
+    assert scheduled == ["settled-orphan"]
+
+
+def test_reattached_turn_settlement_does_not_schedule_orphan_reap(monkeypatch):
+    scheduled = []
+    session = _session(transport=object(), running=False)
+    monkeypatch.setattr(server, "_schedule_ws_orphan_reap", scheduled.append)
+
+    server._reschedule_ws_orphan_reap_after_turn("live-session", session)
+
+    assert scheduled == []
+
+
+def test_session_interrupt_runs_off_the_sequential_rpc_reader():
+    """Provider interrupt hooks may block; stdin must keep accepting RPCs."""
+    assert "session.interrupt" in server._LONG_HANDLERS
 
 
 def test_init_session_fires_reset_hook(monkeypatch):
