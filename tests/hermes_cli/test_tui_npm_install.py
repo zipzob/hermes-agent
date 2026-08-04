@@ -40,6 +40,45 @@ def _assert_utf8_replace_capture(kwargs: dict) -> None:
 
 
 
+def test_no_install_when_scoped_workspace_omits_unrelated_workspace(tmp_path: Path, main_mod) -> None:
+    tui_dir = tmp_path / "ui-tui"
+    tui_dir.mkdir()
+    (tui_dir / "package.json").write_text("{}")
+    _touch_ink(tmp_path)
+    (tmp_path / "package-lock.json").write_text(
+        '{"packages":{"apps/desktop":{"version":"1.0.0"},"ui-tui":{"version":"1.0.0"},"node_modules/foo":{"version":"1.0.0"}}}'
+    )
+    (tmp_path / "node_modules" / ".package-lock.json").write_text(
+        '{"packages":{"ui-tui":{"version":"1.0.0"},"node_modules/foo":{"version":"1.0.0"}}}'
+    )
+    assert main_mod._tui_need_npm_install(tui_dir) is False
+
+
+def test_no_install_when_unrelated_installed_root_dependency_differs(tmp_path: Path, main_mod) -> None:
+    """A scoped TUI install must ignore root-only packages already on disk."""
+    tui_dir = tmp_path / "ui-tui"
+    tui_dir.mkdir()
+    (tui_dir / "package.json").write_text("{}")
+    _touch_ink(tmp_path)
+    (tmp_path / "package-lock.json").write_text(
+        '{"packages":{"ui-tui":{"version":"1.0.0"},"node_modules/root-only":{"version":"2.0.0"}}}'
+    )
+    (tmp_path / "node_modules" / ".package-lock.json").write_text(
+        '{"packages":{"ui-tui":{"version":"1.0.0"},"node_modules/root-only":{"version":"1.0.0"}}}'
+    )
+
+    assert main_mod._tui_need_npm_install(tui_dir) is False
+
+
+def test_no_install_when_only_optional_peer_package_missing_from_hidden_lock(tmp_path: Path, main_mod) -> None:
+    _touch_ink(tmp_path)
+    (tmp_path / "package-lock.json").write_text(
+        '{"packages":{"node_modules/foo":{"version":"1.0.0"},"node_modules/optional":{"version":"1.0.0","optional":true,"peer":true}}}'
+    )
+    (tmp_path / "node_modules" / ".package-lock.json").write_text(
+        '{"packages":{"node_modules/foo":{"version":"1.0.0"}}}'
+    )
+    assert main_mod._tui_need_npm_install(tmp_path) is False
 
 
 
@@ -176,3 +215,21 @@ def test_make_tui_argv_omits_workspace_when_tui_has_own_lockfile(
     assert install_cmd[:2] == ["/bin/npm", "install"]
     # cwd must be tui_dir (standalone), not parent
     assert calls[0][1]["cwd"] == str(tui_dir)
+
+
+def test_make_tui_argv_handles_npm_install_keyboard_interrupt(tmp_path: Path, main_mod, monkeypatch, capsys) -> None:
+    tui_dir = tmp_path / "ui-tui"
+    tui_dir.mkdir()
+    (tui_dir / "package.json").write_text("{}")
+    (tmp_path / "package-lock.json").write_text("{}")
+    monkeypatch.delenv("TERMUX_VERSION", raising=False)
+    monkeypatch.setenv("PREFIX", "/usr")
+    monkeypatch.setattr(main_mod, "_tui_need_npm_install", lambda _root: True)
+    monkeypatch.setattr(main_mod.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(main_mod.subprocess, "run", lambda *args, **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    with pytest.raises(SystemExit) as exc:
+        main_mod._make_tui_argv(tui_dir, tui_dev=False)
+
+    assert exc.value.code == 130
+    assert "Hermes startup cancelled." in capsys.readouterr().out
