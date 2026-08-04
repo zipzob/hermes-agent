@@ -505,7 +505,8 @@ export function useMainApp(gw: GatewayClient) {
   const rpc: GatewayRpc = useCallback(
     async <T extends Record<string, any> = Record<string, any>>(
       method: string,
-      params: Record<string, unknown> = {}
+      params: Record<string, unknown> = {},
+      options: { silent?: boolean } = {}
     ) => {
       try {
         const result = asRpcResult<T>(await gw.request<T>(method, params))
@@ -514,9 +515,13 @@ export function useMainApp(gw: GatewayClient) {
           return result
         }
 
-        sys(`error: invalid response: ${method}`)
+        if (!options.silent) {
+          sys(`error: invalid response: ${method}`)
+        }
       } catch (e) {
-        sys(`error: ${rpcErrorMessage(e)}`)
+        if (!options.silent) {
+          sys(`error: ${rpcErrorMessage(e)}`)
+        }
       }
 
       return null

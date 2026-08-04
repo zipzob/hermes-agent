@@ -1712,6 +1712,18 @@ def _tui_need_npm_install(root: Path) -> bool:
     if not marker.is_file():
         return True
 
+    # A successful scoped install is authoritative. npm's hidden lockfile can
+    # legitimately omit packages from optional/engine-incompatible branches,
+    # making a package-by-package comparison permanently report stale. Record
+    # the exact root lock bytes installed for the TUI instead.
+    tui_marker = ws_root / "node_modules" / ".hermes-tui-lock.sha256"
+    lock_digest = hashlib.sha256(lock.read_bytes()).hexdigest()
+    try:
+        if tui_marker.read_text(encoding="ascii").strip() == lock_digest:
+            return False
+    except (OSError, UnicodeDecodeError):
+        pass
+
     # Compare lockfile contents, not mtimes: git checkouts and npm rewrites
     # can bump the root lockfile timestamp even when installed deps already
     # match. Fall back to mtime when either file is unparseable.
@@ -1724,8 +1736,45 @@ def _tui_need_npm_install(root: Path) -> bool:
     def comparable(pkg: dict) -> dict:
         return {k: v for k, v in pkg.items() if k not in _NPM_LOCK_RUNTIME_KEYS}
 
+    workspace_prefix = None
+    workspace_packages: set[str] | None = None
+    if ws_root != root:
+        try:
+            workspace_prefix = root.relative_to(ws_root).as_posix()
+        except ValueError:
+            pass
+
+    if workspace_prefix:
+        # npm --workspace installs only this workspace's dependency closure.
+        # Do not compare unrelated root/workspace packages merely because they
+        # happen to remain in node_modules; that made a root-only ESLint skew
+        # trigger an npm install on every TUI launch.
+        workspace_packages = {workspace_prefix}
+        pending = [workspace_prefix]
+        while pending:
+            package_path = pending.pop()
+            package = wanted.get(package_path)
+            if not isinstance(package, dict):
+                continue
+            dependency_names: set[str] = set()
+            for field in ("dependencies", "devDependencies", "optionalDependencies"):
+                dependencies = package.get(field)
+                if isinstance(dependencies, dict):
+                    dependency_names.update(dependencies)
+            for dependency in dependency_names:
+                candidate = f"node_modules/{dependency}"
+                if candidate in wanted and candidate not in workspace_packages:
+                    workspace_packages.add(candidate)
+                    pending.append(candidate)
+
     for name, pkg in wanted.items():
         if not name:
+            continue
+
+        # A scoped `npm install --workspace ui-tui` intentionally omits other
+        # workspaces and their dependencies from the hidden lockfile. Compare
+        # the selected workspace plus packages npm actually installed for it.
+        if workspace_packages is not None and name not in workspace_packages:
             continue
 
         if not isinstance(pkg, dict):
@@ -2069,7 +2118,14 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
                 env={**with_hermes_node_path(), "CI": "1"},
             )
 
-        result = _run_tui_install()
+        try:
+            result = _run_tui_install()
+        except KeyboardInterrupt:
+            # Bootstrap runs before Ink owns the terminal, so its graceful
+            # shutdown path cannot handle Ctrl+C yet. Avoid exposing a Python
+            # traceback for an ordinary user cancellation.
+            print("\nHermes startup cancelled.")
+            raise SystemExit(130) from None
         if result.returncode != 0:
             # An npm outside the root package.json's `engines.npm` range fails
             # here before doing any work; repair once (upgrade a Hermes-managed
@@ -2090,6 +2146,12 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
             if preview:
                 print(preview)
             sys.exit(1)
+        tui_lock_marker = npm_cwd / "node_modules" / ".hermes-tui-lock.sha256"
+        tui_lock_marker.parent.mkdir(parents=True, exist_ok=True)
+        tui_lock_marker.write_text(
+            hashlib.sha256((npm_cwd / "package-lock.json").read_bytes()).hexdigest(),
+            encoding="ascii",
+        )
         did_install = True
 
     if tui_dev:

@@ -90,6 +90,23 @@ def test_session_slot_is_claimed_on_first_turn_not_on_create(monkeypatch, tmp_pa
         reset_hermes_home_override(token)
 
 
+def test_session_create_schedules_non_blocking_agent_hydration(monkeypatch):
+    scheduled: list[str] = []
+    monkeypatch.setattr(server, "_schedule_agent_build", lambda sid: scheduled.append(sid))
+
+    response = server.handle_request(
+        {"id": "lazy-create", "method": "session.create", "params": {"cols": 80}}
+    )
+
+    assert response.get("result"), response
+    sid = response["result"]["session_id"]
+    assert response["result"]["info"]["lazy"] is True
+    assert scheduled == [sid]
+    assert server._sessions[sid]["agent"] is None
+    assert server._sessions[sid].get("agent_build_started") is None
+    server._sessions.pop(sid, None)
+
+
 def test_session_context_uses_session_cwd(monkeypatch, tmp_path):
     """Desktop/TUI sessions must pin the agent cwd per session.
 
@@ -11012,12 +11029,8 @@ def test_session_create_close_race_does_not_orphan_worker(monkeypatch):
             self.api_key = ""
 
     # Make _build block until we release it — simulates slow agent init.
-    # Also signal when _build actually reaches _make_agent so the test
-    # can close the session at the right moment: session.create now
-    # defers _start_agent_build behind a 50ms timer (see the
-    # `_deferred_build` path in @method("session.create")), so closing
-    # before the build thread has even started would skip the orphan
-    # detection entirely and the test would race a non-event.
+    # Also signal when _build actually reaches _make_agent so the test can
+    # close the session at the right moment.
     build_started = threading.Event()
     release_build = threading.Event()
     build_entered = threading.Event()

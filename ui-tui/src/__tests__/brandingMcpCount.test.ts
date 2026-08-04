@@ -73,6 +73,16 @@ async function renderFooter(info: SessionInfo): Promise<string> {
 }
 
 describe('branding MCP headline count', () => {
+  it('renders an explicit non-blocking hydration state instead of zero counts or shimmer', async () => {
+    const frame = await renderFooter({ lazy: true, model: 'test-model', skills: {}, tools: {} })
+
+    expect(frame).toContain('Hydrating tools in background — composer ready')
+    expect(frame).toContain('hydrating in background…')
+    expect(frame).not.toContain('Available Skills (0)')
+    expect(frame).not.toContain('scanning skills')
+    expect(frame).not.toMatch(/[▁▂▃▄▅▆▇█]/)
+  })
+
   it('counts only connected servers, not configured-but-disabled ones', async () => {
     const frame = await renderFooter(
       baseInfo([

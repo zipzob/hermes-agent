@@ -81,6 +81,23 @@ type CacheEntry =
 const FRAME_MS = 160
 const POLL_MS = 2500
 
+export async function runPetSyncSingleFlight<T>(
+  lock: { current: boolean },
+  task: () => Promise<T>
+): Promise<T | undefined> {
+  if (lock.current) {
+    return undefined
+  }
+
+  lock.current = true
+
+  try {
+    return await task()
+  } finally {
+    lock.current = false
+  }
+}
+
 // Only the standalone TUI owns a real terminal it can splat image escapes into;
 // when piped (or running under the dashboard PTY the gateway resolves to
 // half-blocks anyway) we never ask for graphics.
@@ -112,6 +129,7 @@ export function usePet(): PetRender {
   const [enabled, setEnabled] = useState(false)
   const [grid, setGrid] = useState<PetGrid | null>(null)
   const [kitty, setKitty] = useState<KittyView | null>(null)
+  const syncInFlightRef = useRef(false)
 
   const cache = useRef<Map<string, CacheEntry>>(new Map())
   const slugRef = useRef('')
@@ -192,9 +210,9 @@ export function usePet(): PetRender {
   // Fetch + cache one (slug, state). `pet.cells` resolves the active pet from
   // config, so its `slug`/`enabled` are the source of truth.
   const sync = useCallback(
-    async (state: PetState) => {
-      try {
-        const res = (await rpc('pet.cells', { graphics: IS_TTY, state })) as PetCellsResult | null
+    (state: PetState) =>
+      runPetSyncSingleFlight(syncInFlightRef, async () => {
+        const res = (await rpc('pet.cells', { graphics: IS_TTY, state }, { silent: true })) as PetCellsResult | null
 
         if (!res) {
           return
@@ -243,10 +261,7 @@ export function usePet(): PetRender {
         }
 
         setEnabled(true)
-      } catch {
-        // cosmetic — ignore RPC failures
-      }
-    },
+      }).catch(() => undefined), // cosmetic — preserve the last frame on any failure
     [rpc, releaseKitty]
   )
 
