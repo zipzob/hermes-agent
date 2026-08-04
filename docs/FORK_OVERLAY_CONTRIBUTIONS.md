@@ -9,6 +9,14 @@ This is a fork-maintenance artifact. It maps the local overlay onto independentl
 - `origin/main` contains an older lineage. `git cherry main origin/main` identified 23 patch-equivalent remote-only commits. Do **not** merge or cherry-pick those copies into `main`.
 - Two remote copies are non-equivalent: the original recovery bundle and an earlier Hindsight daemon implementation. Extract current behavior from this branch instead.
 
+## 2026-08-04 upstream refresh
+
+- Fetched once and froze `upstream/main` at `f5be9236e00ddf2f2a412697f267078fc4ee068e`; rollback refs preserve `main` and every topic under `backup/main-pre-refresh-20260804-145646` and `backup/contrib-pre-20260804-145646/*`.
+- Refreshed all 21 `contrib/*` refs. Every root has the frozen upstream as an ancestor; zero-delta `contrib/trace-upload-compat` points at the frozen SHA; duplicate Hindsight and web compatibility refs match their canonical topics.
+- Preserved the declared TUI stack parent-first: `contrib/tui-frame-recovery` (`a95488acc`) -> `contrib/tui-approval-review` (`ed34bdd05`) -> `contrib/tui-tool-payload-disclosure` (`c91d9ac28`).
+- Replayed the complete integration overlay onto the frozen SHA. `git range-diff` classified all 51 prior commits as patch-equivalent; focused TUI tests, TypeScript, lint, build, Python syntax, ancestry, stack topology, and whitespace checks passed.
+- Frozen upstream and the replayed integration tree reproduce the same three assertion failures: two Windows launcher-quarantine assertions in `test_update_concurrent_quarantine.py` and one OpenViking closed-port timing assertion. Gateway test files also complete all assertions but can exceed process-cleanup time on this WSL host. These are baseline/environment findings, not replay regressions.
+
 ## 2026-08-03 frozen upstream refresh and session-recovery topics
 
 - Added `contrib/tui-session-lifecycle` on current `upstream/main` `f03eb252c` for deterministic TUI dependency freshness, non-blocking inventory hydration, durable exit-resume IDs, and fail-open single-flight pet rendering. The extracted topic preserves upstream's newer workspace-install coverage; 16 focused TUI tests, 5 focused Python tests, TypeScript, lint, build, ancestry, and whitespace checks passed.
