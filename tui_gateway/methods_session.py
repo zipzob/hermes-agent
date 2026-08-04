@@ -196,10 +196,11 @@ def _(rid, params: dict) -> dict:
                 exc_info=True,
             )
 
-    # Return the lightweight session immediately so Ink can paint the composer
-    # + skeleton panel, then build the real AIAgent just after this response is
-    # flushed.  This keeps startup responsive while still hydrating tools/skills
-    # without requiring the user to submit a first prompt.
+    # Return the lightweight session immediately so Ink can paint an enabled
+    # composer, then hydrate tools/skills in the background. The client renders
+    # this as non-blocking hydration rather than treating inventory readiness as
+    # composer readiness. First prompt still waits safely through _sess() when
+    # hydration has not completed yet.
     _schedule_agent_build(sid)
     _schedule_session_cap_enforcement()  # trim detached idle sessions over the cap
 

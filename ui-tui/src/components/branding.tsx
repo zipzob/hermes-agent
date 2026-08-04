@@ -1,6 +1,5 @@
 import { Box, Text, useStdout } from '@hermes/ink'
-import { useEffect, useState } from 'react'
-import unicodeSpinners from 'unicode-animations'
+import { useState } from 'react'
 
 import { artWidth, caduceus, CADUCEUS_WIDTH, logo, LOGO_WIDTH } from '../banner.js'
 import { mix } from '../lib/color.js'
@@ -9,28 +8,7 @@ import type { Theme } from '../theme.js'
 import type { PanelSection, SessionInfo } from '../types.js'
 
 import { Accordion } from './accordion.js'
-import { ShimmerRows } from './loaders.js'
 import { WidgetGrid } from './widgetGrid.js'
-
-const LOADER_TICK_MS = 120
-
-function InlineLoader({ label, t }: { label: string; t: Theme }) {
-  const [tick, setTick] = useState(0)
-  const spinner = unicodeSpinners.braille
-  const frame = spinner.frames[tick % spinner.frames.length] ?? '⠋'
-
-  useEffect(() => {
-    const id = setInterval(() => setTick(n => n + 1), Math.max(LOADER_TICK_MS, spinner.interval))
-
-    return () => clearInterval(id)
-  }, [spinner.interval])
-
-  return (
-    <Text color={t.color.muted} wrap="truncate">
-      <Text color={t.color.accent}>{frame}</Text> {label}
-    </Text>
-  )
-}
 
 export function ArtLines({ lines }: { lines: [string, string][] }) {
   // No `opaque`: the banner is top-level content with nothing behind it, so
@@ -190,20 +168,6 @@ export function Banner({ maxWidth, t }: { maxWidth?: number; t: Theme }) {
   )
 }
 
-// ── Skeleton ─────────────────────────────────────────────────────────
-//
-// Lazy sections render shimmer rows shaped like the real content (label
-// block + value run) instead of a blank gap that pops when data lands.
-// Row widths mirror the typical toolsets listing.
-const SKELETON_ROWS: readonly (readonly [number, number])[] = [
-  [7, 30],
-  [7, 9],
-  [14, 12],
-  [12, 12],
-  [7, 7],
-  [10, 13]
-]
-
 // ── SessionPanel ─────────────────────────────────────────────────────
 
 const SKILLS_MAX = 8
@@ -256,7 +220,7 @@ export function SessionPanel({ info, maxWidth, sid, t }: SessionPanelProps) {
 
   const skillsBody = () => {
     if (info.lazy && skillEntries.length === 0) {
-      return <InlineLoader label="scanning skills" t={t} />
+      return <Text color={t.color.muted}>Hydrating skills in background — composer ready</Text>
     }
 
     const shown = skillEntries.slice(0, SKILLS_MAX)
@@ -287,7 +251,7 @@ export function SessionPanel({ info, maxWidth, sid, t }: SessionPanelProps) {
 
   const toolsBody = () => {
     if (info.lazy && toolEntries.length === 0) {
-      return <ShimmerRows color={listFade} highlight={t.color.label} rows={SKELETON_ROWS} />
+      return <Text color={t.color.muted}>Hydrating tools in background — composer ready</Text>
     }
 
     const shown = toolEntries.slice(0, TOOLSETS_MAX)
@@ -411,10 +375,16 @@ export function SessionPanel({ info, maxWidth, sid, t }: SessionPanelProps) {
       {/* ── Skills (collapsed by default) ── */}
       <Box flexDirection="column" marginTop={1}>
         <Accordion
-          count={skillsTotal}
+          count={info.lazy && skillsTotal === 0 ? undefined : skillsTotal}
           onToggle={() => setSkillsOpen(v => !v)}
           open={skillsOpen}
-          suffix={skillsCatCount > 0 ? `in ${skillsCatCount} categor${skillsCatCount === 1 ? 'y' : 'ies'}` : undefined}
+          suffix={
+            info.lazy && skillsTotal === 0
+              ? 'hydrating in background…'
+              : skillsCatCount > 0
+                ? `in ${skillsCatCount} categor${skillsCatCount === 1 ? 'y' : 'ies'}`
+                : undefined
+          }
           t={t}
           title="Available Skills"
         >

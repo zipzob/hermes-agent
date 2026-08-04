@@ -31,6 +31,14 @@ export { refreshSessionView, scheduleResumeScrollToBottom } from './sessionResum
 
 const usageFrom = (info: null | SessionInfo): Usage => (info?.usage ? { ...ZERO, ...info.usage } : ZERO)
 
+// session.create is deliberately lazy: prompt.submit waits for the background
+// agent build when necessary. The composer therefore must not remain blocked
+// behind tools/skills hydration, which can take tens of seconds on cold start.
+export const statusFromCreatedSession = () => 'ready'
+
+export const storedSessionIdFromCreate = (response: Pick<SessionCreateResponse, 'stored_session_id'>) =>
+  response.stored_session_id
+
 const statusFromLiveSession = (status?: string, running = false) => {
   if (status === 'waiting') {
     return 'waiting for input…'
@@ -148,7 +156,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
     turnController.fullReset()
     setVoiceRecording(false)
     setVoiceProcessing(false)
-    patchUiState({ bgTasks: new Set(), info: null, sid: null, usage: ZERO })
+    patchUiState({ bgTasks: new Set(), info: null, sid: null, storedSessionId: null, usage: ZERO })
     setHistoryItems([])
     setLastUserMsg('')
     setStickyPrompt('')
@@ -214,11 +222,13 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       resetSession()
       setSessionStartedAt(Date.now())
 
-      writeActiveSessionFile(r.session_id)
+      const storedSessionId = storedSessionIdFromCreate(r)
+      writeActiveSessionFile(storedSessionId)
       patchUiState({
         info,
         sid: r.session_id,
-        status: info?.version ? 'ready' : 'starting agent…',
+        storedSessionId,
+        status: statusFromCreatedSession(),
         usage: usageFrom(info)
       })
 
@@ -311,6 +321,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
             busy: running,
             info,
             sid: r.session_id,
+            storedSessionId: r.session_key ?? r.session_id,
             status: statusFromLiveSession(r.status, running),
             usage: usageFrom(info)
           })
@@ -365,6 +376,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
               busy: running,
               info,
               sid: r.session_id,
+              storedSessionId: r.resumed ?? null,
               status: statusFromLiveSession(r.status, running),
               usage: usageFrom(info)
             })

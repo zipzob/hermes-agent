@@ -96,7 +96,11 @@ export interface CompletionItem {
 }
 
 export interface GatewayRpc {
-  <T extends RpcResult = RpcResult>(method: string, params?: Record<string, unknown>): Promise<null | T>
+  <T extends RpcResult = RpcResult>(
+    method: string,
+    params?: Record<string, unknown>,
+    options?: { silent?: boolean }
+  ): Promise<null | T>
 }
 
 export interface GatewayServices {
@@ -344,6 +348,7 @@ export interface UiState {
   showReasoning: boolean
   indicatorStyle: IndicatorStyle
   sid: null | string
+  storedSessionId: null | string
   status: string
   statusBar: StatusBarMode
   // display.status_bar.fields — visibility filter for status-rule segments,
