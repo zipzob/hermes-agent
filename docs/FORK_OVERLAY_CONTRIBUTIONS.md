@@ -11,6 +11,7 @@ This is a fork-maintenance artifact. It maps the local overlay onto independentl
 
 ## 2026-08-03 frozen upstream refresh and session-recovery topics
 
+- Added `contrib/tui-session-lifecycle` on current `upstream/main` `f03eb252c` for deterministic TUI dependency freshness, non-blocking inventory hydration, durable exit-resume IDs, and fail-open single-flight pet rendering. The extracted topic preserves upstream's newer workspace-install coverage; 16 focused TUI tests, 5 focused Python tests, TypeScript, lint, build, ancestry, and whitespace checks passed.
 - Fetched once and froze `upstream/main` at `cb11a7e25579638c9f67e8501dd151f581c4c942`; all topic and integration replay used that immutable SHA with no worker fetches. Rollback refs preserve the pre-refresh heads under `backup/pre-refresh-20260803-140003/*`.
 - Every `contrib/*` ref now has the frozen upstream SHA as an ancestor and is zero commits behind it. The declared stack remains `contrib/tui-frame-recovery` -> `contrib/tui-approval-review` -> `contrib/tui-tool-payload-disclosure`; duplicate compatibility refs point at their refreshed canonical topic heads.
 - Semantic conflict resolutions retained current upstream architecture plus the fork contracts: cron approvals remain non-interactive/fail-closed before delegated-child auto-approval; delegated children cannot wait on inherited interactive approvals; workspace-scoped npm installs preserve sibling workspace dependencies while retaining npm-engine repair; TUI focus/resize recovery keeps the renderer-owned redraw and WSL direct-echo fallback.
@@ -111,6 +112,7 @@ are local preparation branches only; no remote branch was pushed.
 | `contrib/autonomous-session-recovery` | `upstream/main` | Delegated-child approval recovery, dead compression-owner recovery, and detached-turn settlement cleanup. |
 | `contrib/tui-todo-scroll` | `upstream/main` | Keep active turn todos mounted while transcript history scrolls. |
 | `contrib/tui-session-tree-interventions` | `upstream/main` | Session-tree lineage plus safe steering and interruption controls. |
+| `contrib/tui-session-lifecycle` | `upstream/main` | Dependency freshness, non-blocking hydration, durable exit-resume IDs, and fail-open cosmetic pet rendering. |
 | `contrib/tui-frame-recovery` | `upstream/main` | Ink frame invalidation and physical approval ghost repair. |
 | `contrib/tui-approval-review` | `contrib/tui-frame-recovery` | Approval transport, expiry, and bounded repaint. |
 | `contrib/tui-tool-payload-disclosure` | `contrib/tui-approval-review` | Per-call verbose payload disclosure. |
