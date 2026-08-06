@@ -9,6 +9,13 @@ This is a fork-maintenance artifact. It maps the local overlay onto independentl
 - `origin/main` contains an older lineage. `git cherry main origin/main` identified 23 patch-equivalent remote-only commits. Do **not** merge or cherry-pick those copies into `main`.
 - Two remote copies are non-equivalent: the original recovery bundle and an earlier Hindsight daemon implementation. Extract current behavior from this branch instead.
 
+## 2026-08-06 upstream refresh
+
+- Fetched once and froze `upstream/main` at `aaf9688519cca58dd5f76a589a0911aff269b060`; rollback refs preserve `main` and every contribution under `backup/main-pre-refresh-20260806-160000` and `backup/contrib-pre-refresh-20260806-160000/*`.
+- Rebased every active root once on the frozen SHA, moved zero-delta `contrib/trace-upload-compat` directly to it, preserved the declared `tui-frame-recovery` -> `tui-approval-review` -> `tui-tool-payload-disclosure` stack, and kept the Hindsight/web `*-rebased` refs as exact aliases of their canonical topics.
+- `git cherry upstream/main <topic>` confirmed every nonzero topic remains unique upstream work; no contributor change was discarded as superseded. The integration candidate was composed from refreshed topic patches plus recorded integration glue, rather than replaying the overlay a second time.
+- The only composition conflict was TUI install freshness in `hermes_cli/main.py`. It retains the lock-digest and dependency-closure checks, the workspace-scoped `npm install --no-save` sibling-preservation rule, and the current upstream update receipt. A follow-up restores the global fresh-bundle build guard. `git range-diff` matches all 52 prior overlay patches; focused Python/TUI checks, TypeScript, syntax, and whitespace checks passed.
+
 ## 2026-08-04 upstream refresh
 
 - Fetched once and froze `upstream/main` at `f5be9236e00ddf2f2a412697f267078fc4ee068e`; rollback refs preserve `main` and every topic under `backup/main-pre-refresh-20260804-145646` and `backup/contrib-pre-20260804-145646/*`.
