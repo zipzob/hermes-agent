@@ -2184,7 +2184,7 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
         return [npm, "start"], tui_dir
 
     # The bundle is self-contained; rebuild only after an install or when an
-    # input is newer. Rebuilding unchanged sources added seconds to every chat.
+    # input is newer. Rebuilding unchanged sources adds seconds to every chat.
     should_build = did_install or _tui_need_rebuild(tui_dir)
 
     if should_build:
