@@ -288,6 +288,7 @@ class TestContinuousLoopSimulation:
         monkeypatch.setattr(voice, "_continuous_no_speech_count", 0)
         monkeypatch.setattr(voice, "_continuous_on_transcript", None)
         monkeypatch.setattr(voice, "_continuous_on_status", None)
+        monkeypatch.setattr(voice, "_continuous_on_capture_stopped", None, raising=False)
         monkeypatch.setattr(voice, "_continuous_on_silence_progress", None)
         monkeypatch.setattr(voice, "_continuous_on_cutoff", None)
         monkeypatch.setattr(voice, "_continuous_on_silent_limit", None)
@@ -395,6 +396,36 @@ class TestContinuousLoopSimulation:
             ("beep", 660, 2),
             ("beep", 880, 1),
         ]
+
+        voice.stop_continuous()
+
+    def test_capture_stopped_callback_runs_after_stop_before_transcription(
+        self, fake_recorder, monkeypatch
+    ):
+        import hermes_cli.voice as voice
+
+        events = []
+        original_stop = fake_recorder.stop
+
+        def tracked_stop():
+            events.append("stop")
+            return original_stop()
+
+        fake_recorder.stop = tracked_stop
+        monkeypatch.setattr(
+            voice,
+            "transcribe_recording",
+            lambda _p: events.append("transcribe")
+            or {"success": True, "transcript": "hello world"},
+        )
+
+        voice.start_continuous(
+            on_transcript=lambda _text: None,
+            on_capture_stopped=lambda: events.append("capture_stopped"),
+        )
+        fake_recorder.last_callback()
+
+        assert events[:3] == ["stop", "capture_stopped", "transcribe"]
 
         voice.stop_continuous()
 

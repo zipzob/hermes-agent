@@ -344,6 +344,7 @@ def _voice_activity_held() -> bool:
 
 _continuous_on_transcript: Optional[Callable[[str], None]] = None
 _continuous_on_status: Optional[Callable[[str], None]] = None
+_continuous_on_capture_stopped: Optional[Callable[[], None]] = None
 _continuous_on_silence_progress: Optional[Callable[[Optional[float]], None]] = None
 _continuous_on_cutoff: Optional[Callable[[str], None]] = None
 _continuous_on_silent_limit: Optional[Callable[[], None]] = None
@@ -423,6 +424,7 @@ def stop_and_transcribe() -> Optional[str]:
 def start_continuous(
     on_transcript: Callable[[str], None],
     on_status: Optional[Callable[[str], None]] = None,
+    on_capture_stopped: Optional[Callable[[], None]] = None,
     on_silent_limit: Optional[Callable[[], None]] = None,
     silence_threshold: int = 200,
     silence_duration: float = 5.0,
@@ -450,6 +452,11 @@ def start_continuous(
     ``on_status`` is called with ``"listening"`` / ``"transcribing"`` /
     ``"idle"`` so the UI can show a live indicator.
 
+    ``on_capture_stopped`` runs after the recorder has closed its microphone
+    capture but before transcription begins. One-shot callers can use it to
+    release cross-process microphone ownership without retaining that ownership
+    throughout STT inference.
+
     ``max_recording_seconds`` is the hard cap on a single recording's length
     (``voice.max_recording_seconds``); any non-positive or non-numeric value
     disables the cap, preserving the previous unbounded behaviour.
@@ -462,6 +469,7 @@ def start_continuous(
     """
     global _continuous_active, _continuous_recorder, _continuous_auto_restart
     global _continuous_on_transcript, _continuous_on_status, _continuous_on_silent_limit
+    global _continuous_on_capture_stopped
     global _continuous_on_silence_progress
     global _continuous_on_cutoff
     global _continuous_on_stop_phrase
@@ -478,6 +486,7 @@ def start_continuous(
         _continuous_auto_restart = auto_restart
         _continuous_on_transcript = on_transcript
         _continuous_on_status = on_status
+        _continuous_on_capture_stopped = on_capture_stopped
         _continuous_on_silence_progress = on_silence_progress
         _continuous_on_cutoff = on_cutoff
         _continuous_on_silent_limit = on_silent_limit
@@ -543,6 +552,7 @@ def stop_continuous(force_transcribe: bool = False) -> None:
     """
     global _continuous_active, _continuous_on_transcript, _continuous_stopping
     global _continuous_on_status, _continuous_on_silent_limit
+    global _continuous_on_capture_stopped
     global _continuous_on_silence_progress
     global _continuous_on_cutoff
     global _continuous_on_stop_phrase
@@ -554,6 +564,7 @@ def stop_continuous(force_transcribe: bool = False) -> None:
         _continuous_active = False
         rec = _continuous_recorder
         on_status = _continuous_on_status
+        on_capture_stopped = _continuous_on_capture_stopped
         on_transcript = _continuous_on_transcript
         on_silent_limit = _continuous_on_silent_limit
         on_stop_phrase = _continuous_on_stop_phrase
@@ -562,6 +573,7 @@ def stop_continuous(force_transcribe: bool = False) -> None:
         _continuous_stopping = rec is not None
         _continuous_on_transcript = None
         _continuous_on_status = None
+        _continuous_on_capture_stopped = None
         _continuous_on_silence_progress = None
         _continuous_on_cutoff = None
         _continuous_on_silent_limit = None
@@ -585,6 +597,12 @@ def stop_continuous(force_transcribe: bool = False) -> None:
                 except Exception as cancel_error:
                     logger.warning("failed to cancel recorder: %s", cancel_error)
                 wav_path = None
+            finally:
+                if on_capture_stopped:
+                    try:
+                        on_capture_stopped()
+                    except Exception:
+                        pass
 
             def _transcribe_and_cleanup():
                 global _continuous_no_speech_count, _continuous_stopping
@@ -677,6 +695,12 @@ def stop_continuous(force_transcribe: bool = False) -> None:
                 rec.cancel()
             except Exception as e:
                 logger.warning("failed to cancel recorder: %s", e)
+            finally:
+                if on_capture_stopped:
+                    try:
+                        on_capture_stopped()
+                    except Exception:
+                        pass
 
     with _continuous_lock:
         _continuous_stopping = False
@@ -712,6 +736,7 @@ def _continuous_on_silence() -> None:
         rec = _continuous_recorder
         on_transcript = _continuous_on_transcript
         on_status = _continuous_on_status
+        on_capture_stopped = _continuous_on_capture_stopped
         on_silent_limit = _continuous_on_silent_limit
         on_stop_phrase = _continuous_on_stop_phrase
 
@@ -725,7 +750,14 @@ def _continuous_on_silence() -> None:
         except Exception:
             pass
 
-    wav_path = rec.stop()
+    try:
+        wav_path = rec.stop()
+    finally:
+        if on_capture_stopped:
+            try:
+                on_capture_stopped()
+            except Exception:
+                pass
     # Peak RMS is the critical diagnostic when stop() returns None despite
     # the VAD firing — tells us at a glance whether the mic was too quiet
     # for SILENCE_RMS_THRESHOLD (200) or the VAD + peak checks disagree.
