@@ -14323,9 +14323,8 @@ def _(rid, params: dict) -> dict:
             def _on_status(state):
                 payload = _status_payload(state)
                 _voice_emit("voice.status", payload)
-                if state != "listening":
-                    _release_voice_capture("record")
                 if state == "idle":
+                    _release_voice_capture("record")
                     _resume_voice_wake()
 
             def _on_silence_progress(remaining):
@@ -14338,7 +14337,6 @@ def _(rid, params: dict) -> dict:
                 payload = _status_payload("transcribing")
                 payload["cutoff_reason"] = reason
                 _voice_emit("voice.status", payload)
-                _release_voice_capture("record")
 
             # voice.max_recording_seconds — hard cap on a single recording's
             # length. Same guard as the silence params: non-numeric / bool /
@@ -14347,6 +14345,7 @@ def _(rid, params: dict) -> dict:
             started = start_continuous(
                 on_transcript=_on_transcript,
                 on_status=_on_status,
+                on_capture_stopped=lambda: _release_voice_capture("record"),
                 on_silent_limit=_on_silent,
                 silence_threshold=safe_threshold,
                 silence_duration=safe_duration,
