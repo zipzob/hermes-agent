@@ -36,11 +36,13 @@ import importlib
 import importlib.util
 import json
 import logging
+import math
 import os
 import queue
 import sys
 import threading
 import time
+from contextlib import nullcontext
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -51,6 +53,8 @@ from agent.memory_provider import MemoryProvider
 from hermes_constants import get_hermes_home
 from tools.registry import tool_error
 from hermes_cli.config import cfg_get
+from tools.local_inference_lease import local_inference_lease
+from utils import is_truthy_value
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +94,25 @@ def _parse_int_setting(value: Any, default: int) -> int:
     except (TypeError, ValueError):
         logger.warning("Invalid integer Hindsight setting %r; using default %s", value, default)
         return default
+
+
+def _parse_float_setting(
+    value: Any,
+    default: float,
+    *,
+    minimum: float = 0.0,
+    maximum: float = float("inf"),
+) -> float:
+    """Parse a bounded float config value, falling back on invalid input."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        logger.warning("Invalid numeric Hindsight setting %r; using default %s", value, default)
+        return default
+    if not math.isfinite(parsed) or not minimum <= parsed <= maximum:
+        logger.warning("Out-of-range Hindsight setting %r; using default %s", value, default)
+        return default
+    return parsed
 
 
 # Env var the embedded daemon manager reads (at import time, as a module-level
@@ -278,13 +301,25 @@ def _get_loop() -> asyncio.AbstractEventLoop:
 
 
 def _run_sync(coro, timeout: float = _DEFAULT_TIMEOUT):
-    """Schedule *coro* on the shared loop and block until done."""
+    """Schedule *coro* on the shared loop and block through timeout cleanup."""
     from agent.async_utils import safe_schedule_threadsafe
+
+    async def _bounded():
+        # wait_for cancels the operation and waits for its cancellation cleanup
+        # before raising. Shared-inference callers therefore retain their lease
+        # until the timed-out coroutine can no longer drive Ollama.
+        return await asyncio.wait_for(coro, timeout=timeout)
+
     loop = _get_loop()
-    future = safe_schedule_threadsafe(coro, loop)
+    bounded = _bounded()
+    future = safe_schedule_threadsafe(bounded, loop)
     if future is None:
+        bounded.close()
+        close = getattr(coro, "close", None)
+        if close is not None:
+            close()
         raise RuntimeError("Hindsight loop unavailable")
-    return future.result(timeout=timeout)
+    return future.result()
 
 
 # ---------------------------------------------------------------------------
@@ -761,6 +796,8 @@ class HindsightMemoryProvider(MemoryProvider):
         self._embedded_failure_at = 0.0
         self._embedded_failure_reason = ""
         self._embedded_failure_cooldown = _DEFAULT_EMBEDDED_FAILURE_COOLDOWN
+        self._shared_local_inference = False
+        self._shared_local_inference_timeout = float(_DEFAULT_TIMEOUT)
         self._prefetch_result = ""
         self._prefetch_lock = threading.Lock()
         self._prefetch_thread = None
@@ -1111,6 +1148,7 @@ class HindsightMemoryProvider(MemoryProvider):
             {"key": "llm_base_url", "description": "Endpoint URL (e.g. http://192.168.1.10:8080/v1)", "default": "", "when": {"mode": "local_embedded", "llm_provider": "openai_compatible"}},
             {"key": "llm_api_key", "description": "LLM API key (optional for openai_compatible)", "secret": True, "env_var": "HINDSIGHT_LLM_API_KEY", "when": {"mode": "local_embedded"}},
             {"key": "llm_model", "description": "LLM model", "default": "gpt-4o-mini", "default_from": {"field": "llm_provider", "map": _PROVIDER_DEFAULT_MODELS}, "when": {"mode": "local_embedded"}},
+            {"key": "llm_provider", "description": "LLM provider used by the external Hindsight service (required only for local inference coordination)", "default": "", "choices": ["", "ollama", "openai", "anthropic", "gemini", "groq", "openrouter", "minimax", "lmstudio", "openai_compatible"], "when": {"mode": "local_external"}},
             {"key": "bank_id", "description": "Memory bank name (static fallback when bank_id_template is unset)", "default": "hermes"},
             {"key": "bank_id_template", "description": "Optional template to derive bank_id dynamically. Placeholders: {profile}, {workspace}, {platform}, {user}, {session}. Example: hermes-{profile}", "default": ""},
             {"key": "bank_mission", "description": "Mission/purpose description for the memory bank"},
@@ -1130,6 +1168,10 @@ class HindsightMemoryProvider(MemoryProvider):
             {"key": "auto_retain", "description": "Automatically retain conversation turns", "default": True},
             {"key": "retain_every_n_turns", "description": "Retain every N turns (1 = every turn)", "default": 1},
             {"key": "retain_async","description": "Process retain asynchronously on the Hindsight server", "default": True},
+            {"key": "shared_local_inference", "description": "Coordinate local Ollama operations with other Hermes GPU workloads", "default": False, "when": {"mode": "local_embedded", "llm_provider": "ollama"}},
+            {"key": "shared_local_inference_timeout", "description": "Seconds to wait for the shared local inference lease", "default": _DEFAULT_TIMEOUT, "when": {"mode": "local_embedded", "llm_provider": "ollama"}},
+            {"key": "shared_local_inference", "description": "Coordinate external local Ollama operations with other Hermes GPU workloads", "default": False, "when": {"mode": "local_external", "llm_provider": "ollama"}},
+            {"key": "shared_local_inference_timeout", "description": "Seconds to wait for the shared local inference lease", "default": _DEFAULT_TIMEOUT, "when": {"mode": "local_external", "llm_provider": "ollama"}},
             {"key": "prefetch_waits_for_retain", "description": "Have the background next-turn prefetch wait for the just-completed retain to become recall-visible on the server (local queue drain + async operation completion) before recalling, so recall includes the just-completed turn (runs off the reply path, adds no response latency)", "default": True},
             {"key": "prefetch_retain_drain_timeout", "description": "Max seconds the background prefetch waits for the retain to become recall-visible (queue drain + server-side completion) before recalling anyway", "default": 10.0},
             {"key": "retain_context", "description": "Context label for retained memories", "default": "conversation between Hermes Agent and the User"},
@@ -1491,20 +1533,29 @@ class HindsightMemoryProvider(MemoryProvider):
 
     def _run_hindsight_operation(self, operation):
         """Run an async Hindsight client operation, retrying once after idle shutdown."""
-        client = self._get_client()
-        try:
-            return self._run_sync(operation(client))
-        except Exception as exc:
-            if not self._is_retriable_embedded_connection_error(exc):
-                raise
-            logger.info(
-                "Hindsight embedded daemon appears unreachable; recreating client and retrying once: %s",
-                exc,
-            )
-            self._client = None
+        def _run():
             client = self._get_client()
-            self._client = client
-            return self._run_sync(operation(client))
+            try:
+                return self._run_sync(operation(client))
+            except Exception as exc:
+                if not self._is_retriable_embedded_connection_error(exc):
+                    raise
+                logger.info(
+                    "Hindsight embedded daemon appears unreachable; recreating client and retrying once: %s",
+                    exc,
+                )
+                self._client = None
+                client = self._get_client()
+                self._client = client
+                return self._run_sync(operation(client))
+
+        if not self._shared_local_inference:
+            return _run()
+        with local_inference_lease(
+            "hindsight:ollama",
+            timeout=self._shared_local_inference_timeout,
+        ):
+            return _run()
 
     def _probe_url(self) -> str:
         """Return the URL to probe /version on.
@@ -1617,6 +1668,20 @@ class HindsightMemoryProvider(MemoryProvider):
         default_url = _DEFAULT_LOCAL_URL if self._mode in {"local_embedded", "local_external"} else _DEFAULT_API_URL
         self._api_url = self._config.get("api_url") or os.environ.get("HINDSIGHT_API_URL", default_url)
         self._llm_base_url = self._config.get("llm_base_url", "")
+        self._shared_local_inference = (
+            self._mode in {"local_embedded", "local_external"}
+            and str(self._config.get("llm_provider", "")).strip().lower() == "ollama"
+            and is_truthy_value(
+                self._config.get("shared_local_inference", False),
+                default=False,
+            )
+        )
+        self._shared_local_inference_timeout = _parse_float_setting(
+            self._config.get("shared_local_inference_timeout", _DEFAULT_TIMEOUT),
+            float(_DEFAULT_TIMEOUT),
+            minimum=0.001,
+            maximum=3600.0,
+        )
 
         banks = cfg_get(self._config, "banks", "hermes", default={})
         static_bank_id = self._config.get("bank_id") or banks.get("bankId", "hermes")
@@ -1687,6 +1752,12 @@ class HindsightMemoryProvider(MemoryProvider):
         self._recall_prompt_preamble = self._config.get("recall_prompt_preamble", "")
         self._recall_max_input_chars = int(self._config.get("recall_max_input_chars", 800))
         self._retain_async = self._config.get("retain_async", True)
+        if self._shared_local_inference and self._retain_async:
+            # The cross-process lease must cover actual Ollama execution, not
+            # merely acceptance of a queued server operation. Auto-retain still
+            # runs on the provider's background writer thread, so replies remain
+            # non-blocking while the server finishes under the lease.
+            self._retain_async = False
         self._prefetch_waits_for_retain = self._config.get("prefetch_waits_for_retain", True)
         self._prefetch_retain_drain_timeout = float(
             self._config.get("prefetch_retain_drain_timeout", 10.0)
@@ -1755,22 +1826,31 @@ class HindsightMemoryProvider(MemoryProvider):
                     client = self._get_client()
                     profile = self._config.get("profile", "hermes")
 
-                    # Update the profile .env to match our current config so
-                    # the daemon always starts with the right settings.
-                    # If the config changed and the daemon is running, stop it.
-                    profile_env = _embedded_profile_env_path(self._config)
-                    expected_env = _build_embedded_profile_env(self._config)
-                    saved = _load_simple_env(profile_env)
-                    config_changed = saved != expected_env
+                    startup_lease = (
+                        local_inference_lease(
+                            "hindsight:ollama-startup",
+                            timeout=self._shared_local_inference_timeout,
+                        )
+                        if self._shared_local_inference
+                        else nullcontext()
+                    )
+                    with startup_lease:
+                        # Update the profile .env to match our current config so
+                        # the daemon always starts with the right settings.
+                        # If the config changed and the daemon is running, stop it.
+                        profile_env = _embedded_profile_env_path(self._config)
+                        expected_env = _build_embedded_profile_env(self._config)
+                        saved = _load_simple_env(profile_env)
+                        config_changed = saved != expected_env
 
-                    if config_changed:
-                        profile_env = _materialize_embedded_profile_env(self._config)
-                        if client._manager.is_running(profile):
-                            with open(log_path, "a", encoding="utf-8") as f:
-                                f.write("\n=== Config changed, restarting daemon ===\n")
-                            client._manager.stop(profile)
+                        if config_changed:
+                            profile_env = _materialize_embedded_profile_env(self._config)
+                            if client._manager.is_running(profile):
+                                with open(log_path, "a", encoding="utf-8") as f:
+                                    f.write("\n=== Config changed, restarting daemon ===\n")
+                                client._manager.stop(profile)
 
-                    client._ensure_started()
+                        client._ensure_started()
                     self._mark_embedded_started()
                     with open(log_path, "a", encoding="utf-8") as f:
                         f.write("\n=== Daemon started successfully ===\n")
