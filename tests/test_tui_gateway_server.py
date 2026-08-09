@@ -2021,6 +2021,13 @@ def test_voice_record_start_defaults_to_silence_and_reports_recording_contract(m
             "state": "transcribing",
         },
     )
+    assert server._voice_capture_owner == "record"
+
+    captured["on_status"]("transcribing")
+    assert server._voice_capture_owner == "record"
+
+    captured["on_capture_stopped"]()
+    assert server._voice_capture_owner is None
 
 
 def test_voice_record_start_refuses_second_microphone_owner(monkeypatch):
