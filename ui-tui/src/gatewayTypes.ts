@@ -402,13 +402,20 @@ export interface VoiceToggleResponse {
   available?: boolean
   details?: string
   enabled?: boolean
+  input_mode?: 'dictation' | 'submit'
+  max_recording_seconds?: number
   record_key?: string
+  recording_mode?: 'manual' | 'silence'
   stop_hint?: string
   stt_available?: boolean
   tts?: boolean
 }
 
 export interface VoiceRecordResponse {
+  input_mode?: 'dictation' | 'submit'
+  max_recording_seconds?: number
+  reason?: 'barge_listener_active' | 'microphone_owned_by_other_process' | 'recording_active' | 'wake_owned'
+  recording_mode?: 'manual' | 'silence'
   status?: 'busy' | 'recording' | 'stopped'
   text?: string
 }
@@ -632,9 +639,23 @@ export type GatewayEvent =
       session_id?: string
       type: 'billing.step_up.verification'
     }
-  | { payload?: { state?: 'idle' | 'listening' | 'transcribing' }; session_id?: string; type: 'voice.status' }
   | {
-      payload?: { no_speech_limit?: boolean; stop_phrase?: boolean; text?: string; typed?: boolean }
+      payload?: {
+        capture_kind?: 'barge_in'
+        cutoff_reason?: 'hard_limit'
+        input_mode?: 'dictation' | 'submit'
+        max_recording_seconds?: number
+        recording_mode?: 'manual' | 'silence'
+        silence_duration_seconds?: number
+        silence_remaining_seconds?: null | number
+        started_at_ms?: number
+        state?: 'idle' | 'listening' | 'transcribing'
+      }
+      session_id?: string
+      type: 'voice.status'
+    }
+  | {
+      payload?: { delivery?: 'draft' | 'submit'; no_speech_limit?: boolean; stop_phrase?: boolean; text?: string; typed?: boolean }
       session_id?: string
       type: 'voice.transcript'
     }

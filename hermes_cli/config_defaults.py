@@ -1636,13 +1636,15 @@ DEFAULT_CONFIG = {
 
     "voice": {
         "record_key": "ctrl+b",
-        "max_recording_seconds": 120,
+        "input_mode": "submit",  # "submit" = immediate turn; "dictation" = append to composer draft
+        "recording_mode": "silence",  # "silence" = VAD auto-stop; "manual" = record key stops
+        "max_recording_seconds": 300,
         "auto_tts": False,
         "beep_enabled": True,         # Play record start/stop beeps in CLI voice mode
         "beep_volume": 0.3,           # Beep amplitude multiplier (0.0-1.0, default keeps prior hardcoded value)
-        "thinking_sound": True,       # Calm ambient bubble sound while the agent works in voice chat (volume follows beep_volume)
+        "thinking_sound": False,      # Optional ambient bubble sound while the agent works in voice chat
         "silence_threshold": 200,     # RMS below this = silence (0-32767)
-        "silence_duration": 3.0,      # Seconds of silence before auto-stop
+        "silence_duration": 5.0,      # Seconds of silence before auto-stop
         "barge_in": True,             # Interrupt the agent / stop TTS when the user starts talking
         "barge_in_grace_seconds": 0.5,  # Trip suppression right after TTS playback starts (onset transient); the mic itself is live for the whole turn
         "barge_in_threshold_multiplier": 3.0,  # Speech trigger = quiet-room floor x this (floor is calibrated BEFORE playback, never against speaker bleed)

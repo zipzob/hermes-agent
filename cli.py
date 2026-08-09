@@ -12644,12 +12644,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             _threshold if isinstance(_threshold, (int, float)) and not isinstance(_threshold, bool) else 200
         )
         self._voice_recorder._silence_duration = (
-            _duration if isinstance(_duration, (int, float)) and not isinstance(_duration, bool) else 3.0
+            _duration if isinstance(_duration, (int, float)) and not isinstance(_duration, bool) else 5.0
         )
         # voice.max_recording_seconds — hard cap on a single recording's length.
         # Same numeric guard as the silence params (bool excluded: a hand-edited
         # ``max_recording_seconds: true`` must not become ``1`` — it falls back
-        # to the documented 120 default, mirroring the silence-param handling).
+        # to the documented 300-second default, mirroring the silence-param handling).
         # An explicit numeric value <= 0 disables the cap. Previously this
         # documented key was never read (dead config); wiring it here makes it
         # take effect.
@@ -12657,8 +12657,16 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         self._voice_recorder._max_recording_seconds = (
             (_max_rec if _max_rec > 0 else 0.0)
             if isinstance(_max_rec, (int, float)) and not isinstance(_max_rec, bool)
-            else 120.0
+            else 300.0
         )
+        _raw_recording_mode = voice_cfg.get("recording_mode")
+        _recording_mode = (
+            _raw_recording_mode.strip().lower()
+            if isinstance(_raw_recording_mode, str)
+            and _raw_recording_mode.strip().lower() in {"manual", "silence"}
+            else "silence"
+        )
+        self._voice_recorder._silence_autostop_enabled = _recording_mode == "silence"
 
         def _on_silence():
             """Called by AudioRecorder when silence is detected after speech."""
@@ -12685,7 +12693,10 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 self._voice_recording = False
             raise
         _label = self._voice_record_key_label()
-        if getattr(self._voice_recorder, "supports_silence_autostop", True):
+        if (
+            _recording_mode == "silence"
+            and getattr(self._voice_recorder, "supports_silence_autostop", True)
+        ):
             _recording_hint = f"auto-stops on silence | {_label} to stop & exit continuous"
         elif _is_termux_environment():
             _recording_hint = f"Termux:API capture | {_label} to stop"

@@ -549,13 +549,28 @@ describe('createSlashHandler', () => {
   // while push-to-talk still fires the old one until the next mtime
   // poll (~5s).
   it('/voice status renders the gateway record_key and pushes it into frontend state', async () => {
-    const rpc = vi.fn(() => Promise.resolve({ enabled: true, record_key: 'ctrl+space', tts: false }))
+    const rpc = vi.fn(() =>
+      Promise.resolve({
+        enabled: true,
+        input_mode: 'dictation',
+        max_recording_seconds: 60,
+        record_key: 'ctrl+space',
+        recording_mode: 'silence',
+        silence_duration_seconds: 60,
+        tts: false
+      })
+    )
+
     const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
 
     expect(createSlashHandler(ctx)('/voice status')).toBe(true)
     await vi.waitFor(() => {
       expect(ctx.transcript.sys).toHaveBeenCalledWith('  Record key: Ctrl+Space')
     })
+    expect(ctx.transcript.sys).toHaveBeenCalledWith('  Input:      dictation draft')
+    expect(ctx.transcript.sys).toHaveBeenCalledWith('  Recording:  silence auto-stop')
+    expect(ctx.transcript.sys).toHaveBeenCalledWith('  Silence:    60s')
+    expect(ctx.transcript.sys).toHaveBeenCalledWith('  Cutoff:     60s')
     expect(ctx.voice.setVoiceRecordKey).toHaveBeenCalledWith(
       expect.objectContaining({ ch: 'space', mod: 'ctrl', named: 'space' })
     )
@@ -597,6 +612,39 @@ describe('createSlashHandler', () => {
       expect(ctx.transcript.sys).toHaveBeenCalledWith('Voice TTS enabled.')
     })
     expect(ctx.voice.setVoiceRecordKey).not.toHaveBeenCalled()
+  })
+
+  it('/voice dictation on persists draft accumulation mode', async () => {
+    const rpc = vi.fn(() => Promise.resolve({ input_mode: 'dictation' }))
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
+
+    expect(createSlashHandler(ctx)('/voice dictation on')).toBe(true)
+    await vi.waitFor(() => {
+      expect(rpc).toHaveBeenCalledWith('voice.toggle', {
+        action: 'dictation',
+        value: 'on'
+      })
+      expect(ctx.transcript.sys).toHaveBeenCalledWith(
+        'Voice dictation enabled — transcripts append to the composer until Enter.'
+      )
+    })
+  })
+
+  it('/voice silence configures or disables silence endpointing', async () => {
+    const rpc = vi.fn(() =>
+      Promise.resolve({ recording_mode: 'silence', silence_duration_seconds: 60 })
+    )
+
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
+
+    expect(createSlashHandler(ctx)('/voice silence 60')).toBe(true)
+    await vi.waitFor(() => {
+      expect(rpc).toHaveBeenCalledWith('voice.toggle', {
+        action: 'silence',
+        value: '60'
+      })
+      expect(ctx.transcript.sys).toHaveBeenCalledWith('Voice silence endpoint: 60s')
+    })
   })
 
   it('cycles details mode and persists it', async () => {

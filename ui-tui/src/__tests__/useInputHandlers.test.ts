@@ -94,14 +94,41 @@ describe('applyVoiceRecordResponse', () => {
     expect(sys).toHaveBeenCalledWith('voice: still transcribing; try again shortly')
   })
 
-  it('keeps optimistic REC state for successful recording starts', () => {
+  it('explains when the interruption listener already owns the microphone', () => {
+    const setProcessing = vi.fn()
+    const setRecording = vi.fn()
+    const sys = vi.fn()
+
+    applyVoiceRecordResponse(
+      { reason: 'barge_listener_active', status: 'busy' },
+      true,
+      { setProcessing, setRecording },
+      sys
+    )
+
+    expect(setRecording).toHaveBeenCalledWith(false)
+    expect(setProcessing).toHaveBeenCalledWith(false)
+    expect(sys).toHaveBeenCalledWith('voice: already listening for your interruption')
+  })
+
+  it('applies authoritative REC state for successful recording starts', () => {
     const setProcessing = vi.fn()
     const setRecording = vi.fn()
 
     applyVoiceRecordResponse({ status: 'recording' }, true, { setProcessing, setRecording }, vi.fn())
 
-    expect(setRecording).not.toHaveBeenCalled()
-    expect(setProcessing).not.toHaveBeenCalled()
+    expect(setRecording).toHaveBeenCalledWith(true)
+    expect(setProcessing).toHaveBeenCalledWith(false)
+  })
+
+  it('shows STT only after the gateway confirms the recorder stopped', () => {
+    const setProcessing = vi.fn()
+    const setRecording = vi.fn()
+
+    applyVoiceRecordResponse({ status: 'stopped' }, false, { setProcessing, setRecording }, vi.fn())
+
+    expect(setRecording).toHaveBeenCalledWith(false)
+    expect(setProcessing).toHaveBeenCalledWith(true)
   })
 
   it('reverts optimistic REC state when the gateway returns null', () => {

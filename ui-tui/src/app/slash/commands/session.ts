@@ -292,18 +292,47 @@ export const sessionCommands: SlashCommand[] = [
   },
 
   {
-    help: 'voice mode: [on|off|tts|status]',
+    help: 'voice mode: [on|off|tts|status|dictation on|off|silence 1..60|off]',
     name: 'voice',
     run: (arg, ctx) => {
       const normalized = (arg ?? '').trim().toLowerCase()
+      const [command = '', value = ''] = normalized.split(/\s+/, 2)
 
       const action =
-        normalized === 'on' || normalized === 'off' || normalized === 'tts' || normalized === 'status'
-          ? normalized
+        command === 'on' || command === 'off' || command === 'tts' || command === 'status' ||
+        command === 'dictation' || command === 'silence'
+          ? command
           : 'status'
 
-      ctx.gateway.rpc<VoiceToggleResponse>('voice.toggle', { action }).then(
+      const payload = action === 'dictation' || action === 'silence' ? { action, value } : { action }
+
+      ctx.gateway.rpc<VoiceToggleResponse>('voice.toggle', payload).then(
         ctx.guarded<VoiceToggleResponse>(r => {
+          const policy = r as VoiceToggleResponse & {
+            input_mode?: 'dictation' | 'submit'
+            silence_duration_seconds?: number
+          }
+
+          if (action === 'dictation') {
+            ctx.transcript.sys(
+              policy.input_mode === 'dictation'
+                ? 'Voice dictation enabled — transcripts append to the composer until Enter.'
+                : 'Voice dictation disabled — transcripts submit immediately.'
+            )
+
+            return
+          }
+
+          if (action === 'silence') {
+            ctx.transcript.sys(
+              policy.recording_mode === 'manual'
+                ? 'Voice silence endpoint: off (manual stop)'
+                : `Voice silence endpoint: ${policy.silence_duration_seconds ?? 5}s`
+            )
+
+            return
+          }
+
           ctx.voice.setVoiceEnabled(!!r.enabled)
           ctx.voice.setVoiceTts(!!r.tts)
 
@@ -341,6 +370,21 @@ export const sessionCommands: SlashCommand[] = [
             ctx.transcript.sys(`  Mode:       ${mode}`)
             ctx.transcript.sys(`  TTS:        ${tts}`)
             ctx.transcript.sys(`  Record key: ${recordKeyLabel}`)
+            ctx.transcript.sys(
+              `  Input:      ${policy.input_mode === 'dictation' ? 'dictation draft' : 'immediate submit'}`
+            )
+
+            const recordingMode = r.recording_mode === 'silence' ? 'silence auto-stop' : 'manual stop'
+
+            const cutoff = typeof r.max_recording_seconds === 'number' && r.max_recording_seconds > 0
+              ? `${r.max_recording_seconds}s`
+              : 'unlimited'
+
+            ctx.transcript.sys(`  Recording:  ${recordingMode}`)
+            ctx.transcript.sys(
+              `  Silence:    ${r.recording_mode === 'silence' ? `${policy.silence_duration_seconds ?? 5}s` : 'off'}`
+            )
+            ctx.transcript.sys(`  Cutoff:     ${cutoff}`)
 
             // CLI's "Requirements:" block — surfaces STT/audio setup issues
             // so the user sees "STT provider: MISSING ..." instead of
