@@ -1963,7 +1963,7 @@ DEFAULT_CONFIG = {
         # stored stt.provider as an explicit user pick; seeding "local" here
         # made a fresh install indistinguishable from a user choice. The
         # autodetect ladder covers unset. Valid values when set:
-        # "local" (free, faster-whisper) | "groq" | "openai" (Whisper API) | "mistral" (Voxtral Transcribe) | "elevenlabs" (Scribe) | "deepinfra"
+        # "local" (free, faster-whisper) | "parakeet" (shared local service) | "groq" | "openai" (Whisper API) | "mistral" (Voxtral Transcribe) | "elevenlabs" (Scribe) | "deepinfra"
         # Global language hint applied to EVERY provider unless a per-provider
         # language overrides it. Defaults to "en" — Whisper auto-detection
         # frequently misidentifies short/accented clips, which reads as
@@ -1989,6 +1989,19 @@ DEFAULT_CONFIG = {
             "no_speech_prob_threshold": 0.6,  # drop a segment only if no_speech_prob is ABOVE this...
             "logprob_threshold": -1.0,  # ...AND its avg_logprob is BELOW this (both must hit)
             "unload_after_idle_seconds": 0,  # 0=never (default); e.g. 300 releases the model after 5min idle
+        },
+        "parakeet": {
+            "model": "nvidia/parakeet-tdt-0.6b-v3",
+            "language": "",
+            "device": "auto",  # auto, cpu, cuda
+            "dtype": "auto",  # auto, float16, float32
+            "shared_gpu": True,
+            "shared_gpu_timeout": 180,
+            "startup_timeout": 30,
+            "request_timeout": 300,
+            "idle_timeout": 300,
+            "base_url": "",  # empty = managed loopback service on 127.0.0.1:8765
+            "ollama_base_url": "",  # empty = derive from this profile's Hindsight config
         },
         "groq": {
             "model": "whisper-large-v3-turbo",  # whisper-large-v3, whisper-large-v3-turbo, distil-whisper-large-v3-en
