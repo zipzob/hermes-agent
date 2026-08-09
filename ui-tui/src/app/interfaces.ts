@@ -493,7 +493,9 @@ export interface GatewayEventHandlerContext {
   }
   voice: {
     setProcessing: StateSetter<boolean>
+    setRecordingDeadline: StateSetter<null | number>
     setRecording: StateSetter<boolean>
+    setSilenceRemaining: StateSetter<null | number>
     setVoiceEnabled: StateSetter<boolean>
     setVoiceTts: StateSetter<boolean>
   }

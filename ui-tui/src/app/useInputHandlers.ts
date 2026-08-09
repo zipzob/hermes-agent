@@ -91,16 +91,40 @@ export function applyVoiceRecordResponse(
   voice: Pick<InputHandlerContext['voice'], 'setProcessing' | 'setRecording'>,
   sys: (text: string) => void
 ) {
-  if (!starting || response?.status === 'recording') {
+  if (response?.status === 'recording') {
+    voice.setRecording(true)
+    voice.setProcessing(false)
+
     return
   }
 
-  voice.setRecording(false)
+  if (response?.status === 'stopped') {
+    voice.setRecording(false)
+    voice.setProcessing(true)
+
+    return
+  }
 
   if (response?.status === 'busy') {
+    if (starting) {
+      voice.setRecording(false)
+    }
+
+    if (response.reason === 'barge_listener_active') {
+      voice.setProcessing(false)
+      sys('voice: already listening for your interruption')
+
+      return
+    }
+
     voice.setProcessing(true)
     sys('voice: still transcribing; try again shortly')
-  } else {
+
+    return
+  }
+
+  if (starting) {
+    voice.setRecording(false)
     voice.setProcessing(false)
   }
 }
@@ -297,25 +321,10 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
     const starting = !voice.recording
     const action = starting ? 'start' : 'stop'
 
-    // Optimistic UI — flip the REC badge immediately so the user gets
-    // feedback while the RPC round-trips; the voice.status event is the
-    // authoritative source and may correct us.
-    if (starting) {
-      voice.setRecording(true)
-    } else {
-      voice.setRecording(false)
-      voice.setProcessing(false)
-    }
-
     gateway
       .rpc<VoiceRecordResponse>('voice.record', { action, session_id: getUiState().sid })
       .then(r => applyVoiceRecordResponse(r, starting, voice, actions.sys))
       .catch((e: Error) => {
-        // Revert optimistic UI on failure.
-        if (starting) {
-          voice.setRecording(false)
-        }
-
         actions.sys(`voice error: ${e.message}`)
       })
   }

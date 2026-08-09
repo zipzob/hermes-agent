@@ -52,7 +52,9 @@ const buildCtx = (appended: Msg[]) =>
     },
     voice: {
       setProcessing: vi.fn(),
+      setRecordingDeadline: vi.fn(),
       setRecording: vi.fn(),
+      setSilenceRemaining: vi.fn(),
       setVoiceEnabled: vi.fn()
     }
   }) as any
@@ -64,6 +66,36 @@ describe('createGatewayEventHandler', () => {
     resetTurnState()
     turnController.fullReset()
     patchUiState({ showReasoning: true })
+  })
+
+  it('stores and clears the authoritative voice recording deadline', () => {
+    const ctx = buildCtx([])
+    const onEvent = createGatewayEventHandler(ctx)
+
+    onEvent({
+      payload: { max_recording_seconds: 300, silence_remaining_seconds: 4.2, started_at_ms: 1_000, state: 'listening' },
+      type: 'voice.status'
+    } as any)
+    expect(ctx.voice.setRecordingDeadline).toHaveBeenLastCalledWith(301_000)
+    expect(ctx.voice.setSilenceRemaining).toHaveBeenLastCalledWith(4.2)
+
+    onEvent({ payload: { state: 'transcribing' }, type: 'voice.status' } as any)
+    expect(ctx.voice.setRecordingDeadline).toHaveBeenLastCalledWith(null)
+    expect(ctx.voice.setSilenceRemaining).toHaveBeenLastCalledWith(null)
+  })
+
+  it('reports a hard recording cutoff while switching to STT', () => {
+    const ctx = buildCtx([])
+    const onEvent = createGatewayEventHandler(ctx)
+
+    onEvent({
+      payload: { cutoff_reason: 'hard_limit', state: 'transcribing' },
+      type: 'voice.status'
+    } as any)
+
+    expect(ctx.voice.setRecording).toHaveBeenLastCalledWith(false)
+    expect(ctx.voice.setProcessing).toHaveBeenLastCalledWith(true)
+    expect(ctx.system.sys).toHaveBeenCalledWith('voice: 5-minute recording limit reached — transcribing captured audio')
   })
 
   it('archives incomplete todos into transcript flow at end of turn so they scroll up', () => {
@@ -880,6 +912,25 @@ describe('createGatewayEventHandler', () => {
     onEvent({ payload: { stop_phrase: true, typed: true }, type: 'voice.transcript' } as any)
 
     expect(ctx.voice.setVoiceEnabled).toHaveBeenCalledWith(false)
+    expect(ctx.submission.submitRef.current).not.toHaveBeenCalled()
+  })
+
+  it('appends a draft voice transcript without submitting an agent turn', () => {
+    const ctx = buildCtx([])
+    const onEvent = createGatewayEventHandler(ctx)
+
+    onEvent({
+      payload: { delivery: 'draft', text: 'second dictated section' },
+      type: 'voice.transcript'
+    } as any)
+
+    expect(ctx.composer.setInput).toHaveBeenCalledTimes(1)
+    const update = ctx.composer.setInput.mock.calls[0]?.[0]
+
+    expect(typeof update).toBe('function')
+    expect((update as (current: string) => string)('first dictated section')).toBe(
+      'first dictated section\n\nsecond dictated section'
+    )
     expect(ctx.submission.submitRef.current).not.toHaveBeenCalled()
   })
 

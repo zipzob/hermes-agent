@@ -31,11 +31,23 @@ def _neuter_agent_prewarm_timer(request, monkeypatch):
     exercise the deferred build itself opt back in with
     ``@pytest.mark.real_agent_prewarm``.
     """
-    if request.node.get_closest_marker("real_agent_prewarm"):
+    prior_owner = server._voice_capture_owner
+    if prior_owner is not None:
+        server._release_voice_capture(prior_owner)
+    elif server._voice_capture_lease is not None:
+        server._voice_capture_lease.release()
+    monkeypatch.setattr(server, "_voice_capture_owner", None)
+    monkeypatch.setattr(server, "_voice_capture_lease", None)
+    if not request.node.get_closest_marker("real_agent_prewarm"):
+        monkeypatch.setattr(server, "_schedule_agent_build", lambda *a, **k: None)
+    try:
         yield
-        return
-    monkeypatch.setattr(server, "_schedule_agent_build", lambda *a, **k: None)
-    yield
+    finally:
+        current_owner = server._voice_capture_owner
+        if current_owner is not None:
+            server._release_voice_capture(current_owner)
+        elif server._voice_capture_lease is not None:
+            server._voice_capture_lease.release()
 
 
 def test_session_slot_is_claimed_on_first_turn_not_on_create(monkeypatch, tmp_path):
@@ -1245,6 +1257,33 @@ def test_voice_toggle_returns_configured_record_key(monkeypatch):
     assert status_resp["result"]["record_key"] == "ctrl+o"
 
 
+def test_voice_status_reports_effective_recording_policy(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "tools.voice_mode",
+        types.SimpleNamespace(
+            check_voice_requirements=lambda: {"available": True, "details": ""}
+        ),
+    )
+
+    for cfg, expected in (
+        ({}, ("silence", 300.0)),
+        ({"recording_mode": "silence", "max_recording_seconds": 45}, ("silence", 45)),
+        ({"recording_mode": "invalid", "max_recording_seconds": True}, ("silence", 300.0)),
+    ):
+        monkeypatch.setattr(server, "_load_cfg", lambda c=cfg: {"voice": c})
+
+        response = server.dispatch(
+            {
+                "id": "voice-status-policy",
+                "method": "voice.toggle",
+                "params": {"action": "status"},
+            }
+        )["result"]
+
+        assert (response["recording_mode"], response["max_recording_seconds"]) == expected
+
+
 def test_voice_toggle_on_carries_stop_hint(monkeypatch):
     """voice.toggle action=on returns the spoken-stop hint for clients to
     render — sourced from voice.stop_phrases so a custom phrase shows
@@ -1284,6 +1323,29 @@ def test_voice_toggle_on_carries_stop_hint(monkeypatch):
         {"id": "voice-off", "method": "voice.toggle", "params": {"action": "off"}}
     )
     assert off_resp["result"]["stop_hint"] == ""
+
+
+def test_voice_toggle_off_stops_active_thinking_sound(monkeypatch):
+    stopped: list[str] = []
+    monkeypatch.setattr(server, "_load_cfg", lambda: {"voice": {}})
+    monkeypatch.setitem(
+        sys.modules,
+        "tools.voice_mode",
+        types.SimpleNamespace(stop_thinking_sound=lambda: stopped.append("thinking")),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hermes_cli.voice",
+        types.SimpleNamespace(stop_continuous=lambda: stopped.append("recording")),
+    )
+    monkeypatch.setenv("HERMES_VOICE", "1")
+
+    response = server.dispatch(
+        {"id": "voice-off-stop-sound", "method": "voice.toggle", "params": {"action": "off"}}
+    )
+
+    assert response["result"]["enabled"] is False
+    assert stopped == ["recording", "thinking"]
 
 
 def test_voice_toggle_handles_non_dict_voice_cfg(monkeypatch):
@@ -1379,7 +1441,7 @@ def test_voice_record_start_handles_non_dict_voice_cfg(monkeypatch):
         ), f"voice.record raised for voice={bad!r}: {resp.get('error')}"
         assert resp["result"]["status"] == "recording"
         assert captured["silence_threshold"] == 200
-        assert captured["silence_duration"] == 3.0
+        assert captured["silence_duration"] == 5.0
         assert captured["auto_restart"] is False
 
 
@@ -1408,7 +1470,7 @@ def test_voice_record_start_handles_non_dict_voice_cfg(monkeypatch):
             captured["silence_threshold"] == 200
         ), f"bool silence_threshold leaked through for {bad_bool_cfg!r}"
         assert (
-            captured["silence_duration"] == 3.0
+            captured["silence_duration"] == 5.0
         ), f"bool silence_duration leaked through for {bad_bool_cfg!r}"
         assert captured["auto_restart"] is False
 
@@ -1836,7 +1898,7 @@ def test_voice_record_start_forwards_max_recording_seconds(monkeypatch):
     recorder params explicitly, so a missing kwarg here silently leaves the
     cap dead in the TUI while CLI tests stay green. Semantics mirror the
     silence params: non-numeric / bool / missing falls back to the documented
-    120 default, an explicit numeric value <= 0 disables the cap.
+    300-second default, an explicit numeric value <= 0 disables the cap.
     """
     captured: dict = {}
 
@@ -1856,9 +1918,9 @@ def test_voice_record_start_forwards_max_recording_seconds(monkeypatch):
         ({"max_recording_seconds": 45}, 45),        # explicit cap forwarded as-is
         ({"max_recording_seconds": 0}, 0.0),        # explicit 0 = disabled
         ({"max_recording_seconds": -5}, 0.0),       # negative = disabled
-        ({}, 120.0),                                # missing = documented default
-        ({"max_recording_seconds": True}, 120.0),   # bool must not become 1s cap
-        ({"max_recording_seconds": "long"}, 120.0), # garbage = documented default
+        ({}, 300.0),                                 # missing = documented default
+        ({"max_recording_seconds": True}, 300.0),    # bool must not become 1s cap
+        ({"max_recording_seconds": "long"}, 300.0), # garbage = documented default
     ):
         captured.clear()
         monkeypatch.setattr(server, "_load_cfg", lambda c=cfg: {"voice": c})
@@ -1876,6 +1938,190 @@ def test_voice_record_start_forwards_max_recording_seconds(monkeypatch):
         assert (
             captured["max_recording_seconds"] == expected
         ), f"cfg={cfg!r} forwarded {captured.get('max_recording_seconds')!r}, expected {expected!r}"
+
+
+def test_voice_record_start_defaults_to_silence_and_reports_recording_contract(monkeypatch):
+    captured: dict = {}
+    emitted: list[tuple[str, dict]] = []
+
+    def fake_start_continuous(**kwargs):
+        captured.update(kwargs)
+        kwargs["on_status"]("listening")
+        return True
+
+    monkeypatch.setitem(
+        sys.modules,
+        "hermes_cli.voice",
+        types.SimpleNamespace(
+            start_continuous=fake_start_continuous,
+            stop_continuous=lambda **_kwargs: None,
+        ),
+    )
+    monkeypatch.setenv("HERMES_VOICE", "1")
+    monkeypatch.setattr(server, "_load_cfg", lambda: {"voice": {}})
+    monkeypatch.setattr(server, "_voice_emit", lambda event, payload: emitted.append((event, payload)))
+    monkeypatch.setattr(server.time, "time", lambda: 123.5)
+
+    response = server.dispatch(
+        {
+            "id": "voice-record-manual-default",
+            "method": "voice.record",
+            "params": {"action": "start", "session_id": "manual-session"},
+        }
+    )
+
+    result = response["result"]
+    assert result == {
+        "input_mode": "submit",
+        "status": "recording",
+        "recording_mode": "silence",
+        "silence_duration_seconds": 5.0,
+        "max_recording_seconds": 300.0,
+    }
+    assert captured["silence_autostop"] is True
+    assert captured["silence_duration"] == 5.0
+    assert callable(captured["on_silence_progress"])
+    assert emitted == [
+        (
+            "voice.status",
+            {
+                "input_mode": "submit",
+                "state": "listening",
+                "started_at_ms": 123500,
+                "recording_mode": "silence",
+                "silence_duration_seconds": 5.0,
+                "max_recording_seconds": 300.0,
+            },
+        )
+    ]
+
+    captured["on_silence_progress"](3.2)
+    assert emitted[-1] == (
+        "voice.status",
+        {
+            "input_mode": "submit",
+            "state": "listening",
+            "started_at_ms": 123500,
+            "recording_mode": "silence",
+            "silence_duration_seconds": 5.0,
+            "silence_remaining_seconds": 3.2,
+            "max_recording_seconds": 300.0,
+        },
+    )
+
+    captured["on_cutoff"]("hard_limit")
+    assert emitted[-1] == (
+        "voice.status",
+        {
+            "cutoff_reason": "hard_limit",
+            "input_mode": "submit",
+            "max_recording_seconds": 300.0,
+            "recording_mode": "silence",
+            "silence_duration_seconds": 5.0,
+            "state": "transcribing",
+        },
+    )
+
+
+def test_voice_record_start_refuses_second_microphone_owner(monkeypatch):
+    starts = []
+    monkeypatch.setenv("HERMES_VOICE", "1")
+    monkeypatch.setattr(server, "_voice_capture_owner", "full_duplex", raising=False)
+    monkeypatch.setitem(
+        sys.modules,
+        "hermes_cli.voice",
+        types.SimpleNamespace(
+            start_continuous=lambda **kwargs: starts.append(kwargs) or True,
+            stop_continuous=lambda **_kwargs: None,
+        ),
+    )
+
+    response = server.dispatch(
+        {"id": "voice-record-owned", "method": "voice.record", "params": {"action": "start"}}
+    )
+
+    assert response["result"] == {
+        "reason": "barge_listener_active",
+        "status": "busy",
+    }
+    assert starts == []
+
+
+def test_voice_record_start_refuses_cross_process_microphone_owner(monkeypatch):
+    starts = []
+    monkeypatch.setenv("HERMES_VOICE", "1")
+    monkeypatch.setattr(server, "_voice_capture_owner", None, raising=False)
+    monkeypatch.setattr(server, "_voice_capture_lease", None, raising=False)
+    monkeypatch.setattr(
+        "tools.voice_capture_lease.acquire_voice_capture_lease",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hermes_cli.voice",
+        types.SimpleNamespace(
+            start_continuous=lambda **kwargs: starts.append(kwargs) or True,
+            stop_continuous=lambda **_kwargs: None,
+        ),
+    )
+
+    response = server.dispatch(
+        {
+            "id": "voice-record-cross-process-owned",
+            "method": "voice.record",
+            "params": {"action": "start", "session_id": "second-session"},
+        }
+    )
+
+    assert response["result"] == {
+        "reason": "microphone_owned_by_other_process",
+        "status": "busy",
+    }
+    assert starts == []
+
+
+def test_voice_record_dictation_mode_emits_draft_transcript(monkeypatch):
+    captured: dict = {}
+    emitted: list[tuple[str, dict]] = []
+
+    def fake_start_continuous(**kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setitem(
+        sys.modules,
+        "hermes_cli.voice",
+        types.SimpleNamespace(
+            start_continuous=fake_start_continuous,
+            stop_continuous=lambda **_kwargs: None,
+        ),
+    )
+    monkeypatch.setenv("HERMES_VOICE", "1")
+    monkeypatch.setattr(
+        server,
+        "_load_cfg",
+        lambda: {"voice": {"input_mode": "dictation"}},
+    )
+    monkeypatch.setattr(
+        server,
+        "_voice_emit",
+        lambda event, payload: emitted.append((event, payload)),
+    )
+
+    response = server.dispatch(
+        {
+            "id": "voice-record-dictation",
+            "method": "voice.record",
+            "params": {"action": "start", "session_id": "dictation-session"},
+        }
+    )
+    captured["on_transcript"]("first dictated section")
+
+    assert response["result"]["input_mode"] == "dictation"
+    assert emitted[-1] == (
+        "voice.transcript",
+        {"delivery": "draft", "text": "first dictated section"},
+    )
 
 
 def test_voice_record_stop_forces_transcription(monkeypatch):
@@ -1984,6 +2230,73 @@ def test_voice_toggle_tts_branch_also_carries_record_key(monkeypatch):
 
     assert tts_resp["result"]["record_key"] == "ctrl+space"
     assert tts_resp["result"]["tts"] is True
+
+
+def test_voice_toggle_persists_dictation_input_mode(monkeypatch):
+    writes: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        server,
+        "_write_config_key",
+        lambda key, value: writes.append((key, value)),
+    )
+
+    response = server.dispatch(
+        {
+            "id": "voice-dictation-on",
+            "method": "voice.toggle",
+            "params": {"action": "dictation", "value": "on"},
+        }
+    )
+
+    assert response["result"]["input_mode"] == "dictation"
+    assert writes == [("voice.input_mode", "dictation")]
+
+
+def test_voice_toggle_configures_or_disables_silence_endpoint(monkeypatch):
+    writes: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        server,
+        "_write_config_key",
+        lambda key, value: writes.append((key, value)),
+    )
+
+    enabled = server.dispatch(
+        {
+            "id": "voice-silence-60",
+            "method": "voice.toggle",
+            "params": {"action": "silence", "value": "60"},
+        }
+    )
+    assert enabled["result"] == {
+        "recording_mode": "silence",
+        "silence_duration_seconds": 60.0,
+    }
+    assert writes == [
+        ("voice.silence_duration", 60.0),
+        ("voice.recording_mode", "silence"),
+    ]
+
+    writes.clear()
+    disabled = server.dispatch(
+        {
+            "id": "voice-silence-off",
+            "method": "voice.toggle",
+            "params": {"action": "silence", "value": "off"},
+        }
+    )
+    assert disabled["result"]["recording_mode"] == "manual"
+    assert writes == [("voice.recording_mode", "manual")]
+
+    writes.clear()
+    invalid = server.dispatch(
+        {
+            "id": "voice-silence-invalid",
+            "method": "voice.toggle",
+            "params": {"action": "silence", "value": "61"},
+        }
+    )
+    assert invalid["error"]["code"] == 4002
+    assert writes == []
 
 
 def test_load_enabled_toolsets_prefers_tui_env(monkeypatch):
@@ -16051,15 +16364,19 @@ def test_tts_stream_vad_barge_in_cuts_pipeline_and_submits_capture(monkeypatch, 
     monkeypatch.setenv("HERMES_VOICE", "1")
     monkeypatch.setattr(server, "_load_cfg", lambda: {"voice": {"barge_in": True}})
     events: list = []
+    captured: dict = {}
     monkeypatch.setattr(
         server, "_voice_emit", lambda event, payload=None: events.append((event, payload))
     )
+    monkeypatch.setattr(server.time, "time", lambda: 123.5)
 
     wav = tmp_path / "barge.wav"
     wav.write_bytes(b"RIFF")
 
-    def fake_listen(should_stop, is_playing=None, on_trigger=None, **_kw):
+    def fake_listen(should_stop, is_playing=None, on_trigger=None, **kwargs):
+        captured.update(kwargs)
         on_trigger("playback")  # playback cut happens at detection
+        kwargs["on_silence_progress"](4.2)
         return str(wav)
 
     _fake_tts_modules(
@@ -16073,6 +16390,22 @@ def test_tts_stream_vad_barge_in_cuts_pipeline_and_submits_capture(monkeypatch, 
     while time.monotonic() < deadline and wav.exists():
         time.sleep(0.01)  # unlink (finally) runs after the transcript emit
     assert ("voice.interrupted", None) in events
+    assert captured["endpoint_silence_ms"] == 5000
+    assert captured["max_utterance_ms"] == 300000
+    assert (
+        "voice.status",
+        {
+            "capture_kind": "barge_in",
+            "max_recording_seconds": 300.0,
+            "recording_mode": "silence",
+            "silence_duration_seconds": 5.0,
+            "silence_remaining_seconds": 4.2,
+            "started_at_ms": 123500,
+            "state": "listening",
+        },
+    ) in events
+    assert any(event == "voice.status" and payload["state"] == "transcribing" for event, payload in events)
+    assert any(event == "voice.status" and payload["state"] == "idle" for event, payload in events)
     assert ("voice.transcript", {"text": "stop, actually—"}) in events
     assert not wav.exists()  # capture temp file cleaned up
     assert ts.take_speech_interrupted() is True  # VAD cut latches the model note

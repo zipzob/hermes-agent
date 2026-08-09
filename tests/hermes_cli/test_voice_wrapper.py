@@ -245,7 +245,7 @@ class TestContinuousAPI:
         called = {"n": 0}
 
         class FakeRecorder:
-            def start(self, on_silence_stop=None):
+            def start(self, on_silence_stop=None, on_silence_progress=None, on_cutoff=None):
                 called["n"] += 1
 
             def cancel(self):
@@ -279,6 +279,8 @@ class TestContinuousLoopSimulation:
         monkeypatch.setattr(voice, "_continuous_no_speech_count", 0)
         monkeypatch.setattr(voice, "_continuous_on_transcript", None)
         monkeypatch.setattr(voice, "_continuous_on_status", None)
+        monkeypatch.setattr(voice, "_continuous_on_silence_progress", None)
+        monkeypatch.setattr(voice, "_continuous_on_cutoff", None)
         monkeypatch.setattr(voice, "_continuous_on_silent_limit", None)
         monkeypatch.setattr(voice, "_continuous_auto_restart", True, raising=False)
         monkeypatch.setattr(voice, "_voice_busy_probe", None, raising=False)
@@ -299,7 +301,7 @@ class TestContinuousLoopSimulation:
                 self.fail_stop = False
                 self.fail_next_start = False
 
-            def start(self, on_silence_stop=None):
+            def start(self, on_silence_stop=None, on_silence_progress=None, on_cutoff=None):
                 if self.fail_next_start:
                     self.fail_next_start = False
                     raise RuntimeError("boom")

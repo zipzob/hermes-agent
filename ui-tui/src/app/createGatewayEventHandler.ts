@@ -22,6 +22,7 @@ import { topLevelSubagents } from '../lib/subagentTree.js'
 import { isPaintableHex, setTerminalBackground, setTerminalForeground } from '../lib/terminalModes.js'
 import { formatAbandonedClarify, formatToolCall, stripAnsi } from '../lib/text.js'
 import { bootSeededPin, invalidateBootBackground, writeBootTheme } from '../lib/themeBoot.js'
+import { recordingDeadlineFromStatus } from '../lib/voiceStatus.js'
 import { defaultThemeForCurrentBackground, fromSkin, skinIsLight, type Theme, themeToneHex } from '../theme.js'
 import type { Msg, SubagentProgress, SubagentStatus } from '../types.js'
 
@@ -390,7 +391,14 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
   const { appendMessage, panel, setHistoryItems } = ctx.transcript
   const { setInput } = ctx.composer
   const { submitRef } = ctx.submission
-  const { setProcessing: setVoiceProcessing, setRecording: setVoiceRecording, setVoiceEnabled } = ctx.voice
+
+  const {
+    setProcessing: setVoiceProcessing,
+    setRecording: setVoiceRecording,
+    setRecordingDeadline: setVoiceRecordingDeadline,
+    setSilenceRemaining: setVoiceSilenceRemaining,
+    setVoiceEnabled
+  } = ctx.voice
 
   let pendingThinkingStatus = ''
   let thinkingStatusTimer: null | ReturnType<typeof setTimeout> = null
@@ -899,6 +907,19 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         // can show listening / transcribing / idle without polling.
         const state = String(ev.payload?.state ?? '')
 
+        if (ev.payload?.cutoff_reason === 'hard_limit') {
+          sys('voice: 5-minute recording limit reached — transcribing captured audio')
+        }
+
+        setVoiceRecordingDeadline(recordingDeadlineFromStatus(ev.payload ?? {}))
+        const silenceRemaining = Number(ev.payload?.silence_remaining_seconds)
+
+        setVoiceSilenceRemaining(
+          ev.payload?.silence_remaining_seconds === null || !Number.isFinite(silenceRemaining)
+            ? null
+            : silenceRemaining
+        )
+
         if (state === 'listening') {
           setVoiceRecording(true)
           setVoiceProcessing(false)
@@ -941,6 +962,12 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         const text = String(ev.payload?.text ?? '').trim()
 
         if (!text) {
+          return
+        }
+
+        if ((ev.payload as { delivery?: string } | undefined)?.delivery === 'draft') {
+          setInput(current => [current.trimEnd(), text].filter(Boolean).join('\n\n'))
+
           return
         }
 
