@@ -221,10 +221,10 @@ class TestMaxRecordingSecondsConfigReal:
 
     def test_bool_falls_back_to_documented_default(self):
         # bool is a subclass of int — ``max_recording_seconds: true`` must not
-        # become a 1-second cap; it falls back to the documented 120 default,
+        # become a 1-second cap; it falls back to the documented 300 default,
         # mirroring the silence-param corruption handling.
         recorder = self._start_with_voice_cfg({"max_recording_seconds": True})
-        assert recorder._max_recording_seconds == 120.0
+        assert recorder._max_recording_seconds == 300.0
 
 class TestDisableVoiceModeReal:
     """Tests _disable_voice_mode with real CLI instance."""
