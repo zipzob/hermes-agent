@@ -1917,6 +1917,15 @@ stt:
     no_speech_prob_threshold: 0.6  # drop a segment only when no_speech_prob > this...
     logprob_threshold: -1.0        # ...AND avg_logprob < this (both must hit — quiet real speech survives)
     unload_after_idle_seconds: 0   # 0=never unload (default); e.g. 300 = release the model after 5min idle
+  parakeet:                    # used when provider: "parakeet"
+    base_url: "http://127.0.0.1:8765"  # authenticated managed service; loopback HTTP only
+    model: "nvidia/parakeet-tdt-0.6b-v3"
+    language: ""              # multilingual auto-detection
+    device: "auto"            # auto | cpu | cuda
+    dtype: "auto"             # auto | float16 | float32
+    shared_gpu: true           # serialize with participating local inference backends
+    shared_gpu_timeout: 180
+    idle_timeout: 300          # stop the model service after this many idle seconds
   groq:
     language: ""               # per-provider override of stt.language
   openai:
@@ -1932,6 +1941,7 @@ Set `stt.echo_transcripts: false` when the gateway should transcribe voice notes
 Provider behavior:
 
 - `local` uses `faster-whisper` running on your machine. Install it separately with `pip install faster-whisper`. Silence-hallucination hardening is on by default: a Silero VAD filter keeps silence/noise from ever reaching Whisper, cross-window conditioning is disabled, and segments the model itself flags as probably-not-speech *and* low-confidence are dropped. Set `stt.local.vad: false` to transcribe non-speech audio (music, ambient) with the raw behavior. The model stays loaded in memory between voice messages for low-latency transcription; set `stt.local.unload_after_idle_seconds` (e.g. `300` for 5 minutes) to automatically release the model when idle. This frees GPU memory on CUDA hosts (the main win when a local LLM shares the GPU); on CPU the memory becomes reusable by the process, though the OS-visible footprint may not shrink until the process needs the space for something else. The next voice message reloads the model transparently.
+- `parakeet` uses the bundled transcription plugin and one host-local service shared by all Hermes profiles and sessions. Install the opt-in runtime with `uv sync --extra voice-parakeet`. The service binds only to loopback and requires an owner-only capability token stored under the shared Hermes root. In `shared_gpu` mode it acquires the machine-wide Hermes inference lease, evicts resident Ollama models, runs Parakeet, releases its CUDA allocations, and only then releases the lease. This permits alternating Hindsight/Ollama and STT workloads; it intentionally trades model reload latency for bounded GPU ownership. The service accepts audio bytes over loopback rather than trusting caller-provided paths, serializes concurrent requests, and exits after `idle_timeout`.
 - `groq` uses Groq's Whisper-compatible endpoint and reads `GROQ_API_KEY`. Pass `stt.groq.language` (or the global `HERMES_LOCAL_STT_LANGUAGE` env var) to skip auto-detection and reduce latency.
 - `openai` uses the OpenAI speech API and reads `VOICE_TOOLS_OPENAI_KEY`.
 
