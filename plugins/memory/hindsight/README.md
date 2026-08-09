@@ -135,11 +135,18 @@ local Ollama GPU with interactive or vision tools, set explicit limits in
 | `consolidation_llm_max_concurrent` | inherits global | Consolidation-specific LLM limit |
 | `llm_max_retries` | `3` | LLM retries after the first attempt |
 | `worker_task_retry_backoff_seconds` | `60` | Delay before retrying failed background tasks |
+| `shared_local_inference` | `false` | Participate in Hermes' per-user cross-process GPU lease when `llm_provider` is `ollama` |
+| `shared_local_inference_timeout` | `120` | Seconds to wait for another Hermes session's local inference operation |
 
-For a 6 GB GPU shared with model-switching workloads, start with one worker and
-one LLM request, no reserved slots, and a longer retry backoff. Stop the embedded
-daemon with `hindsight-embed -p <profile> daemon stop` before an exclusive vision
-batch; restart it afterward with `hindsight-embed -p <profile> daemon start`.
+For a 6 GB GPU shared with Parakeet STT, start with one worker and one LLM
+request, no reserved slots, a longer retry backoff, and set
+`shared_local_inference` to `true`. Hindsight then holds the shared lease through
+embedded daemon startup and actual server-side Ollama completion. Auto-retain
+remains on its background writer, but server-side async retain is disabled so it
+cannot outlive the lease.
+Parakeet unloads resident Ollama models and releases CUDA memory before yielding
+the same lease. The kernel releases ownership automatically if a Hermes process
+exits or crashes.
 
 The LLM API key is stored in `~/.hermes/.env` as `HINDSIGHT_LLM_API_KEY`.
 

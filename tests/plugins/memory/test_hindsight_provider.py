@@ -5,6 +5,7 @@ prefetch (auto_recall, preamble, query truncation), sync_turn (auto_retain,
 turn counting, tags), and schema completeness.
 """
 
+import asyncio
 import json
 import importlib
 import importlib.util
@@ -18,6 +19,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+import plugins.memory.hindsight as hindsight_module
 
 from hermes_cli.memory_setup import _CANCELLED
 from plugins.memory.hindsight import (
@@ -273,6 +276,7 @@ def test_check_local_runtime_requires_sentence_transformers(monkeypatch):
         "find_spec",
         lambda name: None if name == "sentence_transformers" else object(),
     )
+    monkeypatch.setattr(importlib, "import_module", lambda _name: object())
 
     available, reason = _check_local_runtime()
 
@@ -318,6 +322,174 @@ def test_embedded_startup_failure_clears_after_cooldown(monkeypatch):
 
     assert provider._embedded_failure_reason == ""
     assert provider._embedded_failure_at == 0.0
+
+
+def test_local_ollama_operation_holds_shared_inference_lease(monkeypatch):
+    events = []
+
+    class Lease:
+        def __enter__(self):
+            events.append("enter")
+
+        def __exit__(self, *args):
+            events.append("exit")
+
+    provider = HindsightMemoryProvider()
+    provider._shared_local_inference = True
+    provider._shared_local_inference_timeout = 12.0
+    provider._get_client = MagicMock(return_value="client")
+    provider._run_sync = MagicMock(return_value="done")
+    monkeypatch.setattr(
+        hindsight_module,
+        "local_inference_lease",
+        lambda owner, timeout: Lease(),
+        raising=False,
+    )
+
+    result = provider._run_hindsight_operation(lambda client: (client, "operation"))
+
+    assert result == "done"
+    assert events == ["enter", "exit"]
+    provider._run_sync.assert_called_once()
+
+
+def test_shared_lease_waits_for_timed_out_operation_cleanup(monkeypatch):
+    events = []
+
+    class Lease:
+        def __enter__(self):
+            events.append("lease-enter")
+
+        def __exit__(self, *_args):
+            events.append("lease-exit")
+
+    async def operation(_client):
+        events.append("operation-start")
+        try:
+            await asyncio.sleep(10)
+        finally:
+            events.append("operation-stopped")
+
+    provider = HindsightMemoryProvider()
+    provider._shared_local_inference = True
+    provider._shared_local_inference_timeout = 12.0
+    setattr(provider, "_timeout", 0.01)
+    provider._get_client = MagicMock(return_value="client")
+    monkeypatch.setattr(
+        hindsight_module,
+        "local_inference_lease",
+        lambda owner, timeout: Lease(),
+    )
+
+    with pytest.raises(TimeoutError):
+        provider._run_hindsight_operation(operation)
+
+    assert events == [
+        "lease-enter",
+        "operation-start",
+        "operation-stopped",
+        "lease-exit",
+    ]
+
+
+def test_local_ollama_forces_server_synchronous_retains(provider_with_config):
+    provider = provider_with_config(
+        mode="local_external",
+        llm_provider="ollama",
+        retain_async=True,
+        shared_local_inference=True,
+    )
+
+    assert provider._shared_local_inference is True
+    assert provider._retain_async is False
+
+
+@pytest.mark.parametrize("invalid_timeout", ["not-a-number", "nan", "inf", -1, 3601])
+def test_local_inference_timeout_falls_back_on_invalid_config(
+    provider_with_config,
+    invalid_timeout,
+):
+    provider = provider_with_config(
+        mode="local_external",
+        llm_provider="ollama",
+        shared_local_inference=True,
+        shared_local_inference_timeout=invalid_timeout,
+    )
+
+    assert provider._shared_local_inference_timeout == 120.0
+
+
+def test_local_ollama_embedded_startup_holds_shared_inference_lease(
+    tmp_path,
+    monkeypatch,
+):
+    events = []
+    config_dir = tmp_path / "hindsight"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "mode": "local_embedded",
+                "llm_provider": "ollama",
+                "llm_model": "test-model",
+                "shared_local_inference": True,
+                "shared_local_inference_timeout": 12,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class Lease:
+        def __enter__(self):
+            events.append("enter")
+
+        def __exit__(self, *_args):
+            events.append("exit")
+
+    class Manager:
+        @staticmethod
+        def is_running(_profile):
+            return False
+
+    class Client:
+        _manager = Manager()
+
+        @staticmethod
+        def _ensure_started():
+            events.append("ensure-started")
+
+    class InlineThread:
+        def __init__(self, *, target, **_kwargs):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    fake_embed_package = SimpleNamespace()
+    fake_daemon_manager = SimpleNamespace(console=None)
+    fake_embed_package.daemon_embed_manager = fake_daemon_manager
+    monkeypatch.setitem(sys.modules, "hindsight_embed", fake_embed_package)
+    monkeypatch.setitem(
+        sys.modules,
+        "hindsight_embed.daemon_embed_manager",
+        fake_daemon_manager,
+    )
+
+    monkeypatch.setattr(hindsight_module, "get_hermes_home", lambda: tmp_path)
+    monkeypatch.setattr(hindsight_module.os, "geteuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(hindsight_module, "_check_local_runtime", lambda: (True, ""))
+    monkeypatch.setattr(hindsight_module.threading, "Thread", InlineThread)
+    monkeypatch.setattr(
+        hindsight_module,
+        "local_inference_lease",
+        lambda owner, timeout: Lease(),
+    )
+    monkeypatch.setattr(HindsightMemoryProvider, "_get_client", lambda self: Client())
+
+    provider = HindsightMemoryProvider()
+    provider.initialize(session_id="test-session", hermes_home=str(tmp_path), platform="cli")
+
+    assert events == ["enter", "ensure-started", "exit"]
 
 
 # ---------------------------------------------------------------------------
@@ -1177,10 +1349,25 @@ class TestConfigSchema:
             "recall_tags", "recall_tags_match",
             "auto_recall", "auto_retain",
             "retain_every_n_turns", "retain_async", "retain_context",
+            "shared_local_inference", "shared_local_inference_timeout",
             "recall_max_tokens", "recall_max_input_chars",
             "recall_prompt_preamble",
         }
         assert expected_keys.issubset(keys), f"Missing: {expected_keys - keys}"
+
+    def test_schema_exposes_shared_inference_for_local_external(self, provider):
+        schema = provider.get_config_schema()
+
+        assert any(
+            field["key"] == "llm_provider"
+            and field.get("when", {}).get("mode") == "local_external"
+            for field in schema
+        )
+        assert any(
+            field["key"] == "shared_local_inference"
+            and field.get("when", {}).get("mode") == "local_external"
+            for field in schema
+        )
 
 
 # ---------------------------------------------------------------------------
