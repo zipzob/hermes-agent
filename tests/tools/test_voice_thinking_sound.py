@@ -1,7 +1,7 @@
 """Tests for the ambient voice-chat "thinking" sound (tools/voice_mode.py).
 
 Contract:
-  - `voice.thinking_sound` config gates it (default True).
+  - `voice.thinking_sound` config gates it (default False).
   - `start_thinking_sound()` is idempotent, returns False when disabled.
   - The loop synthesizes blips with numpy (no assets), scales volume by
     `voice.beep_volume`, and NEVER plays through sounddevice on macOS
@@ -44,9 +44,9 @@ def _reset():
 
 
 class TestConfigGate:
-    def test_default_enabled(self):
+    def test_default_disabled(self):
         with patch("hermes_cli.config.load_config", return_value={"voice": {}}):
-            assert vm.thinking_sound_enabled() is True
+            assert vm.thinking_sound_enabled() is False
 
 
     def test_start_refuses_when_disabled(self):

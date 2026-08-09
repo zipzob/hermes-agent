@@ -355,6 +355,8 @@ def _voice_activity_held() -> bool:
 
 _continuous_on_transcript: Optional[Callable[[str], None]] = None
 _continuous_on_status: Optional[Callable[[str], None]] = None
+_continuous_on_silence_progress: Optional[Callable[[Optional[float]], None]] = None
+_continuous_on_cutoff: Optional[Callable[[str], None]] = None
 _continuous_on_silent_limit: Optional[Callable[[], None]] = None
 # Explicit user-intent stop signal: fired when the user SAYS a bare stop
 # phrase ("stop"). Distinct from on_silent_limit (a timeout) so consumers
@@ -434,10 +436,13 @@ def start_continuous(
     on_status: Optional[Callable[[str], None]] = None,
     on_silent_limit: Optional[Callable[[], None]] = None,
     silence_threshold: int = 200,
-    silence_duration: float = 3.0,
+    silence_duration: float = 5.0,
     auto_restart: bool = True,
-    max_recording_seconds: float = 0.0,
+    max_recording_seconds: float = 300.0,
     on_stop_phrase: Optional[Callable[[str], None]] = None,
+    silence_autostop: bool = True,
+    on_silence_progress: Optional[Callable[[Optional[float]], None]] = None,
+    on_cutoff: Optional[Callable[[str], None]] = None,
 ) -> bool:
     """Start a VAD-driven continuous recording loop.
 
@@ -468,6 +473,8 @@ def start_continuous(
     """
     global _continuous_active, _continuous_recorder, _continuous_auto_restart
     global _continuous_on_transcript, _continuous_on_status, _continuous_on_silent_limit
+    global _continuous_on_silence_progress
+    global _continuous_on_cutoff
     global _continuous_on_stop_phrase
     global _continuous_no_speech_count
 
@@ -482,6 +489,8 @@ def start_continuous(
         _continuous_auto_restart = auto_restart
         _continuous_on_transcript = on_transcript
         _continuous_on_status = on_status
+        _continuous_on_silence_progress = on_silence_progress
+        _continuous_on_cutoff = on_cutoff
         _continuous_on_silent_limit = on_silent_limit
         _continuous_on_stop_phrase = on_stop_phrase
         if auto_restart:
@@ -492,6 +501,7 @@ def start_continuous(
 
         _continuous_recorder._silence_threshold = silence_threshold
         _continuous_recorder._silence_duration = silence_duration
+        _continuous_recorder._silence_autostop_enabled = bool(silence_autostop)
         # Same numeric-with-bool-excluded guard as the CLI wiring in
         # cli.py:_voice_start_recording — <= 0 (or garbage) disables the cap.
         _continuous_recorder._max_recording_seconds = (
@@ -513,7 +523,11 @@ def start_continuous(
     _play_beep(frequency=880, count=1)
 
     try:
-        rec.start(on_silence_stop=_continuous_on_silence)
+        rec.start(
+            on_silence_stop=_continuous_on_silence,
+            on_silence_progress=on_silence_progress,
+            on_cutoff=on_cutoff,
+        )
     except Exception as e:
         logger.error("failed to start continuous recording: %s", e)
         _debug(f"start_continuous: rec.start raised {type(e).__name__}: {e}")
@@ -540,6 +554,8 @@ def stop_continuous(force_transcribe: bool = False) -> None:
     """
     global _continuous_active, _continuous_on_transcript, _continuous_stopping
     global _continuous_on_status, _continuous_on_silent_limit
+    global _continuous_on_silence_progress
+    global _continuous_on_cutoff
     global _continuous_on_stop_phrase
     global _continuous_recorder, _continuous_no_speech_count
 
@@ -557,6 +573,8 @@ def stop_continuous(force_transcribe: bool = False) -> None:
         _continuous_stopping = rec is not None
         _continuous_on_transcript = None
         _continuous_on_status = None
+        _continuous_on_silence_progress = None
+        _continuous_on_cutoff = None
         _continuous_on_silent_limit = None
         _continuous_on_stop_phrase = None
         if not track_no_speech:
@@ -857,7 +875,11 @@ def _continuous_on_silence() -> None:
         _debug(f"_continuous_on_silence: restarting loop (no_speech={no_speech})")
         _play_beep(frequency=880, count=1)
         try:
-            rec.start(on_silence_stop=_continuous_on_silence)
+            rec.start(
+                on_silence_stop=_continuous_on_silence,
+                on_silence_progress=_continuous_on_silence_progress,
+                on_cutoff=_continuous_on_cutoff,
+            )
         except Exception as e:
             logger.error("failed to restart continuous recording: %s", e)
             _debug(f"_continuous_on_silence: restart raised {type(e).__name__}: {e}")

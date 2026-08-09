@@ -11,6 +11,17 @@ test pins the enforcement contract on the recorder:
 from tools.voice_mode import AudioRecorder
 
 
+def test_default_voice_policy_uses_visible_silence_stop_with_five_minute_cap():
+    from hermes_cli.config_defaults import DEFAULT_CONFIG
+
+    voice = DEFAULT_CONFIG["voice"]
+
+    assert voice["recording_mode"] == "silence"
+    assert voice["silence_duration"] == 5.0
+    assert voice["max_recording_seconds"] == 300
+    assert voice["thinking_sound"] is False
+
+
 def test_cap_disabled_by_default():
     r = AudioRecorder()
     assert r._max_recording_seconds == 0.0
