@@ -1,0 +1,5 @@
+name: parakeet-stt
+version: 1.0.0
+description: "Shared host-local NVIDIA Parakeet transcription service."
+author: NousResearch
+kind: backend
