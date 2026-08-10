@@ -1336,7 +1336,7 @@ class AudioRecorder:
         logger.info("Voice recording stopped via Pulse fallback (saved to %s)", audio_path)
         return audio_path
 
-    def cancel(self) -> None:
+    def cancel(self) -> bool:
         """Stop recording and discard all captured audio.
 
         The underlying stream is kept alive for reuse.
@@ -1347,24 +1347,29 @@ class AudioRecorder:
             self._on_silence_stop = None
             self._current_rms = 0
             proc = self._fallback_process
-            self._fallback_process = None
             fallback_path = getattr(self, "_fallback_path", None)
         if proc is not None:
             try:
                 proc.kill()
                 proc.wait(timeout=2)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Pulse fallback termination not confirmed: %s", exc)
+                return False
+            with self._lock:
+                if self._fallback_process is proc:
+                    self._fallback_process = None
         if fallback_path and os.path.exists(fallback_path):
             try:
                 os.remove(fallback_path)
             except OSError:
                 pass
         logger.info("Voice recording cancelled")
+        return True
 
     def shutdown(self) -> bool:
         """Release audio resources and terminate any Pulse fallback recorder."""
-        self.cancel()
+        if not self.cancel():
+            return False
         if self._stream == "pulse-fallback":
             self._stream = None
         # Close stream OUTSIDE the lock to avoid deadlock with audio callback
