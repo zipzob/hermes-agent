@@ -14295,7 +14295,6 @@ def _(rid, params: dict) -> dict:
                 payload = _status_payload(state)
                 _voice_emit("voice.status", payload)
                 if state == "idle":
-                    _release_voice_capture("record")
                     _resume_voice_wake()
 
             def _on_silence_progress(remaining):
@@ -14349,7 +14348,6 @@ def _(rid, params: dict) -> dict:
         from hermes_cli.voice import stop_continuous
 
         stop_continuous(force_transcribe=True)
-        _release_voice_capture("record")
         _resume_voice_wake()
         return _ok(rid, {"status": "stopped"})
     except ImportError:
