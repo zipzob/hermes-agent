@@ -9,6 +9,14 @@ This is a fork-maintenance artifact. It maps the local overlay onto independentl
 - `origin/main` contains an older lineage. `git cherry main origin/main` identified 23 patch-equivalent remote-only commits. Do **not** merge or cherry-pick those copies into `main`.
 - Two remote copies are non-equivalent: the original recovery bundle and an earlier Hindsight daemon implementation. Extract current behavior from this branch instead.
 
+## 2026-08-10 later upstream refresh
+
+- Fetched once and froze `upstream/main` at `a1da384c6d968000773ba0d1617d6931dfe25748`, 47 commits after the prior frozen base. Immutable rollback refs preserve published `main`, all 24 contribution refs, and all 6 integration refs under the dated `backup/*-pre-refresh-20260810-084044` namespaces; the external manifest is `/home/zip/.hermes/backups/hermes-refresh-20260810-084044/refs.txt`.
+- Refreshed every contribution ref onto the frozen SHA. Preserved the declared Hindsight -> local inference -> Parakeet -> staged dictation and TUI frame -> approval -> payload stacks; the Hindsight/web compatibility aliases remain exact aliases, and zero-delta `contrib/trace-upload-compat` points directly at the frozen upstream tip.
+- Reconstructed stale `contrib/voice-staged-dictation` as a clean child of refreshed Parakeet using only its 15 verified implementation/test commits. Ledger-only commits and the delegation batch-contract correction were excluded from voice; the correction now lives on `contrib/delegation-routing`.
+- Replayed the published 81-commit integration overlay once onto the frozen SHA. `git range-diff` reports 80 exact patch equivalents, one intentionally changed updater patch, and zero dropped/added commits. The updater difference additively retains upstream's fresh config-module migration test beside the fork rebase/rollback tests; its focused suite passes 25 tests.
+- Focused Python validation passes 1,089 tests with 10 skips across voice, cross-process microphone ownership, shared inference, Parakeet, Hindsight, delegation, updater, managed install, and gateway paths. Ruff, `git diff --check`, TUI typecheck, and the TUI production build pass. The full TUI suite's 21 failures reproduce identically in the same three files on pristine frozen upstream.
+
 ## 2026-08-10 upstream refresh
 
 - Fetched once and froze `upstream/main` at `3bd844edf1777a680115f88a68474b4fb434092f`. Dated rollback refs preserve the prior integration, `main`, and contribution heads under `backup/*-pre-refresh-20260810-012806`; the external ref manifest is `/home/zip/.hermes/backups/hermes-refresh-20260810-012806/refs.txt`.
