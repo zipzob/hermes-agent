@@ -285,10 +285,54 @@ _recorder_lock = threading.Lock()
 
 # ── Continuous (VAD) state ───────────────────────────────────────────
 _continuous_lock = threading.Lock()
+_continuous_capture_stop_lock = threading.Lock()
+_continuous_capture_stopped_notified = False
 _continuous_active = False
 _continuous_stopping = False
 _continuous_auto_restart: bool = True
 _continuous_recorder: Any = None
+
+
+def _prepare_continuous_capture() -> None:
+    """Reset once-only shutdown notification before opening the microphone."""
+    global _continuous_capture_stopped_notified
+
+    with _continuous_capture_stop_lock:
+        _continuous_capture_stopped_notified = False
+
+
+def _shutdown_continuous_capture(
+    rec: Any,
+    *,
+    keep_audio: bool,
+    on_capture_stopped: Optional[Callable[[], None]],
+) -> Optional[str]:
+    """Serialize recorder shutdown and notify ownership release exactly once."""
+    global _continuous_capture_stopped_notified
+
+    with _continuous_capture_stop_lock:
+        wav_path: Optional[str] = None
+        try:
+            if keep_audio:
+                wav_path = rec.stop()
+            else:
+                rec.cancel()
+        except Exception as e:
+            logger.warning("failed to %s recorder: %s", "stop" if keep_audio else "cancel", e)
+            if keep_audio:
+                try:
+                    rec.cancel()
+                except Exception as cancel_error:
+                    logger.warning("failed to cancel recorder: %s", cancel_error)
+        finally:
+            if not _continuous_capture_stopped_notified:
+                _continuous_capture_stopped_notified = True
+                if on_capture_stopped:
+                    try:
+                        on_capture_stopped()
+                    except Exception:
+                        pass
+        return wav_path
 
 # ── TTS-vs-STT feedback guard ────────────────────────────────────────
 # When TTS plays the agent reply over the speakers, the live microphone
@@ -521,6 +565,7 @@ def start_continuous(
     _play_beep(frequency=880, count=1)
 
     try:
+        _prepare_continuous_capture()
         rec.start(
             on_silence_stop=_continuous_on_silence,
             on_silence_progress=on_silence_progress,
@@ -588,21 +633,11 @@ def stop_continuous(force_transcribe: bool = False) -> None:
                     on_status("transcribing")
                 except Exception:
                     pass
-            try:
-                wav_path = rec.stop()
-            except Exception as e:
-                logger.warning("failed to stop recorder: %s", e)
-                try:
-                    rec.cancel()
-                except Exception as cancel_error:
-                    logger.warning("failed to cancel recorder: %s", cancel_error)
-                wav_path = None
-            finally:
-                if on_capture_stopped:
-                    try:
-                        on_capture_stopped()
-                    except Exception:
-                        pass
+            wav_path = _shutdown_continuous_capture(
+                rec,
+                keep_audio=True,
+                on_capture_stopped=on_capture_stopped,
+            )
 
             def _transcribe_and_cleanup():
                 global _continuous_no_speech_count, _continuous_stopping
@@ -689,18 +724,13 @@ def stop_continuous(force_transcribe: bool = False) -> None:
             threading.Thread(target=_transcribe_and_cleanup, daemon=True).start()
             return
         else:
-            try:
-                # cancel() (not stop()) discards buffered frames — the loop
-                # is over, we don't want to transcribe a half-captured turn.
-                rec.cancel()
-            except Exception as e:
-                logger.warning("failed to cancel recorder: %s", e)
-            finally:
-                if on_capture_stopped:
-                    try:
-                        on_capture_stopped()
-                    except Exception:
-                        pass
+            # cancel() (not stop()) discards buffered frames — the loop
+            # is over, we don't want to transcribe a half-captured turn.
+            _shutdown_continuous_capture(
+                rec,
+                keep_audio=False,
+                on_capture_stopped=on_capture_stopped,
+            )
 
     with _continuous_lock:
         _continuous_stopping = False
@@ -750,14 +780,11 @@ def _continuous_on_silence() -> None:
         except Exception:
             pass
 
-    try:
-        wav_path = rec.stop()
-    finally:
-        if on_capture_stopped:
-            try:
-                on_capture_stopped()
-            except Exception:
-                pass
+    wav_path = _shutdown_continuous_capture(
+        rec,
+        keep_audio=True,
+        on_capture_stopped=on_capture_stopped,
+    )
     # Peak RMS is the critical diagnostic when stop() returns None despite
     # the VAD firing — tells us at a glance whether the mic was too quiet
     # for SILENCE_RMS_THRESHOLD (200) or the VAD + peak checks disagree.
@@ -896,6 +923,7 @@ def _continuous_on_silence() -> None:
         _debug(f"_continuous_on_silence: restarting loop (no_speech={no_speech})")
         _play_beep(frequency=880, count=1)
         try:
+            _prepare_continuous_capture()
             rec.start(
                 on_silence_stop=_continuous_on_silence,
                 on_silence_progress=_continuous_on_silence_progress,
