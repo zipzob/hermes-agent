@@ -2162,6 +2162,7 @@ def test_voice_record_stop_forces_transcription(monkeypatch):
             stop_continuous=fake_stop_continuous,
         ),
     )
+    monkeypatch.setattr(server, "_voice_capture_owner", "record", raising=False)
 
     resp = server.dispatch(
         {
@@ -2173,6 +2174,7 @@ def test_voice_record_stop_forces_transcription(monkeypatch):
 
     assert resp["result"]["status"] == "stopped"
     assert captured["force_transcribe"] is True
+    assert server._voice_capture_owner == "record"
 
 
 def test_voice_record_stop_updates_event_session_id(monkeypatch):
