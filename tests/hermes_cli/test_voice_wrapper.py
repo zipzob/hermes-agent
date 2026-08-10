@@ -292,6 +292,7 @@ class TestContinuousLoopSimulation:
 
         # Reset module state between tests.
         monkeypatch.setattr(voice, "_continuous_active", False)
+        monkeypatch.setattr(voice, "_continuous_stopping", False)
         monkeypatch.setattr(voice, "_continuous_recorder", None)
         monkeypatch.setattr(voice, "_continuous_no_speech_count", 0)
         monkeypatch.setattr(voice, "_continuous_on_transcript", None)
