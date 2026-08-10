@@ -485,12 +485,14 @@ class TestDelegateTask(unittest.TestCase):
         parent = _make_mock_parent()
         result = json.loads(delegate_task(
             goal="This should be ignored",
-            tasks=[{"goal": "Actual task"}],
+            tasks=[{"goal": "Actual task"}, {"goal": "Other task"}],
             parent_agent=parent,
         ))
-        # The mock was called with the tasks array item, not the top-level goal
-        call_args = mock_run.call_args
-        self.assertEqual(call_args.kwargs.get("goal") or call_args[1].get("goal", call_args[0][1] if len(call_args[0]) > 1 else None), "Actual task")
+        # Workers receive the valid batch items, never the top-level goal.
+        self.assertEqual(
+            {call.kwargs["goal"] for call in mock_run.call_args_list},
+            {"Actual task", "Other task"},
+        )
 
     @patch("tools.delegate_tool._run_single_child")
     def test_failed_child_included_in_results(self, mock_run):
