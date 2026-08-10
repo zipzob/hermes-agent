@@ -791,6 +791,8 @@ class TermuxAudioRecorder:
 
     def cancel(self) -> bool:
         with self._lock:
+            if not self._recording and self._recording_path is None:
+                return True
             path = self._recording_path
         try:
             if not self._stop_termux_recording():
