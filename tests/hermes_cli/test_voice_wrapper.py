@@ -548,6 +548,48 @@ class TestContinuousLoopSimulation:
 
         assert capture_stopped == []
 
+    def test_pulse_wait_timeout_keeps_capture_lease(
+        self, monkeypatch, tmp_path
+    ):
+        import subprocess
+        from unittest.mock import MagicMock
+
+        import hermes_cli.voice as voice
+        from tools.voice_capture_lease import acquire_voice_capture_lease
+        from tools.voice_mode import AudioRecorder
+
+        lock_path = tmp_path / "voice-capture.lock"
+        owner = acquire_voice_capture_lease(
+            "full_duplex", session_id="first", lock_path=lock_path
+        )
+        assert owner is not None
+
+        fallback = tmp_path / "fallback.flac"
+        fallback.write_bytes(b"recording")
+        proc = MagicMock()
+        proc.wait.side_effect = subprocess.TimeoutExpired("parec", 2)
+        recorder = AudioRecorder()
+        recorder._fallback_process = proc
+        recorder._fallback_path = str(fallback)
+        recorder._stream = "pulse-fallback"
+        monkeypatch.setattr(voice, "_continuous_capture_stopped_notified", False)
+
+        try:
+            voice._shutdown_continuous_capture(
+                recorder,
+                keep_audio=False,
+                on_capture_stopped=owner.release,
+            )
+            contender = acquire_voice_capture_lease(
+                "full_duplex", session_id="second", lock_path=lock_path
+            )
+            assert contender is None
+            assert recorder._fallback_process is proc
+            assert recorder._stream == "pulse-fallback"
+            assert fallback.exists()
+        finally:
+            owner.release()
+
     def test_overlapping_stops_notify_only_after_owning_shutdown(
         self, fake_recorder, monkeypatch
     ):
