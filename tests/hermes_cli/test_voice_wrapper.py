@@ -297,6 +297,7 @@ class TestContinuousLoopSimulation:
                 self.last_callback = None
                 self.stopped = 0
                 self.cancelled = 0
+                self.shutdowns = 0
                 # Preset WAV path returned by stop()
                 self.next_stop_wav = "/tmp/fake.wav"
                 self.fail_stop = False
@@ -320,6 +321,9 @@ class TestContinuousLoopSimulation:
             def cancel(self):
                 self.cancelled += 1
                 self.is_recording = False
+
+            def shutdown(self):
+                self.shutdowns += 1
 
         rec = FakeRecorder()
         monkeypatch.setattr(voice, "create_audio_recorder", lambda: rec)
@@ -392,6 +396,47 @@ class TestContinuousLoopSimulation:
         assert events[:3] == ["stop", "capture_stopped", "transcribe"]
 
         voice.stop_continuous()
+
+    def test_capture_stopped_callback_waits_for_stream_shutdown(
+        self, fake_recorder, monkeypatch
+    ):
+        import threading
+
+        import hermes_cli.voice as voice
+
+        shutdown_entered = threading.Event()
+        allow_shutdown = threading.Event()
+        capture_stopped = threading.Event()
+
+        def blocked_shutdown():
+            shutdown_entered.set()
+            assert allow_shutdown.wait(timeout=2)
+            fake_recorder.shutdowns += 1
+
+        fake_recorder.shutdown = blocked_shutdown
+        monkeypatch.setattr(
+            voice,
+            "transcribe_recording",
+            lambda _p: {"success": True, "transcript": "hello world"},
+        )
+        voice.start_continuous(
+            on_transcript=lambda _text: None,
+            on_capture_stopped=capture_stopped.set,
+            auto_restart=False,
+        )
+
+        stop_thread = threading.Thread(target=fake_recorder.last_callback)
+        stop_thread.start()
+        try:
+            assert shutdown_entered.wait(timeout=1)
+            assert capture_stopped.is_set() is False
+        finally:
+            allow_shutdown.set()
+            stop_thread.join(timeout=2)
+
+        assert not stop_thread.is_alive()
+        assert fake_recorder.shutdowns == 1
+        assert capture_stopped.is_set() is True
 
     def test_overlapping_stops_notify_only_after_owning_shutdown(
         self, fake_recorder, monkeypatch

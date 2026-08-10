@@ -325,6 +325,10 @@ def _shutdown_continuous_capture(
                 except Exception as cancel_error:
                     logger.warning("failed to cancel recorder: %s", cancel_error)
         finally:
+            try:
+                rec.shutdown()
+            except Exception as shutdown_error:
+                logger.warning("failed to shut down recorder: %s", shutdown_error)
             if not _continuous_capture_stopped_notified:
                 _continuous_capture_stopped_notified = True
                 if on_capture_stopped:
