@@ -263,10 +263,10 @@ def _beeps_enabled() -> bool:
 
 
 def _play_beep(frequency: int, count: int = 1) -> None:
-    """Audible cue matching cli.py's record/stop beeps.
+    """Audible cue matching cli.py's recording/STT-complete beeps.
 
-    880 Hz single-beep on start (cli.py:_voice_start_recording line 7532),
-    660 Hz double-beep on stop (cli.py:_voice_stop_and_transcribe line 7585).
+    880 Hz single-beep on recording start,
+    660 Hz double-beep after usable text returns from STT.
     Best-effort — sounddevice failures are silently swallowed so the
     voice loop never breaks because a speaker was unavailable.
     """
@@ -608,29 +608,53 @@ def stop_continuous(force_transcribe: bool = False) -> None:
     global _continuous_on_cutoff
     global _continuous_on_stop_phrase
     global _continuous_recorder, _continuous_no_speech_count
+    global _continuous_capture_stopped_notified
 
+    retry_pending_shutdown = False
     with _continuous_lock:
         if not _continuous_active:
-            return
-        _continuous_active = False
-        rec = _continuous_recorder
-        on_status = _continuous_on_status
-        on_capture_stopped = _continuous_on_capture_stopped
-        on_transcript = _continuous_on_transcript
-        on_silent_limit = _continuous_on_silent_limit
-        on_stop_phrase = _continuous_on_stop_phrase
-        auto_restart = _continuous_auto_restart
-        track_no_speech = force_transcribe and not auto_restart
-        _continuous_stopping = rec is not None
-        _continuous_on_transcript = None
-        _continuous_on_status = None
-        _continuous_on_capture_stopped = None
-        _continuous_on_silence_progress = None
-        _continuous_on_cutoff = None
-        _continuous_on_silent_limit = None
-        _continuous_on_stop_phrase = None
-        if not track_no_speech:
-            _continuous_no_speech_count = 0
+            if not _continuous_stopping or _continuous_recorder is None:
+                return
+            retry_pending_shutdown = True
+            rec = _continuous_recorder
+            on_capture_stopped = _continuous_on_capture_stopped
+            on_status = None
+            on_transcript = None
+            on_silent_limit = None
+            on_stop_phrase = None
+            auto_restart = False
+            track_no_speech = False
+        else:
+            _continuous_active = False
+            rec = _continuous_recorder
+            on_status = _continuous_on_status
+            on_capture_stopped = _continuous_on_capture_stopped
+            on_transcript = _continuous_on_transcript
+            on_silent_limit = _continuous_on_silent_limit
+            on_stop_phrase = _continuous_on_stop_phrase
+            auto_restart = _continuous_auto_restart
+            track_no_speech = force_transcribe and not auto_restart
+            _continuous_stopping = rec is not None
+            _continuous_on_transcript = None
+            _continuous_on_status = None
+            _continuous_on_silence_progress = None
+            _continuous_on_cutoff = None
+            _continuous_on_silent_limit = None
+            _continuous_on_stop_phrase = None
+            if not track_no_speech:
+                _continuous_no_speech_count = 0
+
+    if retry_pending_shutdown:
+        _shutdown_continuous_capture(
+            rec,
+            keep_audio=False,
+            on_capture_stopped=on_capture_stopped,
+        )
+        with _continuous_lock:
+            if _continuous_capture_stopped_notified:
+                _continuous_stopping = False
+                _continuous_on_capture_stopped = None
+        return
 
     if rec is not None:
         if force_transcribe and on_transcript:
@@ -717,10 +741,14 @@ def stop_continuous(force_transcribe: bool = False) -> None:
                             except Exception:
                                 pass
 
-                    _play_beep(frequency=660, count=2)
+                    if transcript:
+                        _play_beep(frequency=660, count=2)
                     with _continuous_lock:
-                        _continuous_stopping = False
-                    if on_status:
+                        shutdown_complete = _continuous_capture_stopped_notified
+                        if shutdown_complete:
+                            _continuous_stopping = False
+                            _continuous_on_capture_stopped = None
+                    if on_status and shutdown_complete:
                         try:
                             on_status("idle")
                         except Exception:
@@ -738,13 +766,12 @@ def stop_continuous(force_transcribe: bool = False) -> None:
             )
 
     with _continuous_lock:
-        _continuous_stopping = False
+        shutdown_complete = _continuous_capture_stopped_notified
+        if shutdown_complete:
+            _continuous_stopping = False
+            _continuous_on_capture_stopped = None
 
-    # Audible "recording stopped" cue (CLI parity: same 660 Hz × 2 the
-    # silence-auto-stop path plays).
-    _play_beep(frequency=660, count=2)
-
-    if on_status:
+    if on_status and shutdown_complete:
         try:
             on_status("idle")
         except Exception:
@@ -801,10 +828,6 @@ def _continuous_on_silence() -> None:
     _debug(
         f"_continuous_on_silence: rec.stop -> {wav_path!r} (peak_rms={peak_rms})"
     )
-
-    # CLI parity: double 660 Hz beep after the stream stops (safe from the
-    # CoreAudio conflict that blocks pre-start beeps).
-    _play_beep(frequency=660, count=2)
 
     transcript: Optional[str] = None
 
@@ -876,6 +899,11 @@ def _continuous_on_silence() -> None:
             on_transcript(transcript)
         except Exception as e:
             logger.warning("on_transcript callback raised: %s", e)
+
+    # Confirm that STT returned usable text. Do not play this cue merely
+    # because capture stopped: that falsely suggests transcription finished.
+    if transcript:
+        _play_beep(frequency=660, count=2)
 
     if should_halt:
         _debug(
