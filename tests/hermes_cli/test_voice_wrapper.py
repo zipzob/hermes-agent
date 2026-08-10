@@ -620,6 +620,59 @@ class TestContinuousLoopSimulation:
         finally:
             owner.release()
 
+    def test_repeated_shutdown_during_blocked_portaudio_close_keeps_capture_lease(
+        self, monkeypatch, tmp_path
+    ):
+        import threading
+        from unittest.mock import MagicMock
+
+        import hermes_cli.voice as voice
+        from tools.voice_capture_lease import acquire_voice_capture_lease
+        from tools.voice_mode import AudioRecorder
+
+        lock_path = tmp_path / "voice-capture.lock"
+        owner = acquire_voice_capture_lease(
+            "full_duplex", session_id="first", lock_path=lock_path
+        )
+        assert owner is not None
+
+        close_entered = threading.Event()
+        allow_close = threading.Event()
+        stream = MagicMock()
+
+        def blocked_close():
+            close_entered.set()
+            assert allow_close.wait(timeout=2)
+
+        stream.close.side_effect = blocked_close
+        recorder = AudioRecorder()
+        recorder._stream = stream
+        close_stream = recorder._close_stream_with_timeout
+        monkeypatch.setattr(
+            recorder,
+            "_close_stream_with_timeout",
+            lambda: close_stream(timeout=0),
+        )
+        monkeypatch.setattr(voice, "_continuous_capture_stopped_notified", False)
+
+        try:
+            for _ in range(2):
+                voice._shutdown_continuous_capture(
+                    recorder,
+                    keep_audio=False,
+                    on_capture_stopped=owner.release,
+                )
+            assert close_entered.wait(timeout=1)
+            contender = acquire_voice_capture_lease(
+                "full_duplex", session_id="second", lock_path=lock_path
+            )
+            assert contender is None
+            assert recorder._stream is stream
+            assert stream.close.call_count == 1
+        finally:
+            allow_close.set()
+            owner.release()
+
     def test_overlapping_stops_notify_only_after_owning_shutdown(
         self, fake_recorder, monkeypatch
     ):
