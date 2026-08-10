@@ -1280,7 +1280,6 @@ class AudioRecorder:
 
             if self._fallback_process is not None:
                 proc = self._fallback_process
-                self._fallback_process = None
                 fallback_path = getattr(self, "_fallback_path", None)
             else:
                 proc = None
@@ -1327,6 +1326,9 @@ class AudioRecorder:
             except Exception:
                 proc.kill()
                 proc.wait(timeout=2)
+            with self._lock:
+                if self._fallback_process is proc:
+                    self._fallback_process = None
             if proc.returncode not in (0, 255):
                 stderr = b""
                 if proc.stderr:
