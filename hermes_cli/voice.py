@@ -327,8 +327,8 @@ def _shutdown_continuous_capture(
         finally:
             shutdown_complete = False
             try:
-                rec.shutdown()
-                shutdown_complete = True
+                shutdown_result = rec.shutdown()
+                shutdown_complete = shutdown_result is not False
             except Exception as shutdown_error:
                 logger.warning("failed to shut down recorder: %s", shutdown_error)
             if shutdown_complete and not _continuous_capture_stopped_notified:
