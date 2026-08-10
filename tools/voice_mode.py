@@ -1274,7 +1274,6 @@ class AudioRecorder:
 
             if self._fallback_process is not None:
                 proc = self._fallback_process
-                self._fallback_process = None
                 fallback_path = getattr(self, "_fallback_path", None)
             else:
                 proc = None
@@ -1304,38 +1303,42 @@ class AudioRecorder:
 
                 return self._write_wav(audio_data, sample_rate=self._sample_rate)
 
-        try:
-            if proc.stdin:
-                proc.stdin.write(b"q")
-                proc.stdin.flush()
-                proc.stdin.close()
-        except Exception:
-            pass
-        try:
-            proc.wait(timeout=5)
-        except Exception:
-            proc.kill()
-            proc.wait(timeout=2)
-        if proc.returncode not in (0, 255):
-            stderr = b""
-            if proc.stderr:
-                try:
-                    stderr = proc.stderr.read()
-                except Exception:
-                    stderr = b""
-            raise RuntimeError(
-                "Pulse fallback recorder failed: "
-                + (stderr.decode("utf-8", errors="ignore").strip() or f"exit {proc.returncode}")
-            )
-        if not fallback_path or not os.path.exists(fallback_path) or os.path.getsize(fallback_path) <= 44:
-            return None
-        os.makedirs(_TEMP_DIR, exist_ok=True)
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        suffix = Path(fallback_path).suffix or ".flac"
-        audio_path = os.path.join(_TEMP_DIR, f"recording_{timestamp}{suffix}")
-        shutil.move(fallback_path, audio_path)
-        logger.info("Voice recording stopped via Pulse fallback (saved to %s)", audio_path)
-        return audio_path
+        if proc is not None:
+            try:
+                if proc.stdin:
+                    proc.stdin.write(b"q")
+                    proc.stdin.flush()
+                    proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
+                proc.wait(timeout=2)
+            with self._lock:
+                if self._fallback_process is proc:
+                    self._fallback_process = None
+            if proc.returncode not in (0, 255):
+                stderr = b""
+                if proc.stderr:
+                    try:
+                        stderr = proc.stderr.read()
+                    except Exception:
+                        stderr = b""
+                raise RuntimeError(
+                    "Pulse fallback recorder failed: "
+                    + (stderr.decode("utf-8", errors="ignore").strip() or f"exit {proc.returncode}")
+                )
+            if not fallback_path or not os.path.exists(fallback_path) or os.path.getsize(fallback_path) <= 44:
+                return None
+            os.makedirs(_TEMP_DIR, exist_ok=True)
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            suffix = Path(fallback_path).suffix or ".flac"
+            audio_path = os.path.join(_TEMP_DIR, f"recording_{timestamp}{suffix}")
+            shutil.move(fallback_path, audio_path)
+            logger.info("Voice recording stopped via Pulse fallback (saved to %s)", audio_path)
+            return audio_path
 
     def cancel(self) -> bool:
         """Stop recording and discard all captured audio.
