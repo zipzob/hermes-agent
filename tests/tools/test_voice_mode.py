@@ -791,6 +791,32 @@ class TestAudioRecorderCancel:
 
 
 class TestAudioRecorderShutdown:
+    def test_close_exception_retains_stream_and_reports_incomplete_closure(self):
+        stream = MagicMock()
+        stream.close.side_effect = RuntimeError("close failed")
+
+        from tools.voice_mode import AudioRecorder
+
+        recorder = AudioRecorder()
+        recorder._stream = stream
+
+        assert recorder._close_stream_with_timeout(timeout=1) is False
+        assert recorder._stream is stream
+
+    def test_close_exception_can_retry_retained_stream(self):
+        stream = MagicMock()
+        stream.close.side_effect = [RuntimeError("close failed"), None]
+
+        from tools.voice_mode import AudioRecorder
+
+        recorder = AudioRecorder()
+        recorder._stream = stream
+
+        assert recorder._close_stream_with_timeout(timeout=1) is False
+        assert recorder._close_stream_with_timeout(timeout=1) is True
+        assert recorder._stream is None
+        assert stream.close.call_count == 2
+
     def test_close_timeout_reports_incomplete_resource_closure(self):
         import threading
 
@@ -812,6 +838,7 @@ class TestAudioRecorderShutdown:
             closed = recorder._close_stream_with_timeout(timeout=0)
             assert close_entered.wait(timeout=1)
             assert closed is False
+            assert recorder._stream is stream
         finally:
             allow_close.set()
 
