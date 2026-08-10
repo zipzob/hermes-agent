@@ -9,6 +9,14 @@ This is a fork-maintenance artifact. It maps the local overlay onto independentl
 - `origin/main` contains an older lineage. `git cherry main origin/main` identified 23 patch-equivalent remote-only commits. Do **not** merge or cherry-pick those copies into `main`.
 - Two remote copies are non-equivalent: the original recovery bundle and an earlier Hindsight daemon implementation. Extract current behavior from this branch instead.
 
+## 2026-08-10 upstream refresh
+
+- Fetched once and froze `upstream/main` at `3bd844edf1777a680115f88a68474b4fb434092f`. Dated rollback refs preserve the prior integration, `main`, and contribution heads under `backup/*-pre-refresh-20260810-012806`; the external ref manifest is `/home/zip/.hermes/backups/hermes-refresh-20260810-012806/refs.txt`.
+- Reconstructed the integration branch from the refreshed dependency stack: Hindsight and shared local inference first, Parakeet next, then staged dictation and serialized microphone shutdown. The 59 prior overlay commit subjects occur exactly once in the refreshed integration history; no contribution unit was omitted or duplicated.
+- Semantic conflict resolution retained dependency-closure-aware managed installs, sibling-workspace preservation, fresh-bundle build avoidance, WSL Pulse fallback, bounded temporary capture, staged transcript delivery to the editable composer, shared local-inference leasing, and Parakeet service/provider behavior.
+- Independent fail-closed review found that the cross-process microphone lease was released after frame collection stopped but before the persistent PortAudio stream closed. `fix(voice): hold capture lease through stream shutdown` now serializes concrete recorder shutdown before the ownership-release callback; its held-event regression proves release cannot occur while stream shutdown is blocked.
+- Post-fix focused Python verification passes 712 tests, including voice, microphone lease, Parakeet, shared inference, TUI gateway, and managed-install coverage. Ruff, `git diff --check`, TypeScript, focused TUI tests, and the TUI production build pass. The canonical Python runner completed 29,434 tests successfully; 15 of its 17 failures reproduce on the frozen upstream, the gateway wake-owner failure passes in isolation, and the remaining stale delegation assertion was corrected to use the valid two-task batch contract. The full TUI suite's 21 failures reproduce identically on frozen upstream.
+
 ## 2026-08-06 upstream refresh
 
 - Fetched once and froze `upstream/main` at `aaf9688519cca58dd5f76a589a0911aff269b060`; rollback refs preserve `main` and every contribution under `backup/main-pre-refresh-20260806-160000` and `backup/contrib-pre-refresh-20260806-160000/*`.
