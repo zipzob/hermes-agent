@@ -839,6 +839,9 @@ class TestAudioRecorderShutdown:
             assert close_entered.wait(timeout=1)
             assert closed is False
             assert recorder._stream is stream
+            assert recorder._close_stream_with_timeout(timeout=0) is False
+            assert recorder._stream is stream
+            assert stream.close.call_count == 1
         finally:
             allow_close.set()
 
