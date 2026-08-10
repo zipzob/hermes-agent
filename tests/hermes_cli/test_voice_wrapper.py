@@ -429,6 +429,60 @@ class TestContinuousLoopSimulation:
 
         voice.stop_continuous()
 
+    def test_overlapping_stops_notify_only_after_owning_shutdown(
+        self, fake_recorder, monkeypatch
+    ):
+        import threading
+        import time
+
+        import hermes_cli.voice as voice
+
+        first_stop_entered = threading.Event()
+        allow_first_stop = threading.Event()
+        callback_events = []
+        stop_calls = 0
+        original_stop = fake_recorder.stop
+
+        def blocked_first_stop():
+            nonlocal stop_calls
+            stop_calls += 1
+            if stop_calls == 1:
+                first_stop_entered.set()
+                assert allow_first_stop.wait(timeout=2)
+            return original_stop()
+
+        fake_recorder.stop = blocked_first_stop
+        monkeypatch.setattr(
+            voice,
+            "transcribe_recording",
+            lambda _p: {"success": True, "transcript": "hello world"},
+        )
+
+        voice.start_continuous(
+            on_transcript=lambda _text: None,
+            on_capture_stopped=lambda: callback_events.append("capture_stopped"),
+            auto_restart=False,
+        )
+        automatic_stop = threading.Thread(target=fake_recorder.last_callback)
+        automatic_stop.start()
+        assert first_stop_entered.wait(timeout=1)
+
+        explicit_stop = threading.Thread(
+            target=lambda: voice.stop_continuous(force_transcribe=True)
+        )
+        explicit_stop.start()
+        try:
+            time.sleep(0.05)
+            assert callback_events == []
+        finally:
+            allow_first_stop.set()
+            automatic_stop.join(timeout=2)
+            explicit_stop.join(timeout=2)
+
+        assert not automatic_stop.is_alive()
+        assert not explicit_stop.is_alive()
+        assert callback_events == ["capture_stopped"]
+
     def test_cancel_without_transcription_does_not_play_completion_beep(
         self, fake_recorder, monkeypatch
     ):
