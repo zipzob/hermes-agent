@@ -1100,6 +1100,30 @@ class TestPlaybackInterrupt:
         assert recorder._stream == "pulse-fallback"
         assert fallback.exists()
 
+    def test_recorder_stop_retains_pulse_handle_when_forced_wait_times_out(
+        self, tmp_path
+    ):
+        import subprocess
+
+        from tools.voice_mode import AudioRecorder
+
+        fallback = tmp_path / "fallback.flac"
+        fallback.write_bytes(b"recording")
+        proc = MagicMock()
+        proc.wait.side_effect = subprocess.TimeoutExpired("parec", 2)
+        recorder = AudioRecorder()
+        recorder._recording = True
+        recorder._fallback_process = proc
+        recorder._fallback_path = str(fallback)
+        recorder._stream = "pulse-fallback"
+
+        with pytest.raises(subprocess.TimeoutExpired):
+            recorder.stop()
+
+        assert recorder._fallback_process is proc
+        assert recorder._stream == "pulse-fallback"
+        assert fallback.exists()
+
     def test_stop_playback_terminates_process(self):
         from tools.voice_mode import stop_playback, _playback_lock
         import tools.voice_mode as vm

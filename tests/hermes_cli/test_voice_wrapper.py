@@ -504,8 +504,9 @@ class TestContinuousLoopSimulation:
 
         assert capture_stopped == []
 
+    @pytest.mark.parametrize("keep_audio", [False, True])
     def test_pulse_wait_timeout_keeps_capture_lease(
-        self, monkeypatch, tmp_path
+        self, monkeypatch, tmp_path, keep_audio
     ):
         import subprocess
         from unittest.mock import MagicMock
@@ -528,12 +529,13 @@ class TestContinuousLoopSimulation:
         recorder._fallback_process = proc
         recorder._fallback_path = str(fallback)
         recorder._stream = "pulse-fallback"
+        recorder._recording = True
         monkeypatch.setattr(voice, "_continuous_capture_stopped_notified", False)
 
         try:
             voice._shutdown_continuous_capture(
                 recorder,
-                keep_audio=False,
+                keep_audio=keep_audio,
                 on_capture_stopped=owner.release,
             )
             contender = acquire_voice_capture_lease(
