@@ -752,23 +752,26 @@ class TermuxAudioRecorder:
             self._current_rms = 0
         logger.info("Termux voice recording started")
 
-    def _stop_termux_recording(self) -> None:
+    def _stop_termux_recording(self) -> bool:
         mic_cmd = _termux_microphone_command()
         if not mic_cmd:
-            return
-        subprocess.run([mic_cmd, "-q"], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=15, check=False, stdin=subprocess.DEVNULL)
+            return False
+        result = subprocess.run([mic_cmd, "-q"], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=15, check=False, stdin=subprocess.DEVNULL)
+        return result.returncode == 0
 
     def stop(self) -> Optional[str]:
         with self._lock:
             if not self._recording:
                 return None
-            self._recording = False
             path = self._recording_path
-            self._recording_path = None
             started_at = self._start_time
-            self._current_rms = 0
 
-        self._stop_termux_recording()
+        if not self._stop_termux_recording():
+            raise RuntimeError("Termux microphone stop was not confirmed")
+        with self._lock:
+            self._recording = False
+            self._recording_path = None
+            self._current_rms = 0
         if not path or not os.path.isfile(path):
             return None
         if time.monotonic() - started_at < 0.3:
@@ -786,25 +789,29 @@ class TermuxAudioRecorder:
         logger.info("Termux voice recording stopped: %s", path)
         return path
 
-    def cancel(self) -> None:
+    def cancel(self) -> bool:
         with self._lock:
             path = self._recording_path
+        try:
+            if not self._stop_termux_recording():
+                return False
+        except Exception as exc:
+            logger.warning("Termux microphone termination not confirmed: %s", exc)
+            return False
+        with self._lock:
             self._recording = False
             self._recording_path = None
             self._current_rms = 0
-        try:
-            self._stop_termux_recording()
-        except Exception:
-            pass
         if path and os.path.isfile(path):
             try:
                 os.unlink(path)
             except OSError:
                 pass
         logger.info("Termux voice recording cancelled")
+        return True
 
-    def shutdown(self) -> None:
-        self.cancel()
+    def shutdown(self) -> bool:
+        return self.cancel()
 
 
 # ============================================================================

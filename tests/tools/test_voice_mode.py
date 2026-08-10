@@ -396,6 +396,37 @@ class TestTermuxAudioRecorder:
         assert output_path.exists() is False
         assert recorder.is_recording is False
 
+    def test_shutdown_retains_termux_state_when_stop_is_not_confirmed(
+        self, monkeypatch, temp_voice_dir
+    ):
+        output_path = Path(temp_voice_dir) / "recording_20260409_120000.aac"
+
+        def fake_run(cmd, **kwargs):
+            if cmd[1] == "-f":
+                Path(cmd[2]).write_bytes(b"aac-bytes")
+                return MagicMock(returncode=0, stdout="", stderr="")
+            return MagicMock(returncode=1, stdout="", stderr="stop failed")
+
+        monkeypatch.setattr(
+            "tools.voice_mode._termux_microphone_command",
+            lambda: "/data/data/com.termux/files/usr/bin/termux-microphone-record",
+        )
+        monkeypatch.setattr("tools.voice_mode._termux_api_app_installed", lambda: True)
+        monkeypatch.setattr(
+            "tools.voice_mode.time.strftime", lambda _fmt: "20260409_120000"
+        )
+        monkeypatch.setattr("tools.voice_mode.subprocess.run", fake_run)
+
+        from tools.voice_mode import TermuxAudioRecorder
+
+        recorder = TermuxAudioRecorder()
+        recorder.start()
+
+        assert recorder.shutdown() is False
+        assert recorder.is_recording is True
+        assert recorder._recording_path == str(output_path)
+        assert output_path.exists()
+
 
 class TestAudioRecorder:
     def test_pulse_fallback_is_bounded_lossless_16khz_mono_flac(
