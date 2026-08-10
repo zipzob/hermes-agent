@@ -398,20 +398,30 @@ class TestContinuousLoopSimulation:
         voice.stop_continuous()
 
     def test_capture_stopped_callback_waits_for_stream_shutdown(
-        self, fake_recorder, monkeypatch
+        self, fake_recorder, monkeypatch, tmp_path
     ):
         import threading
 
         import hermes_cli.voice as voice
+        from tools.voice_capture_lease import acquire_voice_capture_lease
 
         shutdown_entered = threading.Event()
         allow_shutdown = threading.Event()
         capture_stopped = threading.Event()
+        lock_path = tmp_path / "voice-capture.lock"
+        owning_lease = acquire_voice_capture_lease(
+            "record", session_id="first", lock_path=lock_path
+        )
+        assert owning_lease is not None
 
         def blocked_shutdown():
             shutdown_entered.set()
             assert allow_shutdown.wait(timeout=2)
             fake_recorder.shutdowns += 1
+
+        def release_capture():
+            owning_lease.release()
+            capture_stopped.set()
 
         fake_recorder.shutdown = blocked_shutdown
         monkeypatch.setattr(
@@ -421,7 +431,7 @@ class TestContinuousLoopSimulation:
         )
         voice.start_continuous(
             on_transcript=lambda _text: None,
-            on_capture_stopped=capture_stopped.set,
+            on_capture_stopped=release_capture,
             auto_restart=False,
         )
 
@@ -430,6 +440,9 @@ class TestContinuousLoopSimulation:
         try:
             assert shutdown_entered.wait(timeout=1)
             assert capture_stopped.is_set() is False
+            assert acquire_voice_capture_lease(
+                "full_duplex", session_id="second", lock_path=lock_path
+            ) is None
         finally:
             allow_shutdown.set()
             stop_thread.join(timeout=2)
@@ -437,6 +450,11 @@ class TestContinuousLoopSimulation:
         assert not stop_thread.is_alive()
         assert fake_recorder.shutdowns == 1
         assert capture_stopped.is_set() is True
+        contender = acquire_voice_capture_lease(
+            "full_duplex", session_id="second", lock_path=lock_path
+        )
+        assert contender is not None
+        contender.release()
 
     def test_capture_stopped_callback_is_not_released_when_shutdown_fails(
         self, fake_recorder, monkeypatch
