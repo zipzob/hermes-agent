@@ -608,29 +608,53 @@ def stop_continuous(force_transcribe: bool = False) -> None:
     global _continuous_on_cutoff
     global _continuous_on_stop_phrase
     global _continuous_recorder, _continuous_no_speech_count
+    global _continuous_capture_stopped_notified
 
+    retry_pending_shutdown = False
     with _continuous_lock:
         if not _continuous_active:
-            return
-        _continuous_active = False
-        rec = _continuous_recorder
-        on_status = _continuous_on_status
-        on_capture_stopped = _continuous_on_capture_stopped
-        on_transcript = _continuous_on_transcript
-        on_silent_limit = _continuous_on_silent_limit
-        on_stop_phrase = _continuous_on_stop_phrase
-        auto_restart = _continuous_auto_restart
-        track_no_speech = force_transcribe and not auto_restart
-        _continuous_stopping = rec is not None
-        _continuous_on_transcript = None
-        _continuous_on_status = None
-        _continuous_on_capture_stopped = None
-        _continuous_on_silence_progress = None
-        _continuous_on_cutoff = None
-        _continuous_on_silent_limit = None
-        _continuous_on_stop_phrase = None
-        if not track_no_speech:
-            _continuous_no_speech_count = 0
+            if not _continuous_stopping or _continuous_recorder is None:
+                return
+            retry_pending_shutdown = True
+            rec = _continuous_recorder
+            on_capture_stopped = _continuous_on_capture_stopped
+            on_status = None
+            on_transcript = None
+            on_silent_limit = None
+            on_stop_phrase = None
+            auto_restart = False
+            track_no_speech = False
+        else:
+            _continuous_active = False
+            rec = _continuous_recorder
+            on_status = _continuous_on_status
+            on_capture_stopped = _continuous_on_capture_stopped
+            on_transcript = _continuous_on_transcript
+            on_silent_limit = _continuous_on_silent_limit
+            on_stop_phrase = _continuous_on_stop_phrase
+            auto_restart = _continuous_auto_restart
+            track_no_speech = force_transcribe and not auto_restart
+            _continuous_stopping = rec is not None
+            _continuous_on_transcript = None
+            _continuous_on_status = None
+            _continuous_on_silence_progress = None
+            _continuous_on_cutoff = None
+            _continuous_on_silent_limit = None
+            _continuous_on_stop_phrase = None
+            if not track_no_speech:
+                _continuous_no_speech_count = 0
+
+    if retry_pending_shutdown:
+        _shutdown_continuous_capture(
+            rec,
+            keep_audio=False,
+            on_capture_stopped=on_capture_stopped,
+        )
+        with _continuous_lock:
+            if _continuous_capture_stopped_notified:
+                _continuous_stopping = False
+                _continuous_on_capture_stopped = None
+        return
 
     if rec is not None:
         if force_transcribe and on_transcript:
@@ -720,8 +744,11 @@ def stop_continuous(force_transcribe: bool = False) -> None:
                     if transcript:
                         _play_beep(frequency=660, count=2)
                     with _continuous_lock:
-                        _continuous_stopping = False
-                    if on_status:
+                        shutdown_complete = _continuous_capture_stopped_notified
+                        if shutdown_complete:
+                            _continuous_stopping = False
+                            _continuous_on_capture_stopped = None
+                    if on_status and shutdown_complete:
                         try:
                             on_status("idle")
                         except Exception:
@@ -739,9 +766,12 @@ def stop_continuous(force_transcribe: bool = False) -> None:
             )
 
     with _continuous_lock:
-        _continuous_stopping = False
+        shutdown_complete = _continuous_capture_stopped_notified
+        if shutdown_complete:
+            _continuous_stopping = False
+            _continuous_on_capture_stopped = None
 
-    if on_status:
+    if on_status and shutdown_complete:
         try:
             on_status("idle")
         except Exception:

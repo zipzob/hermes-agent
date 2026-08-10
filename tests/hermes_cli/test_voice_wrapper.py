@@ -548,6 +548,89 @@ class TestContinuousLoopSimulation:
 
         assert capture_stopped == []
 
+    def test_second_public_stop_retries_failed_shutdown(
+        self, fake_recorder
+    ):
+        import hermes_cli.voice as voice
+
+        shutdown_results = iter([False, True])
+
+        def retrying_shutdown():
+            fake_recorder.shutdowns += 1
+            return next(shutdown_results)
+
+        fake_recorder.shutdown = retrying_shutdown
+        capture_stopped = []
+        voice.start_continuous(
+            on_transcript=lambda _text: None,
+            on_capture_stopped=lambda: capture_stopped.append(True),
+            auto_restart=False,
+        )
+
+        voice.stop_continuous()
+
+        assert capture_stopped == []
+        assert voice._continuous_stopping is True
+        assert voice.start_continuous(on_transcript=lambda _text: None) is False
+
+        voice.stop_continuous()
+
+        assert fake_recorder.shutdowns == 2
+        assert capture_stopped == [True]
+        assert voice._continuous_stopping is False
+
+    def test_second_public_stop_retries_pulse_termination(
+        self, fake_recorder, monkeypatch, tmp_path
+    ):
+        import subprocess
+        from unittest.mock import MagicMock
+
+        import hermes_cli.voice as voice
+        from tools.voice_capture_lease import acquire_voice_capture_lease
+        from tools.voice_mode import AudioRecorder
+
+        lock_path = tmp_path / "voice-capture.lock"
+        owner = acquire_voice_capture_lease(
+            "full_duplex", session_id="first", lock_path=lock_path
+        )
+        assert owner is not None
+
+        fallback = tmp_path / "fallback.flac"
+        fallback.write_bytes(b"recording")
+        timeout = subprocess.TimeoutExpired("parec", 2)
+        proc = MagicMock()
+        proc.wait.side_effect = [timeout, timeout, 0]
+        recorder = AudioRecorder()
+        recorder._recording = True
+        recorder._fallback_process = proc
+        recorder._fallback_path = str(fallback)
+        recorder._stream = "pulse-fallback"
+        monkeypatch.setattr(voice, "_continuous_recorder", recorder)
+        monkeypatch.setattr(voice, "_continuous_active", True)
+        monkeypatch.setattr(voice, "_continuous_auto_restart", False)
+        monkeypatch.setattr(voice, "_continuous_on_capture_stopped", owner.release)
+        monkeypatch.setattr(voice, "_continuous_capture_stopped_notified", False)
+
+        try:
+            voice.stop_continuous()
+            assert voice._continuous_stopping is True
+            assert acquire_voice_capture_lease(
+                "full_duplex", session_id="second", lock_path=lock_path
+            ) is None
+
+            voice.stop_continuous()
+
+            assert proc.wait.call_count == 3
+            assert voice._continuous_stopping is False
+            assert recorder._fallback_process is None
+            contender = acquire_voice_capture_lease(
+                "full_duplex", session_id="second", lock_path=lock_path
+            )
+            assert contender is not None
+            contender.release()
+        finally:
+            owner.release()
+
     @pytest.mark.parametrize("keep_audio", [False, True])
     def test_pulse_wait_timeout_keeps_capture_lease(
         self, monkeypatch, tmp_path, keep_audio
