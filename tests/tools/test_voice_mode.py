@@ -542,10 +542,12 @@ class TestTermuxAudioRecorder:
         recorder.start()
         recorder._start_time = time.monotonic() - 1.0
         result = recorder.stop()
+        assert recorder.shutdown() is True
 
         assert result == str(output_path)
         assert command_calls[0][:2] == ["/data/data/com.termux/files/usr/bin/termux-microphone-record", "-f"]
         assert command_calls[1] == ["/data/data/com.termux/files/usr/bin/termux-microphone-record", "-q"]
+        assert len(command_calls) == 2
 
     def test_cancel_removes_partial_termux_recording(self, monkeypatch, temp_voice_dir):
         output_path = Path(temp_voice_dir) / "recording_20260409_120000.aac"
