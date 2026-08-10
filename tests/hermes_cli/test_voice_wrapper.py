@@ -592,6 +592,43 @@ class TestContinuousLoopSimulation:
         finally:
             owner.release()
 
+    def test_termux_stop_failure_keeps_capture_lease(
+        self, monkeypatch, tmp_path
+    ):
+        import hermes_cli.voice as voice
+        from tools.voice_capture_lease import acquire_voice_capture_lease
+        from tools.voice_mode import TermuxAudioRecorder
+
+        lock_path = tmp_path / "voice-capture.lock"
+        owner = acquire_voice_capture_lease(
+            "full_duplex", session_id="first", lock_path=lock_path
+        )
+        assert owner is not None
+
+        fallback = tmp_path / "recording.aac"
+        fallback.write_bytes(b"recording")
+        recorder = TermuxAudioRecorder()
+        recorder._recording = True
+        recorder._recording_path = str(fallback)
+        monkeypatch.setattr(recorder, "_stop_termux_recording", lambda: False)
+        monkeypatch.setattr(voice, "_continuous_capture_stopped_notified", False)
+
+        try:
+            voice._shutdown_continuous_capture(
+                recorder,
+                keep_audio=True,
+                on_capture_stopped=owner.release,
+            )
+            contender = acquire_voice_capture_lease(
+                "full_duplex", session_id="second", lock_path=lock_path
+            )
+            assert contender is None
+            assert recorder.is_recording is True
+            assert recorder._recording_path == str(fallback)
+            assert fallback.exists()
+        finally:
+            owner.release()
+
     def test_overlapping_stops_notify_only_after_owning_shutdown(
         self, fake_recorder, monkeypatch
     ):
