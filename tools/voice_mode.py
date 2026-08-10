@@ -1247,21 +1247,35 @@ class AudioRecorder:
 
     def _close_stream_with_timeout(self, timeout: float = 3.0) -> bool:
         """Close the stream, returning whether concrete closure completed."""
-        if self._stream is None:
-            return True
+        start_worker = False
+        with self._lock:
+            if self._stream is None:
+                return True
+            stream = self._stream
+            t = getattr(self, "_stream_close_thread", None)
+            if t is None or not t.is_alive():
+                def _do_close():
+                    succeeded = True
+                    try:
+                        stream.stop()
+                    except Exception as exc:
+                        logger.warning("Audio stream stop failed: %s", exc)
+                        succeeded = False
+                    try:
+                        stream.close()
+                    except Exception as exc:
+                        logger.warning("Audio stream close failed: %s", exc)
+                        succeeded = False
+                    if succeeded:
+                        with self._lock:
+                            if self._stream is stream:
+                                self._stream = None
 
-        stream = self._stream
-        self._stream = None
-
-        def _do_close():
-            try:
-                stream.stop()
-                stream.close()
-            except Exception:
-                pass
-
-        t = threading.Thread(target=_do_close, daemon=True)
-        t.start()
+                t = threading.Thread(target=_do_close, daemon=True)
+                self._stream_close_thread = t
+                start_worker = True
+        if start_worker:
+            t.start()
         # Poll in short intervals so Ctrl+C is not blocked
         deadline = __import__("time").monotonic() + timeout
         while t.is_alive() and __import__("time").monotonic() < deadline:
@@ -1269,7 +1283,8 @@ class AudioRecorder:
         if t.is_alive():
             logger.warning("Audio stream close timed out after %.1fs — forcing ahead", timeout)
             return False
-        return True
+        with self._lock:
+            return self._stream is not stream
 
     def stop(self) -> Optional[str]:
         """Stop recording and return captured WAV or fallback FLAC audio."""

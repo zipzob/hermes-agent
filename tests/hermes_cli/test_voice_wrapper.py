@@ -585,6 +585,41 @@ class TestContinuousLoopSimulation:
         finally:
             owner.release()
 
+    def test_portaudio_close_failure_keeps_capture_lease(
+        self, monkeypatch, tmp_path
+    ):
+        from unittest.mock import MagicMock
+
+        import hermes_cli.voice as voice
+        from tools.voice_capture_lease import acquire_voice_capture_lease
+        from tools.voice_mode import AudioRecorder
+
+        lock_path = tmp_path / "voice-capture.lock"
+        owner = acquire_voice_capture_lease(
+            "full_duplex", session_id="first", lock_path=lock_path
+        )
+        assert owner is not None
+
+        stream = MagicMock()
+        stream.close.side_effect = RuntimeError("close failed")
+        recorder = AudioRecorder()
+        recorder._stream = stream
+        monkeypatch.setattr(voice, "_continuous_capture_stopped_notified", False)
+
+        try:
+            voice._shutdown_continuous_capture(
+                recorder,
+                keep_audio=False,
+                on_capture_stopped=owner.release,
+            )
+            contender = acquire_voice_capture_lease(
+                "full_duplex", session_id="second", lock_path=lock_path
+            )
+            assert contender is None
+            assert recorder._stream is stream
+        finally:
+            owner.release()
+
     def test_overlapping_stops_notify_only_after_owning_shutdown(
         self, fake_recorder, monkeypatch
     ):
