@@ -1236,10 +1236,10 @@ class AudioRecorder:
             self._recording = True
         logger.info("Voice recording started (rate=%d, channels=%d)", self._sample_rate, CHANNELS)
 
-    def _close_stream_with_timeout(self, timeout: float = 3.0) -> None:
-        """Close the audio stream with a timeout to prevent CoreAudio hangs."""
+    def _close_stream_with_timeout(self, timeout: float = 3.0) -> bool:
+        """Close the stream, returning whether concrete closure completed."""
         if self._stream is None:
-            return
+            return True
 
         stream = self._stream
         self._stream = None
@@ -1259,6 +1259,8 @@ class AudioRecorder:
             t.join(timeout=0.1)
         if t.is_alive():
             logger.warning("Audio stream close timed out after %.1fs — forcing ahead", timeout)
+            return False
+        return True
 
     def stop(self) -> Optional[str]:
         """Stop recording and return captured WAV or fallback FLAC audio."""
@@ -1360,14 +1362,16 @@ class AudioRecorder:
                 pass
         logger.info("Voice recording cancelled")
 
-    def shutdown(self) -> None:
+    def shutdown(self) -> bool:
         """Release audio resources and terminate any Pulse fallback recorder."""
         self.cancel()
         if self._stream == "pulse-fallback":
             self._stream = None
         # Close stream OUTSIDE the lock to avoid deadlock with audio callback
-        self._close_stream_with_timeout()
-        logger.info("AudioRecorder shut down")
+        closed = self._close_stream_with_timeout()
+        if closed:
+            logger.info("AudioRecorder shut down")
+        return closed
 
     # -- private helpers -----------------------------------------------------
 

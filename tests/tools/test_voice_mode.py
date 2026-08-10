@@ -582,6 +582,32 @@ class TestAudioRecorderCancel:
         mock_stream.stop.assert_not_called()
         mock_stream.close.assert_not_called()
 
+
+class TestAudioRecorderShutdown:
+    def test_close_timeout_reports_incomplete_resource_closure(self):
+        import threading
+
+        close_entered = threading.Event()
+        allow_close = threading.Event()
+        stream = MagicMock()
+
+        def blocked_close():
+            close_entered.set()
+            assert allow_close.wait(timeout=2)
+
+        stream.close.side_effect = blocked_close
+
+        from tools.voice_mode import AudioRecorder
+
+        recorder = AudioRecorder()
+        recorder._stream = stream
+        try:
+            closed = recorder._close_stream_with_timeout(timeout=0)
+            assert close_entered.wait(timeout=1)
+            assert closed is False
+        finally:
+            allow_close.set()
+
 # ============================================================================
 # transcribe_recording
 # ============================================================================

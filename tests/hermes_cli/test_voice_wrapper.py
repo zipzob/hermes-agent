@@ -482,6 +482,28 @@ class TestContinuousLoopSimulation:
 
         assert capture_stopped == []
 
+    def test_capture_stopped_callback_is_not_released_when_shutdown_times_out(
+        self, fake_recorder, monkeypatch
+    ):
+        import hermes_cli.voice as voice
+
+        fake_recorder.shutdown = lambda: False
+        capture_stopped = []
+        monkeypatch.setattr(
+            voice,
+            "transcribe_recording",
+            lambda _p: {"success": True, "transcript": "hello world"},
+        )
+        voice.start_continuous(
+            on_transcript=lambda _text: None,
+            on_capture_stopped=lambda: capture_stopped.append(True),
+            auto_restart=False,
+        )
+
+        fake_recorder.last_callback()
+
+        assert capture_stopped == []
+
     def test_overlapping_stops_notify_only_after_owning_shutdown(
         self, fake_recorder, monkeypatch
     ):
