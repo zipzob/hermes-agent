@@ -657,7 +657,9 @@ export function useMainApp(gw: GatewayClient) {
   // background thread. Poll only when that item exists, then patch only on a
   // value change so idle quota updates appear without repaint flicker.
   useEffect(() => {
-    if (!ui.sid || !ui.usage.governor_status) return
+    if (!ui.sid || !ui.usage.governor_status) {
+      return
+    }
 
     let stopped = false
     const refresh = () => {
