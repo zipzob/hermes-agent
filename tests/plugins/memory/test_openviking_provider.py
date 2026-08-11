@@ -462,9 +462,14 @@ def test_local_openviking_port_is_open_detects_listener_and_closed_port():
         listener.listen(1)
         _host, port = listener.getsockname()
         assert openviking_module._local_openviking_port_is_open("127.0.0.1", port) is True
+        connection, _address = listener.accept()
+        connection.close()
 
-    # Socket closed: the same port no longer accepts connections.
-    assert openviking_module._local_openviking_port_is_open("127.0.0.1", port) is False
+    # Socket closure can take a scheduler tick to become visible.
+    deadline = time.monotonic() + 1.0
+    while openviking_module._local_openviking_port_is_open("127.0.0.1", port):
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
 
 
 def test_describe_local_port_listener_reports_process(monkeypatch):

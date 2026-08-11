@@ -320,7 +320,11 @@ async def test_missing_or_invalid_secondary_mode_falls_back_to_gateway_default(
     assert runner._busy_text_mode == "queue"
 
 
-def test_profile_route_and_nonmultiplexed_resolution_preserve_boundaries():
+def test_profile_route_and_nonmultiplexed_resolution_preserve_boundaries(monkeypatch):
+    monkeypatch.setattr(
+        "gateway.run._multiplex_profile_homes",
+        lambda _config: [("research", None)],
+    )
     runner = _runner(default_mode="interrupt")
     runner._snapshot_profile_busy_modes(
         "research",
