@@ -4246,7 +4246,10 @@ def _resume_status_from_events(conn: sqlite3.Connection, task_id: str) -> str:
 def recompute_ready(
     conn: sqlite3.Connection, failure_limit: int = None,
 ) -> int:
-    """Promote ``todo`` tasks to ``ready`` when all parents are ``done`` or ``archived``.
+    """Promote dependency-gated ``todo`` tasks when all parents are complete.
+
+    Parent-free ``todo`` tasks are accepted backlog items and stay in Todo
+    until an operator explicitly promotes them.
 
     Returns the number of tasks promoted.  Opens its own IMMEDIATE txn, so it
     MUST be called OUTSIDE any open write transaction (plain ``write_txn``
@@ -4298,6 +4301,8 @@ def recompute_ready(
                 "WHERE l.child_id = ?",
                 (task_id,),
             ).fetchall()
+            if not parents and cur_status == "todo":
+                continue
             if all(p["status"] in ("done", "archived") for p in parents):
                 resume_status = _resume_status_from_events(conn, task_id)
                 if cur_status == "blocked":
@@ -7209,10 +7214,27 @@ def delete_task(conn: sqlite3.Connection, task_id: str) -> bool:
     if the task was not found.
     """
     with write_txn(conn):
+        child_ids = [
+            row["child_id"]
+            for row in conn.execute(
+                "SELECT child_id FROM task_links WHERE parent_id = ?",
+                (task_id,),
+            ).fetchall()
+        ]
         cur = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         if cur.rowcount != 1:
             return False
         conn.execute("DELETE FROM task_links WHERE parent_id = ? OR child_id = ?", (task_id, task_id))
+        for child_id in child_ids:
+            if conn.execute(
+                "SELECT 1 FROM task_links WHERE child_id = ? LIMIT 1",
+                (child_id,),
+            ).fetchone() is None:
+                conn.execute(
+                    "UPDATE tasks SET status = 'ready' WHERE id = ? AND status = 'todo'",
+                    (child_id,),
+                )
+                _append_event(conn, child_id, "promoted", {"reason": "parent_deleted"})
         conn.execute("DELETE FROM task_comments WHERE task_id = ?", (task_id,))
         conn.execute("DELETE FROM task_events WHERE task_id = ?", (task_id,))
         conn.execute("DELETE FROM task_runs WHERE task_id = ?", (task_id,))
