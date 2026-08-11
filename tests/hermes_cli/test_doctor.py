@@ -1284,9 +1284,13 @@ class TestDoctorStaleMaxIterationsDrift:
             env_lines.append(f"HERMES_MAX_ITERATIONS={ghost}\n")
         (hermes_home / ".env").write_text("".join(env_lines), encoding="utf-8")
 
+        project = tmp_path / "project"
+        project.mkdir()
         monkeypatch.setattr(doctor_mod, "HERMES_HOME", hermes_home)
         monkeypatch.setattr(doctor_mod, "get_hermes_home", lambda: hermes_home)
-        # Point the config helpers at the temp home.
+        monkeypatch.setattr(doctor_mod, "PROJECT_ROOT", project)
+        monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
+        # Point config and command-install checks at the temp home.
         monkeypatch.setenv("HERMES_HOME", str(hermes_home))
         if os_environ_value is not None:
             # Simulate the gateway bridge having already overridden os.environ.
