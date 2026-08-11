@@ -32,37 +32,6 @@ def _assert_utf8_replace_capture(kwargs: dict) -> None:
     assert kwargs["errors"] == "replace"
 
 
-
-
-
-
-
-
-def test_no_install_when_scoped_workspace_omits_unrelated_workspace(tmp_path: Path, main_mod) -> None:
-    tui_dir = tmp_path / "ui-tui"
-    tui_dir.mkdir()
-    (tui_dir / "package.json").write_text("{}")
-    _touch_ink(tmp_path)
-    (tmp_path / "package-lock.json").write_text(
-        '{"packages":{"apps/desktop":{"version":"1.0.0"},"ui-tui":{"version":"1.0.0"},"node_modules/foo":{"version":"1.0.0"}}}'
-    )
-    (tmp_path / "node_modules" / ".package-lock.json").write_text(
-        '{"packages":{"ui-tui":{"version":"1.0.0"},"node_modules/foo":{"version":"1.0.0"}}}'
-    )
-    assert main_mod._tui_need_npm_install(tui_dir) is False
-
-
-def test_no_install_when_only_optional_peer_package_missing_from_hidden_lock(tmp_path: Path, main_mod) -> None:
-    _touch_ink(tmp_path)
-    (tmp_path / "package-lock.json").write_text(
-        '{"packages":{"node_modules/foo":{"version":"1.0.0"},"node_modules/optional":{"version":"1.0.0","optional":true,"peer":true}}}'
-    )
-    (tmp_path / "node_modules" / ".package-lock.json").write_text(
-        '{"packages":{"node_modules/foo":{"version":"1.0.0"}}}'
-    )
-    assert main_mod._tui_need_npm_install(tmp_path) is False
-
-
 def test_no_install_when_scoped_workspace_omits_unrelated_workspace(tmp_path: Path, main_mod) -> None:
     tui_dir = tmp_path / "ui-tui"
     tui_dir.mkdir()
