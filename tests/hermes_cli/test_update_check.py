@@ -13,31 +13,60 @@ import pytest
 
 
 def test_check_for_updates_uses_cache(tmp_path, monkeypatch):
-    """When cache is fresh, check_for_updates should return cached value without calling git."""
-    from hermes_cli.banner import check_for_updates
-    from hermes_cli import __version__
+    """A cache for the current checkout returns without fetching remotes."""
+    import hermes_cli.banner as banner
 
-    # Create a fake git repo and fresh cache
     repo_dir = tmp_path / "hermes-agent"
     repo_dir.mkdir()
     (repo_dir / ".git").mkdir()
-
     cache_file = tmp_path / ".update_check"
     cache_file.write_text(
-        json.dumps({"ts": time.time(), "behind": 3, "ver": __version__}),
+        json.dumps(
+            {
+                "ts": time.time(),
+                "behind": 3,
+                "ver": banner.VERSION,
+                "head": "current-head",
+            }
+        ),
         encoding="utf-8",
     )
-
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    with patch("hermes_cli.banner.subprocess.run") as mock_run:
-        result = check_for_updates()
+    monkeypatch.setattr("hermes_cli.config.detect_install_method", lambda _root: "git")
+    monkeypatch.setattr(banner, "_resolve_repo_dir", lambda: repo_dir)
+    monkeypatch.setattr(banner, "_git_stdout", lambda *_args, **_kwargs: "current-head")
 
-    assert result == 3
-    mock_run.assert_not_called()
+    with patch.object(banner, "_check_via_local_git") as check:
+        assert banner.check_for_updates() == 3
+    check.assert_not_called()
 
 
+def test_check_for_updates_invalidates_cache_after_rebase(tmp_path, monkeypatch):
+    """A fresh cache for a previous HEAD cannot survive a fork rebase."""
+    import hermes_cli.banner as banner
 
+    repo_dir = tmp_path / "hermes-agent"
+    repo_dir.mkdir()
+    (repo_dir / ".git").mkdir()
+    cache_file = tmp_path / ".update_check"
+    cache_file.write_text(
+        json.dumps(
+            {
+                "ts": time.time(),
+                "behind": 69,
+                "ver": banner.VERSION,
+                "head": "old-head",
+            }
+        )
+    )
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr("hermes_cli.config.detect_install_method", lambda _root: "git")
+    monkeypatch.setattr(banner, "_resolve_repo_dir", lambda: repo_dir)
+    monkeypatch.setattr(banner, "_git_stdout", lambda *_args, **_kwargs: "new-head")
+    monkeypatch.setattr(banner, "_check_via_local_git", lambda _repo: 0)
 
+    assert banner.check_for_updates() == 0
+    assert json.loads(cache_file.read_text())["head"] == "new-head"
 
 
 def test_prefetch_non_blocking():
