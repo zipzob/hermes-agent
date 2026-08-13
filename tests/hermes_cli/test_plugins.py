@@ -47,6 +47,15 @@ def test_portable_skill_namespace_is_ascii_safe():
     assert is_valid_namespace(namespace)
 
 
+def test_plugin_status_items_are_bounded_and_fail_open():
+    manager = PluginManager()
+    context = PluginContext(PluginManifest(name="status-plugin"), manager)
+    context.register_status_item("ok", lambda: "x" * 50)
+    context.register_status_item("broken", lambda: 1 / 0)
+
+    assert manager.status_items() == ["x" * 40]
+
+
 def _make_plugin_dir(base: Path, name: str, *, register_body: str = "pass",
                      manifest_extra: dict | None = None,
                      auto_enable: bool = True,

@@ -6013,6 +6013,8 @@ class PluginManager:
                 len(text),
             )
         return rendered
+
+    def status_items(self) -> List[str]:
         """Return bounded plugin status text; one broken item cannot break the TUI."""
         items: List[str] = []
         for callback in self._status_items.values():
