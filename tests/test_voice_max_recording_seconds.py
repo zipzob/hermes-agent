@@ -17,7 +17,7 @@ def test_default_voice_policy_uses_visible_silence_stop_with_five_minute_cap():
     voice = DEFAULT_CONFIG["voice"]
 
     assert voice["recording_mode"] == "silence"
-    assert voice["silence_duration"] == 5.0
+    assert voice["silence_duration"] == 3.0
     assert voice["max_recording_seconds"] == 300
     assert voice["thinking_sound"] is False
 
