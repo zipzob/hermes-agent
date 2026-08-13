@@ -2032,8 +2032,10 @@ DEFAULT_CONFIG = {
 
     "voice": {
         "record_key": "ctrl+b",
-        "submit_mode": "direct",       # TUI: direct submits immediately; draft leaves an editable transcript
-        "max_recording_seconds": 120,
+        "submit_mode": "direct",       # Legacy transcript fallback for older TUI clients
+        "input_mode": "submit",         # "submit" = immediate turn; "dictation" = append to composer draft
+        "recording_mode": "silence",    # "silence" = VAD auto-stop; "manual" = record key stops
+        "max_recording_seconds": 300,
         "auto_tts": False,
         # Desktop remote clients call the profile's STT/TTS providers
         # DIRECTLY (config + key fetched over the authenticated REST channel

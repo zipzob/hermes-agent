@@ -1013,6 +1013,12 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
           return
         }
 
+        if ((ev.payload as { delivery?: string } | undefined)?.delivery === 'draft') {
+          setInput(current => [current.trimEnd(), text].filter(Boolean).join('\n\n'))
+
+          return
+        }
+
         void getFullConfigOnce().then(cfg => {
           const submitMode = normalizeVoiceSubmitMode(cfg?.config?.voice?.submit_mode)
 
