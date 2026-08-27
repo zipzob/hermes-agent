@@ -1836,7 +1836,7 @@ def test_voice_toggle_on_rejects_unavailable_requirements(monkeypatch):
     )
     monkeypatch.setenv("HERMES_VOICE", "0")
 
-    response = server.dispatch(
+    response = _dispatch_sync(
         {"id": "voice-on-unavailable", "method": "voice.toggle", "params": {"action": "on"}}
     )
 
@@ -1861,7 +1861,7 @@ def test_voice_status_reports_effective_recording_policy(monkeypatch):
     ):
         monkeypatch.setattr(server, "_load_cfg", lambda c=cfg: {"voice": c})
 
-        response = server.dispatch(
+        response = _dispatch_sync(
             {
                 "id": "voice-status-policy",
                 "method": "voice.toggle",
@@ -1928,7 +1928,7 @@ def test_voice_toggle_off_stops_active_thinking_sound(monkeypatch):
     )
     monkeypatch.setenv("HERMES_VOICE", "1")
 
-    response = server.dispatch(
+    response = _dispatch_sync(
         {"id": "voice-off-stop-sound", "method": "voice.toggle", "params": {"action": "off"}}
     )
 
@@ -2550,7 +2550,7 @@ def test_voice_record_start_defaults_to_silence_and_reports_recording_contract(m
     monkeypatch.setattr(server, "_voice_emit", lambda event, payload: emitted.append((event, payload)))
     monkeypatch.setattr(server.time, "time", lambda: 123.5)
 
-    response = server.dispatch(
+    response = _dispatch_sync(
         {
             "id": "voice-record-manual-default",
             "method": "voice.record",
@@ -2637,7 +2637,7 @@ def test_voice_record_start_refuses_second_microphone_owner(monkeypatch):
         ),
     )
 
-    response = server.dispatch(
+    response = _dispatch_sync(
         {"id": "voice-record-owned", "method": "voice.record", "params": {"action": "start"}}
     )
 
@@ -2666,7 +2666,7 @@ def test_voice_record_start_refuses_cross_process_microphone_owner(monkeypatch):
         ),
     )
 
-    response = server.dispatch(
+    response = _dispatch_sync(
         {
             "id": "voice-record-cross-process-owned",
             "method": "voice.record",
@@ -2709,7 +2709,7 @@ def test_voice_record_dictation_mode_emits_draft_transcript(monkeypatch):
         lambda event, payload: emitted.append((event, payload)),
     )
 
-    response = server.dispatch(
+    response = _dispatch_sync(
         {
             "id": "voice-record-dictation",
             "method": "voice.record",
@@ -2843,7 +2843,7 @@ def test_voice_toggle_persists_dictation_input_mode(monkeypatch):
         lambda key, value: writes.append((key, value)),
     )
 
-    response = server.dispatch(
+    response = _dispatch_sync(
         {
             "id": "voice-dictation-on",
             "method": "voice.toggle",
@@ -2863,7 +2863,7 @@ def test_voice_toggle_configures_or_disables_silence_endpoint(monkeypatch):
         lambda key, value: writes.append((key, value)),
     )
 
-    enabled = server.dispatch(
+    enabled = _dispatch_sync(
         {
             "id": "voice-silence-60",
             "method": "voice.toggle",
@@ -2880,7 +2880,7 @@ def test_voice_toggle_configures_or_disables_silence_endpoint(monkeypatch):
     ]
 
     writes.clear()
-    disabled = server.dispatch(
+    disabled = _dispatch_sync(
         {
             "id": "voice-silence-off",
             "method": "voice.toggle",
@@ -2891,7 +2891,7 @@ def test_voice_toggle_configures_or_disables_silence_endpoint(monkeypatch):
     assert writes == [("voice.recording_mode", "manual")]
 
     writes.clear()
-    invalid = server.dispatch(
+    invalid = _dispatch_sync(
         {
             "id": "voice-silence-invalid",
             "method": "voice.toggle",
