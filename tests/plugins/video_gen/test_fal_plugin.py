@@ -535,7 +535,7 @@ class TestUpscalePass:
         monkeypatch.setitem(sys.modules, "fal_client", fake)
 
         from plugins.video_gen import fal as fal_plugin
-        fal_plugin._fal_client = None
+        fal_plugin._fal_client = fake
         fal_plugin._managed_fal_video_client = None
         fal_plugin._managed_fal_video_client_config = None
 
