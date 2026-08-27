@@ -17446,6 +17446,9 @@ def _full_duplex_listener() -> None:
         try:
             _emit_capture_status("transcribing")
             result = transcribe_recording(wav_path)
+            if not result.get("success"):
+                error = str(result.get("error") or "Voice transcription failed")
+                _voice_emit("voice.transcript", {"error": error})
             text = (result.get("transcript") or "").strip() if result.get("success") else ""
             if text:
                 # Stop-check must never break transcript delivery — if the
@@ -18144,6 +18147,17 @@ def _(rid, params: dict) -> dict:
     if action in {"on", "off"}:
         enabled = action == "on"
         recording_mode, max_recording_seconds = _voice_recording_policy()
+        if enabled:
+            try:
+                from tools.voice_mode import check_voice_requirements
+
+                requirements = check_voice_requirements()
+            except Exception as e:
+                logger.warning("voice: requirements probe failed during toggle on: %s", e)
+                return _err(rid, 4016, f"voice requirements probe failed: {e}")
+            if not requirements.get("available"):
+                details = str(requirements.get("details") or "Voice mode requirements not met")
+                return _err(rid, 4016, details)
         # Runtime-only flag (CLI parity) — no _write_config_key, so the
         # next TUI launch starts with voice OFF instead of auto-REC from a
         # persisted stale toggle.
@@ -18343,6 +18357,10 @@ def _(rid, params: dict) -> dict:
                 )
                 _resume_voice_wake()
 
+            def _on_error(error):
+                _voice_emit("voice.transcript", {"error": str(error)})
+                _resume_voice_wake()
+
             def _on_silent():
                 _voice_emit("voice.transcript", {"no_speech_limit": True})
                 _resume_voice_wake()
@@ -18406,6 +18424,7 @@ def _(rid, params: dict) -> dict:
             # explicit numeric value <= 0 disables the cap (0.0).
             started = start_continuous(
                 on_transcript=_on_transcript,
+                on_error=_on_error,
                 on_status=_on_status,
                 on_capture_stopped=lambda: _release_voice_capture("record"),
                 on_silent_limit=_on_silent,

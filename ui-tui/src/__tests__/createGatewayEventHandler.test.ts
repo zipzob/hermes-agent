@@ -950,6 +950,21 @@ describe('createGatewayEventHandler', () => {
     expect(ctx.submission.submitRef.current).not.toHaveBeenCalled()
   })
 
+  it('reports a voice transcription error instead of silently returning to idle', () => {
+    const ctx = buildCtx([])
+    const onEvent = createGatewayEventHandler(ctx)
+
+    onEvent({
+      payload: { error: 'Parakeet transcription failed: Ollama unavailable' },
+      type: 'voice.transcript'
+    } as any)
+
+    expect(ctx.voice.setRecording).toHaveBeenCalledWith(false)
+    expect(ctx.voice.setProcessing).toHaveBeenCalledWith(false)
+    expect(ctx.system.sys).toHaveBeenCalledWith('voice error: Parakeet transcription failed: Ollama unavailable')
+    expect(ctx.submission.submitRef.current).not.toHaveBeenCalled()
+  })
+
   it('appends a draft voice transcript without submitting an agent turn', () => {
     const ctx = buildCtx([])
     const onEvent = createGatewayEventHandler(ctx)

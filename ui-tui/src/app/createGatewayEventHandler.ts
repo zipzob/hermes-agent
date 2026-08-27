@@ -1002,6 +1002,16 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
       }
 
       case 'voice.transcript': {
+        const error = String(ev.payload?.error ?? '').trim()
+
+        if (error) {
+          setVoiceRecording(false)
+          setVoiceProcessing(false)
+          sys(`voice error: ${error}`)
+
+          return
+        }
+
         // Explicit user-intent stop: the user said (or typed) a bare stop
         // phrase. The backend already halted the capture loop and flipped
         // voice mode off — mirror it here like a manual /voice off, and say

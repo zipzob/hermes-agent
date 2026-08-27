@@ -676,7 +676,7 @@ export type GatewayEvent =
       type: 'voice.status'
     }
   | {
-      payload?: { delivery?: 'draft' | 'submit'; no_speech_limit?: boolean; stop_phrase?: boolean; text?: string; typed?: boolean }
+      payload?: { delivery?: 'draft' | 'submit'; error?: string; no_speech_limit?: boolean; stop_phrase?: boolean; text?: string; typed?: boolean }
       session_id?: string
       type: 'voice.transcript'
     }

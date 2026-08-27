@@ -303,6 +303,7 @@ class TestContinuousLoopSimulation:
         monkeypatch.setattr(voice, "_continuous_recorder", None)
         monkeypatch.setattr(voice, "_continuous_no_speech_count", 0)
         monkeypatch.setattr(voice, "_continuous_on_transcript", None)
+        monkeypatch.setattr(voice, "_continuous_on_error", None)
         monkeypatch.setattr(voice, "_continuous_on_status", None)
         monkeypatch.setattr(voice, "_continuous_on_capture_stopped", None, raising=False)
         monkeypatch.setattr(voice, "_continuous_on_silence_progress", None)
@@ -386,6 +387,25 @@ class TestContinuousLoopSimulation:
         assert voice.is_continuous_active() is True
 
         voice.stop_continuous()
+
+    def test_loop_reports_transcription_failure(self, fake_recorder, monkeypatch):
+        import hermes_cli.voice as voice
+
+        monkeypatch.setattr(
+            voice,
+            "transcribe_recording",
+            lambda _p: {"success": False, "transcript": "", "error": "Ollama unavailable"},
+        )
+        errors = []
+
+        voice.start_continuous(
+            on_transcript=lambda _text: None,
+            on_error=errors.append,
+            auto_restart=False,
+        )
+        fake_recorder.last_callback()
+
+        assert errors == ["Ollama unavailable"]
 
     def test_completion_beep_follows_transcript_delivery(self, fake_recorder, monkeypatch):
         import hermes_cli.voice as voice

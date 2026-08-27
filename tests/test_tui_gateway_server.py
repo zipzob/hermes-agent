@@ -1823,6 +1823,28 @@ def test_voice_toggle_returns_configured_record_key(monkeypatch):
     assert status_resp["result"]["record_key"] == "ctrl+o"
 
 
+def test_voice_toggle_on_rejects_unavailable_requirements(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "tools.voice_mode",
+        types.SimpleNamespace(
+            check_voice_requirements=lambda: {
+                "available": False,
+                "details": "Audio capture: MISSING (install sounddevice)",
+            },
+        ),
+    )
+    monkeypatch.setenv("HERMES_VOICE", "0")
+
+    response = server.dispatch(
+        {"id": "voice-on-unavailable", "method": "voice.toggle", "params": {"action": "on"}}
+    )
+
+    assert response["error"]["code"] == 4016
+    assert "Audio capture: MISSING" in response["error"]["message"]
+    assert os.environ["HERMES_VOICE"] == "0"
+
+
 def test_voice_status_reports_effective_recording_policy(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
@@ -2588,6 +2610,12 @@ def test_voice_record_start_defaults_to_silence_and_reports_recording_contract(m
         },
     )
     assert server._voice_capture_owner == "record"
+
+    captured["on_error"]("Parakeet transcription failed: Ollama unavailable")
+    assert emitted[-1] == (
+        "voice.transcript",
+        {"error": "Parakeet transcription failed: Ollama unavailable"},
+    )
 
     captured["on_status"]("transcribing")
     assert server._voice_capture_owner == "record"
@@ -20611,6 +20639,37 @@ def test_tts_stream_vad_barge_in_cuts_pipeline_and_submits_capture(monkeypatch, 
     assert not wav.exists()  # capture temp file cleaned up
     assert ts.take_speech_interrupted() is True  # VAD cut latches the model note
     server._tts_stream_stop()
+
+
+def test_full_duplex_reports_transcription_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_VOICE", "1")
+    monkeypatch.setattr(server, "_load_cfg", lambda: {"voice": {"barge_in": True}})
+    events: list = []
+    monkeypatch.setattr(
+        server, "_voice_emit", lambda event, payload=None: events.append((event, payload))
+    )
+    wav = tmp_path / "failed-barge.wav"
+    wav.write_bytes(b"RIFF")
+
+    def fake_listen(_should_stop, is_playing=None, on_trigger=None, **_kwargs):
+        assert on_trigger is not None
+        on_trigger("playback")
+        return str(wav)
+
+    _fake_tts_modules(
+        monkeypatch,
+        listen=fake_listen,
+        transcribe=lambda _path, model=None: {
+            "success": False,
+            "transcript": "",
+            "error": "Parakeet unavailable",
+        },
+    )
+
+    server._full_duplex_listener()
+
+    assert ("voice.transcript", {"error": "Parakeet unavailable"}) in events
+    assert not wav.exists()
 
 
 def test_full_duplex_generation_phase_interrupts_running_turn(monkeypatch, tmp_path):

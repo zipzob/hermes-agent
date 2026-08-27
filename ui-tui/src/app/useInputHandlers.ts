@@ -121,6 +121,12 @@ export function shouldFallThroughForScroll(key: {
   return false
 }
 
+export const shouldRouteVoiceStopWhileBlocked = (
+  blocked: boolean,
+  recording: boolean,
+  voiceToggleKey: boolean
+): boolean => blocked && recording && voiceToggleKey
+
 export function applyVoiceRecordResponse(
   response: null | VoiceRecordResponse,
   starting: boolean,
@@ -377,6 +383,19 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
 
   useInput((ch, key) => {
     const live = getUiState()
+
+    // Recording stop is an emergency/lifecycle control like Ctrl+C. Agent
+    // turns and context compression mark input blocked, but must never trap
+    // an already-open microphone until silence/max-duration wins.
+    if (
+      shouldRouteVoiceStopWhileBlocked(
+        isBlocked,
+        voice.recording,
+        isVoiceToggleKey(key, ch, voice.recordKey)
+      )
+    ) {
+      return voiceRecordToggle()
+    }
 
     if (key.escape) {
       const now = Date.now()

@@ -8,7 +8,8 @@ import {
   resolveCtrlCComposerAction,
   shouldAllowIdleHotkeyExit,
   shouldDetachEditedHistoryInput,
-  shouldFallThroughForScroll
+  shouldFallThroughForScroll,
+  shouldRouteVoiceStopWhileBlocked
 } from '../app/useInputHandlers.js'
 
 const baseKey = {
@@ -179,6 +180,18 @@ describe('applyVoiceRecordResponse', () => {
 
     expect(setRecording).toHaveBeenCalledWith(false)
     expect(setProcessing).toHaveBeenCalledWith(false)
+  })
+})
+
+describe('shouldRouteVoiceStopWhileBlocked', () => {
+  it('lets the record hotkey stop an active capture during an agent turn', () => {
+    expect(shouldRouteVoiceStopWhileBlocked(true, true, true)).toBe(true)
+  })
+
+  it('does not start a capture or route unrelated keys while blocked', () => {
+    expect(shouldRouteVoiceStopWhileBlocked(true, false, true)).toBe(false)
+    expect(shouldRouteVoiceStopWhileBlocked(true, true, false)).toBe(false)
+    expect(shouldRouteVoiceStopWhileBlocked(false, true, true)).toBe(false)
   })
 })
 

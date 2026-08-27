@@ -404,6 +404,7 @@ def _voice_activity_held() -> bool:
 
 
 _continuous_on_transcript: Optional[Callable[[str], None]] = None
+_continuous_on_error: Optional[Callable[[str], None]] = None
 _continuous_on_status: Optional[Callable[[str], None]] = None
 _continuous_on_capture_stopped: Optional[Callable[[], None]] = None
 _continuous_on_silence_progress: Optional[Callable[[Optional[float]], None]] = None
@@ -495,6 +496,7 @@ def start_continuous(
     silence_autostop: bool = True,
     on_silence_progress: Optional[Callable[[Optional[float]], None]] = None,
     on_cutoff: Optional[Callable[[str], None]] = None,
+    on_error: Optional[Callable[[str], None]] = None,
 ) -> bool:
     """Start a VAD-driven continuous recording loop.
 
@@ -513,6 +515,9 @@ def start_continuous(
     ``on_status`` is called with ``"listening"`` / ``"transcribing"`` /
     ``"idle"`` so the UI can show a live indicator.
 
+    ``on_error`` receives a user-facing STT failure message. Failed provider
+    calls are not counted as no-speech cycles.
+
     ``on_capture_stopped`` runs after the recorder has closed its microphone
     capture but before transcription begins. One-shot callers can use it to
     release cross-process microphone ownership without retaining that ownership
@@ -529,7 +534,8 @@ def start_continuous(
     ``on_silent_limit`` fires instead so legacy callers still turn voice off.
     """
     global _continuous_active, _continuous_recorder, _continuous_auto_restart
-    global _continuous_on_transcript, _continuous_on_status, _continuous_on_silent_limit
+    global _continuous_on_transcript, _continuous_on_error
+    global _continuous_on_status, _continuous_on_silent_limit
     global _continuous_on_capture_stopped
     global _continuous_on_silence_progress
     global _continuous_on_cutoff
@@ -546,6 +552,7 @@ def start_continuous(
         _continuous_active = True
         _continuous_auto_restart = auto_restart
         _continuous_on_transcript = on_transcript
+        _continuous_on_error = on_error
         _continuous_on_status = on_status
         _continuous_on_capture_stopped = on_capture_stopped
         _continuous_on_silence_progress = on_silence_progress
@@ -612,7 +619,8 @@ def stop_continuous(force_transcribe: bool = False) -> None:
     background thread before reporting ``"idle"``. Otherwise the buffer is
     discarded.
     """
-    global _continuous_active, _continuous_on_transcript, _continuous_stopping
+    global _continuous_active, _continuous_on_transcript, _continuous_on_error
+    global _continuous_stopping
     global _continuous_on_status, _continuous_on_silent_limit
     global _continuous_on_capture_stopped
     global _continuous_on_silence_progress
@@ -631,6 +639,7 @@ def stop_continuous(force_transcribe: bool = False) -> None:
             on_capture_stopped = _continuous_on_capture_stopped
             on_status = None
             on_transcript = None
+            on_error = None
             on_silent_limit = None
             on_stop_phrase = None
             auto_restart = False
@@ -641,12 +650,14 @@ def stop_continuous(force_transcribe: bool = False) -> None:
             on_status = _continuous_on_status
             on_capture_stopped = _continuous_on_capture_stopped
             on_transcript = _continuous_on_transcript
+            on_error = _continuous_on_error
             on_silent_limit = _continuous_on_silent_limit
             on_stop_phrase = _continuous_on_stop_phrase
             auto_restart = _continuous_auto_restart
             track_no_speech = force_transcribe and not auto_restart
             _continuous_stopping = rec is not None
             _continuous_on_transcript = None
+            _continuous_on_error = None
             _continuous_on_status = None
             _continuous_on_silence_progress = None
             _continuous_on_cutoff = None
@@ -683,6 +694,7 @@ def stop_continuous(force_transcribe: bool = False) -> None:
             def _transcribe_and_cleanup():
                 global _continuous_no_speech_count, _continuous_stopping
                 transcript: Optional[str] = None
+                transcription_error: Optional[str] = None
                 should_halt = False
 
                 try:
@@ -693,11 +705,16 @@ def stop_continuous(force_transcribe: bool = False) -> None:
                                 text = (result.get("transcript") or "").strip()
                                 if text and not is_whisper_hallucination(text):
                                     transcript = text
+                            else:
+                                transcription_error = str(
+                                    result.get("error") or "Voice transcription failed"
+                                )
                         finally:
                             if os.path.isfile(wav_path):
                                 os.unlink(wav_path)
                 except Exception as e:
                     logger.warning("failed to stop/transcribe recorder: %s", e)
+                    transcription_error = str(e)
                 finally:
                     stop_phrase = bool(transcript and is_voice_stop_phrase(transcript))
                     if stop_phrase:
@@ -725,9 +742,14 @@ def stop_continuous(force_transcribe: bool = False) -> None:
                             on_transcript(transcript)
                         except Exception as e:
                             logger.warning("on_transcript callback raised: %s", e)
+                    elif transcription_error and on_error:
+                        try:
+                            on_error(transcription_error)
+                        except Exception as e:
+                            logger.warning("on_error callback raised: %s", e)
 
                     if track_no_speech:
-                        held = _voice_activity_held()
+                        held = bool(transcription_error) or _voice_activity_held()
                         with _continuous_lock:
                             if transcript or stop_phrase:
                                 _continuous_no_speech_count = 0
@@ -812,6 +834,7 @@ def _continuous_on_silence() -> None:
             return
         rec = _continuous_recorder
         on_transcript = _continuous_on_transcript
+        on_error = _continuous_on_error
         on_status = _continuous_on_status
         on_capture_stopped = _continuous_on_capture_stopped
         on_silent_limit = _continuous_on_silent_limit
@@ -841,6 +864,7 @@ def _continuous_on_silence() -> None:
     )
 
     transcript: Optional[str] = None
+    transcription_error: Optional[str] = None
 
     if wav_path:
         try:
@@ -858,9 +882,12 @@ def _continuous_on_silence() -> None:
             )
             if success and text and not is_whisper_hallucination(text):
                 transcript = text
+            elif not success:
+                transcription_error = str(err or "Voice transcription failed")
         except Exception as e:
             logger.warning("continuous transcription failed: %s", e)
             _debug(f"_continuous_on_silence: transcribe raised {type(e).__name__}: {e}")
+            transcription_error = str(e)
         finally:
             try:
                 if os.path.isfile(wav_path):
@@ -883,8 +910,11 @@ def _continuous_on_silence() -> None:
     # toward the no-speech limit — a multi-minute tool run would otherwise
     # end the voice chat under the user. Checked outside the lock (probe
     # may call into the host surface).
-    _silence_held = (transcript is None and not stop_phrase
-                     and _voice_activity_held())
+    _silence_held = (
+        transcript is None
+        and not stop_phrase
+        and (transcription_error is not None or _voice_activity_held())
+    )
 
     with _continuous_lock:
         if not _continuous_active:
@@ -910,6 +940,11 @@ def _continuous_on_silence() -> None:
             on_transcript(transcript)
         except Exception as e:
             logger.warning("on_transcript callback raised: %s", e)
+    elif transcription_error and on_error:
+        try:
+            on_error(transcription_error)
+        except Exception as e:
+            logger.warning("on_error callback raised: %s", e)
 
     # Confirm that STT returned usable text. Do not play this cue merely
     # because capture stopped: that falsely suggests transcription finished.
