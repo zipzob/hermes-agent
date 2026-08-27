@@ -6,6 +6,7 @@ import argparse
 import gc
 import importlib.util
 import json
+import logging
 import math
 import os
 import shutil
@@ -34,6 +35,7 @@ _PROTOCOL = "hermes-parakeet-v1"
 _DEFAULT_MODEL = "nvidia/parakeet-tdt-0.6b-v3"
 _MAX_AUDIO_BYTES = 100 * 1024 * 1024
 _CLIENT_READ_TIMEOUT = 30.0
+_OLLAMA_EVICTION_TIMEOUT = 1.0
 _REQUEST_LOCK = threading.Lock()
 _MODEL_LOCK = threading.Lock()
 _MODEL: Any = None
@@ -44,6 +46,10 @@ _MODEL_DTYPE = ""
 _LAST_ACTIVITY = time.monotonic()
 _ACTIVE_REQUESTS = 0
 _ACTIVITY_LOCK = threading.Lock()
+_RUNTIME_AVAILABLE: bool | None = None
+_WARMUP_ACTIVE = False
+_WARMUP_LOCK = threading.Lock()
+logger = logging.getLogger(__name__)
 
 
 def _parse_lease_timeout(value: str | None) -> float:
@@ -63,6 +69,14 @@ def _runtime_available() -> bool:
         importlib.util.find_spec(module) is not None
         for module in ("torch", "transformers", "librosa")
     ) and shutil.which("ffmpeg") is not None
+
+
+def _runtime_ready() -> bool:
+    """Cache readiness before model imports can hold Python's import lock."""
+    global _RUNTIME_AVAILABLE
+    if _RUNTIME_AVAILABLE is None:
+        _RUNTIME_AVAILABLE = _runtime_available()
+    return _RUNTIME_AVAILABLE
 
 
 def _load_components(model_name: str, device: str, dtype_name: str):
@@ -187,7 +201,12 @@ def _transcribe(
         if shared_gpu:
             origin = normalize_ollama_base_url(ollama_url) or _profile_ollama_url()
             if origin:
-                unload_ollama_models(origin)
+                try:
+                    unload_ollama_models(origin, timeout=_OLLAMA_EVICTION_TIMEOUT)
+                except Exception as exc:
+                    # Ollama coordination is an optimization, not an STT
+                    # prerequisite. A stopped server has no models to evict.
+                    logger.warning("Ollama model eviction skipped: %s", exc)
         processor, model, torch = _load_components(model_name, device, dtype_name)
         try:
             sampling_rate = int(processor.feature_extractor.sampling_rate)
@@ -208,6 +227,57 @@ def _transcribe(
         finally:
             if shared_gpu:
                 _park_components(torch)
+
+
+def _start_warmup(
+    *,
+    model_name: str,
+    device: str,
+    dtype_name: str,
+    shared_gpu: bool,
+    lease_timeout: float,
+    ollama_url: str,
+) -> bool:
+    """Load model weights in the background once per service lifetime."""
+    global _ACTIVE_REQUESTS, _LAST_ACTIVITY, _WARMUP_ACTIVE
+    with _WARMUP_LOCK:
+        if _WARMUP_ACTIVE or _MODEL is not None:
+            return False
+        _WARMUP_ACTIVE = True
+
+    def run() -> None:
+        global _ACTIVE_REQUESTS, _LAST_ACTIVITY, _WARMUP_ACTIVE
+        with _ACTIVITY_LOCK:
+            _ACTIVE_REQUESTS += 1
+            _LAST_ACTIVITY = time.monotonic()
+        try:
+            lease = (
+                local_inference_lease("stt:parakeet-warmup", timeout=lease_timeout)
+                if shared_gpu
+                else nullcontext()
+            )
+            with _REQUEST_LOCK, lease:
+                if shared_gpu:
+                    origin = normalize_ollama_base_url(ollama_url) or _profile_ollama_url()
+                    if origin:
+                        try:
+                            unload_ollama_models(origin, timeout=_OLLAMA_EVICTION_TIMEOUT)
+                        except Exception as exc:
+                            logger.warning("Ollama model eviction skipped: %s", exc)
+                _processor, _model, torch = _load_components(model_name, device, dtype_name)
+                if shared_gpu:
+                    _park_components(torch)
+        except Exception as exc:
+            logger.warning("Parakeet warmup failed: %s", exc)
+        finally:
+            with _ACTIVITY_LOCK:
+                _ACTIVE_REQUESTS -= 1
+                _LAST_ACTIVITY = time.monotonic()
+            with _WARMUP_LOCK:
+                _WARMUP_ACTIVE = False
+
+    threading.Thread(target=run, daemon=True, name="parakeet-warmup").start()
+    return True
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -242,14 +312,29 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/health":
             self._json(404, {"error": "not found"})
             return
+        with _WARMUP_LOCK:
+            warming = _WARMUP_ACTIVE
         self._json(200, {
+            "model_loaded": _MODEL is not None,
             "protocol": _PROTOCOL,
-            "runtime_available": _runtime_available(),
+            "runtime_available": _runtime_ready(),
+            "warming": warming,
         })
 
     def do_POST(self) -> None:
         global _ACTIVE_REQUESTS, _LAST_ACTIVITY
         if not self._authorized():
+            return
+        if self.path == "/warmup":
+            started = _start_warmup(
+                model_name=self.headers.get("X-Hermes-Model") or _DEFAULT_MODEL,
+                device=(self.headers.get("X-Hermes-Device") or "auto").lower(),
+                dtype_name=(self.headers.get("X-Hermes-Dtype") or "auto").lower(),
+                shared_gpu=(self.headers.get("X-Hermes-Shared-Gpu") or "false").lower() == "true",
+                lease_timeout=_parse_lease_timeout(self.headers.get("X-Hermes-Lease-Timeout")),
+                ollama_url=self.headers.get("X-Hermes-Ollama-Url") or "",
+            )
+            self._json(202, {"warming": started})
             return
         if self.path != "/transcribe":
             self._json(404, {"error": "not found"})
@@ -331,12 +416,13 @@ def _idle_watchdog(server: ThreadingHTTPServer, timeout: float) -> None:
 def main() -> int:
     global _SERVICE_TOKEN
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=18765)
     parser.add_argument("--idle-timeout", type=float, default=300.0)
     args = parser.parse_args()
     _SERVICE_TOKEN = os.environ.get("HERMES_PARAKEET_TOKEN", "")
     if not _SERVICE_TOKEN:
         raise RuntimeError("HERMES_PARAKEET_TOKEN is required")
+    _runtime_ready()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     threading.Thread(
         target=_idle_watchdog,

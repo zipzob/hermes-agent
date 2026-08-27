@@ -2167,7 +2167,7 @@ stt:
     logprob_threshold: -1.0        # ...AND avg_logprob < this (both must hit — quiet real speech survives)
     unload_after_idle_seconds: 0   # 0=never unload (default); e.g. 300 = release the model after 5min idle
   parakeet:                    # used when provider: "parakeet"
-    base_url: "http://127.0.0.1:8765"  # authenticated managed service; loopback HTTP only
+    base_url: "http://127.0.0.1:18765"  # authenticated managed service; loopback HTTP only
     model: "nvidia/parakeet-tdt-0.6b-v3"
     language: ""              # multilingual auto-detection
     device: "auto"            # auto | cpu | cuda

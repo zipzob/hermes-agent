@@ -2000,7 +2000,7 @@ DEFAULT_CONFIG = {
             "startup_timeout": 30,
             "request_timeout": 300,
             "idle_timeout": 300,
-            "base_url": "",  # empty = managed loopback service on 127.0.0.1:8765
+            "base_url": "",  # empty = managed loopback service on 127.0.0.1:18765
             "ollama_base_url": "",  # empty = derive from this profile's Hindsight config
         },
         "groq": {

@@ -20,7 +20,7 @@ from hermes_constants import get_default_hermes_root
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BASE_URL = "http://127.0.0.1:8765"
+DEFAULT_BASE_URL = "http://127.0.0.1:18765"
 DEFAULT_MODEL = "nvidia/parakeet-tdt-0.6b-v3"
 _PROTOCOL = "hermes-parakeet-v1"
 
@@ -101,6 +101,30 @@ def _health(base_url: str, token: str, *, timeout: float = 1.0) -> bool:
         return payload.get("protocol") == _PROTOCOL and bool(payload.get("runtime_available"))
     except Exception:
         return False
+
+
+def _request_warmup(base_url: str, token: str, cfg: dict[str, Any]) -> None:
+    """Ask the service to load weights asynchronously; never gate voice-on."""
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-Hermes-Model": str(cfg.get("model") or DEFAULT_MODEL),
+        "X-Hermes-Device": str(cfg.get("device") or "auto"),
+        "X-Hermes-Dtype": str(cfg.get("dtype") or "auto"),
+        "X-Hermes-Shared-Gpu": "true" if cfg.get("shared_gpu", True) else "false",
+        "X-Hermes-Lease-Timeout": str(cfg.get("shared_gpu_timeout", 180.0)),
+        "X-Hermes-Ollama-Url": str(cfg.get("ollama_base_url") or ""),
+    }
+    try:
+        request = urllib.request.Request(
+            f"{base_url.rstrip('/')}/warmup",
+            data=b"",
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=1.0) as response:  # noqa: S310
+            response.read()
+    except Exception as exc:
+        logger.debug("Parakeet warmup request skipped: %s", exc)
 
 
 def _service_log_path() -> Path:
@@ -195,11 +219,14 @@ class ParakeetTranscriptionProvider(TranscriptionProvider):
         except ValueError as exc:
             logger.warning("Invalid Parakeet service URL: %s", exc)
             return False
-        return _ensure_service(
+        available = _ensure_service(
             base_url,
             startup_timeout=float(cfg.get("startup_timeout", 30.0)),
             idle_timeout=float(cfg.get("idle_timeout", 300.0)),
         )
+        if available:
+            _request_warmup(base_url, _service_token(), cfg)
+        return available
 
     def transcribe(
         self,

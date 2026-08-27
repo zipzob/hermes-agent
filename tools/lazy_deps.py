@@ -152,6 +152,7 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
         "torch==2.13.0",
         "transformers==5.14.1",
         "librosa==0.11.0",
+        "sounddevice==0.5.5",
         "numpy==2.4.3",
     ),
     # SILK voice-note decoding (WeChat/QQ .silk voice messages). pilk is a

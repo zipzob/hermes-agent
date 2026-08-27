@@ -35,6 +35,8 @@ def test_provider_health_starts_default_local_service(monkeypatch):
     monkeypatch.setattr(lazy_deps, "ensure", lambda feature: None)
     monkeypatch.setattr(module, "_config", lambda: {})
     monkeypatch.setattr(module, "_service_token", lambda: "test-token")
+    warmup = MagicMock()
+    monkeypatch.setattr(module, "_request_warmup", warmup)
     monkeypatch.setattr(
         module,
         "_health",
@@ -48,7 +50,8 @@ def test_provider_health_starts_default_local_service(monkeypatch):
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
 
     assert module.ParakeetTranscriptionProvider().is_available() is True
-    assert events == [(8765, 300.0, "test-token")]
+    assert events == [(18765, 300.0, "test-token")]
+    warmup.assert_called_once_with("http://127.0.0.1:18765", "test-token", {})
 
 
 def test_provider_does_not_spawn_when_lazy_runtime_is_unavailable(monkeypatch):
@@ -220,7 +223,8 @@ def test_shared_service_parks_model_before_releasing_lease(monkeypatch, tmp_path
     monkeypatch.setattr(
         service,
         "unload_ollama_models",
-        lambda url: events.append(("ollama-unload", url)) or ["memory-model"],
+        lambda url, **kwargs: events.append(("ollama-unload", url, kwargs["timeout"]))
+        or ["memory-model"],
     )
     monkeypatch.setattr(
         service,
@@ -247,11 +251,96 @@ def test_shared_service_parks_model_before_releasing_lease(monkeypatch, tmp_path
     assert result["transcript"] == "shared transcript"
     assert events == [
         ("lease-enter", "stt:parakeet-service", 12),
-        ("ollama-unload", "http://127.0.0.1:11434"),
+        ("ollama-unload", "http://127.0.0.1:11434", 1.0),
         ("inference",),
         ("parakeet-park",),
         ("lease-exit",),
     ]
+
+
+def test_shared_service_transcribes_when_ollama_is_not_running(monkeypatch, tmp_path):
+    from plugins.transcription.parakeet import service
+
+    class Inputs(dict):
+        def to(self, **_kwargs):
+            return self
+
+    class Processor:
+        feature_extractor = SimpleNamespace(sampling_rate=16000)
+
+        def __call__(self, *_args, **_kwargs):
+            return Inputs(samples="fake")
+
+        def decode(self, *_args, **_kwargs):
+            return "offline ollama transcript"
+
+    class Model:
+        device = "cuda"
+        dtype = "float16"
+
+        def generate(self, **_kwargs):
+            return SimpleNamespace(sequences=[[1]])
+
+    fake_torch = SimpleNamespace(inference_mode=lambda: nullcontext())
+    monkeypatch.setattr(service, "unload_ollama_models", MagicMock(side_effect=OSError("offline")))
+    monkeypatch.setattr(
+        service,
+        "_load_components",
+        lambda *_args: (Processor(), Model(), fake_torch),
+    )
+    monkeypatch.setattr(service, "_decode_audio", lambda *_args: object())
+    monkeypatch.setattr(service, "_park_components", lambda _torch: None)
+
+    result = service._transcribe(
+        str(tmp_path / "voice.wav"),
+        model_name="test-model",
+        device="cuda",
+        dtype_name="float16",
+        shared_gpu=True,
+        lease_timeout=12,
+        ollama_url="http://127.0.0.1:11434",
+    )
+
+    assert result["success"] is True
+    assert result["transcript"] == "offline ollama transcript"
+
+
+def test_service_runtime_readiness_is_cached_before_model_work(monkeypatch):
+    from plugins.transcription.parakeet import service
+
+    monkeypatch.setattr(service, "_RUNTIME_AVAILABLE", True)
+    monkeypatch.setattr(
+        service,
+        "_runtime_available",
+        MagicMock(side_effect=AssertionError("runtime probe must stay cached")),
+    )
+
+    assert service._runtime_ready() is True
+
+
+def test_service_warmup_is_async_and_deduplicated(monkeypatch):
+    from plugins.transcription.parakeet import service
+
+    targets = []
+    monkeypatch.setattr(service, "_MODEL", None)
+    monkeypatch.setattr(service, "_WARMUP_ACTIVE", False)
+    monkeypatch.setattr(
+        service.threading,
+        "Thread",
+        lambda **kwargs: SimpleNamespace(start=lambda: targets.append(kwargs["target"])),
+    )
+
+    kwargs = {
+        "model_name": "test-model",
+        "device": "cuda",
+        "dtype_name": "float16",
+        "shared_gpu": True,
+        "lease_timeout": 12,
+        "ollama_url": "",
+    }
+    assert service._start_warmup(**kwargs) is True
+    assert service._start_warmup(**kwargs) is False
+    assert len(targets) == 1
 
 
 def test_service_parks_model_on_cpu_and_reuses_cached_weights(monkeypatch):

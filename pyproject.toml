@@ -216,9 +216,11 @@ voice = [
 ]
 voice-parakeet = [
   # Multilingual local STT; opt-in because PyTorch is a large dependency.
+  # sounddevice is still required for CLI/TUI microphone capture.
   "torch==2.13.0",
   "transformers==5.14.1",
   "librosa==0.11.0",
+  "sounddevice==0.5.5",
   "numpy==2.4.3",
 ]
 # "Hey Hermes" wake word — on-device hotword detection. All engines are

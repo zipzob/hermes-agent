@@ -69,7 +69,7 @@ def test_lazy_installable_extras_excluded_from_all():
         "fal",
         "edge-tts", "tts-premium",
         "voice",  # faster-whisper / sounddevice / numpy
-        "voice-parakeet",  # torch / transformers / librosa
+        "voice-parakeet",  # torch / transformers / librosa / sounddevice / numpy
         "modal", "daytona", "vercel",
         "messaging", "slack", "matrix", "dingtalk", "feishu",
         "honcho", "hindsight",
@@ -87,6 +87,16 @@ def test_lazy_installable_extras_excluded_from_all():
             f"Remove it from [all] in pyproject.toml — it lazy-installs "
             f"at first use. Found in [all]: {offending}"
         )
+
+
+def test_parakeet_runtime_includes_voice_capture_dependency():
+    """Selecting Parakeet must also provision TUI microphone capture."""
+    from tools.lazy_deps import LAZY_DEPS
+
+    optional_dependencies = _load_optional_dependencies()
+
+    assert "sounddevice==0.5.5" in optional_dependencies["voice-parakeet"]
+    assert "sounddevice==0.5.5" in LAZY_DEPS["stt.parakeet"]
 
 
 def _exact_pins(specs):
