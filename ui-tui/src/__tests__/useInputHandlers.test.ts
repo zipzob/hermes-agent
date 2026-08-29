@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { getOverlayState, patchOverlayState, resetOverlayState } from '../app/overlayStore.js'
 import {
+  applyVoiceRecordRequest,
   applyVoiceRecordResponse,
   dismissSensitivePrompt,
   handleIdleHotkeyExit,
@@ -180,6 +181,28 @@ describe('applyVoiceRecordResponse', () => {
 
     expect(setRecording).toHaveBeenCalledWith(false)
     expect(setProcessing).toHaveBeenCalledWith(false)
+  })
+})
+
+describe('applyVoiceRecordRequest', () => {
+  it('clears REC immediately while recorder shutdown is still pending', () => {
+    const setProcessing = vi.fn()
+    const setRecording = vi.fn()
+
+    applyVoiceRecordRequest(false, { setProcessing, setRecording })
+
+    expect(setRecording).toHaveBeenCalledWith(false)
+    expect(setProcessing).toHaveBeenCalledWith(true)
+  })
+
+  it('waits for the gateway before showing REC on start', () => {
+    const setProcessing = vi.fn()
+    const setRecording = vi.fn()
+
+    applyVoiceRecordRequest(true, { setProcessing, setRecording })
+
+    expect(setRecording).not.toHaveBeenCalled()
+    expect(setProcessing).not.toHaveBeenCalled()
   })
 })
 

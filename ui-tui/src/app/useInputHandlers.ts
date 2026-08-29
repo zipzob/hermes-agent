@@ -127,6 +127,21 @@ export const shouldRouteVoiceStopWhileBlocked = (
   voiceToggleKey: boolean
 ): boolean => blocked && recording && voiceToggleKey
 
+export function applyVoiceRecordRequest(
+  starting: boolean,
+  voice: Pick<InputHandlerContext['voice'], 'setProcessing' | 'setRecording'>
+) {
+  if (starting) {
+    return
+  }
+
+  // Recorder shutdown is synchronous in the gateway because it must retain
+  // the captured audio before transcription. Clear REC locally instead of
+  // leaving the microphone badge stuck for the duration of that RPC.
+  voice.setRecording(false)
+  voice.setProcessing(true)
+}
+
 export function applyVoiceRecordResponse(
   response: null | VoiceRecordResponse,
   starting: boolean,
@@ -366,6 +381,8 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
 
     const starting = !voice.recording
     const action = starting ? 'start' : 'stop'
+
+    applyVoiceRecordRequest(starting, voice)
 
     gateway
       .rpc<VoiceRecordResponse>('voice.record', { action, session_id: getUiState().sid })
