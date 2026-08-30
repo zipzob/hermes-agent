@@ -47,13 +47,16 @@ const lineShape = (value: string | undefined): string => {
   return `${value.length}:${value.split('\n').length}`
 }
 
+const streamingTreeShape = (value: string | undefined): string =>
+  value ? `present:${value.split('\n').length}` : 'absent:0'
+
 const liveBlockShape = (block: LiveBlock): string =>
   [
     block.key,
     block.msg.kind ?? 'message',
     block.msg.role,
     block.msg.tools?.length ?? 0,
-    block.msg.thinking ? lineShape(block.msg.thinking) : '0:0',
+    streamingTreeShape(block.msg.thinking),
     ...(block.tools ?? []).map(
       tool => `${tool.id}:${tool.name}:${lineShape(tool.context)}:${lineShape(tool.verboseArgs)}`
     )

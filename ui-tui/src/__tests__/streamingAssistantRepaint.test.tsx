@@ -44,9 +44,39 @@ describe('LiveTailFrameBoundary', () => {
 
     expect(signature('a')).toBe(signature('ordinary token growth'))
     expect(signature('a', 'one line')).not.toBe(signature('a', 'one line\nwith detail'))
+    expect(
+      liveTailStructuralSignature({
+        blocks: [
+          {
+            key: 'reasoning',
+            msg: { isLiveReasoning: true, role: 'assistant', text: '', thinking: 'a' }
+          }
+        ],
+        detailsMode: 'expanded',
+        detailsModeCommandOverride: false,
+        progressVisible: true
+      })
+    ).toBe(
+      liveTailStructuralSignature({
+        blocks: [
+          {
+            key: 'reasoning',
+            msg: { isLiveReasoning: true, role: 'assistant', text: '', thinking: 'ordinary token growth' }
+          }
+        ],
+        detailsMode: 'expanded',
+        detailsModeCommandOverride: false,
+        progressVisible: true
+      })
+    )
     expect(signature('a')).not.toBe(
       liveTailStructuralSignature({
-        blocks: [{ key: 'pending-tools', msg: { kind: 'trail', role: 'system', text: '', tools: ['terminal'] } }],
+        blocks: [
+          {
+            key: 'pending-tools',
+            msg: { kind: 'trail', role: 'system', text: '', tools: ['terminal'] }
+          }
+        ],
         detailsMode: 'expanded',
         detailsModeCommandOverride: false,
         progressVisible: true,
