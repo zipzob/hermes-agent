@@ -10,7 +10,7 @@ import { modelSearchText } from '../lib/model-search-text.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import type { Theme } from '../theme.js'
 
-import { OverlayHint, useOverlayKeys, windowItems } from './overlayControls.js'
+import { OverlayHint, useOverlayKeys, windowItems, windowOffset } from './overlayControls.js'
 import { chipRowProps, clampOverlayWidth } from './overlayPrimitives.js'
 
 const VISIBLE = 12
@@ -30,6 +30,26 @@ export function providerIndexAfterClearingFilter(
   }
 
   return providerRows.findIndex(row => row.provider.slug === provider.slug)
+}
+
+export function modelPickerQuickPickIndex(
+  ch: string,
+  filter: string,
+  count: number,
+  selected: number,
+  visible = VISIBLE
+): number | null {
+  if (filter.trim()) {
+    return null
+  }
+
+  const n = ch === '0' ? 10 : Number(ch)
+
+  if (!Number.isInteger(n) || n < 1 || n > Math.min(10, count, visible)) {
+    return null
+  }
+
+  return windowOffset(count, selected, visible) + n - 1
 }
 
 export function ModelPicker({
@@ -195,6 +215,53 @@ export function ModelPicker({
   const listStage = stage === 'provider' || stage === 'model'
   useOverlayKeys({ disabled: listStage, onBack: back, onClose: onCancel })
 
+  const activateListSelection = (targetIndex: number) => {
+    if (stage === 'provider') {
+      const selectedProvider = filteredProviderRows[targetIndex]?.provider
+
+      if (!selectedProvider) {
+        return
+      }
+
+      if (selectedProvider.authenticated === false) {
+        if (selectedProvider.auth_type === 'api_key' && selectedProvider.key_env) {
+          const fullProviderIdx = providerIndexAfterClearingFilter(providerRows, selectedProvider)
+
+          if (fullProviderIdx >= 0) {
+            setProviderIdx(fullProviderIdx)
+          }
+
+          setStage('key')
+          setKeyInput('')
+          setKeyError('')
+          setFilter('')
+        }
+
+        return
+      }
+
+      const fullProviderIdx = providerIndexAfterClearingFilter(providerRows, selectedProvider)
+
+      if (fullProviderIdx >= 0) {
+        setProviderIdx(fullProviderIdx)
+      }
+
+      setStage('model')
+      setModelIdx(0)
+      setFilter('')
+
+      return
+    }
+
+    const model = models[targetIndex]
+
+    if (provider && model) {
+      onSelect(`${model} --provider ${provider.slug}${allowPersistGlobal && persistGlobal ? ' --global' : ` ${TUI_SESSION_MODEL_FLAG}`}`)
+    } else {
+      setStage('provider')
+    }
+  }
+
   useInput((ch, key) => {
     // Key entry stage handles its own input
     if (stage === 'key') {
@@ -343,53 +410,17 @@ export function ModelPicker({
       return
     }
 
+    const quickPickIndex = modelPickerQuickPickIndex(ch, filter, count, sel)
+
+    if (quickPickIndex !== null) {
+      setSel(quickPickIndex)
+      activateListSelection(quickPickIndex)
+
+      return
+    }
+
     if (key.return) {
-      if (stage === 'provider') {
-        if (!provider) {
-          return
-        }
-
-        if (provider.authenticated === false) {
-          // api_key providers: prompt for key inline
-          if (provider.auth_type === 'api_key' && provider.key_env) {
-            const fullProviderIdx = providerIndexAfterClearingFilter(providerRows, provider)
-
-            if (fullProviderIdx >= 0) {
-              setProviderIdx(fullProviderIdx)
-            }
-
-            setStage('key')
-            setKeyInput('')
-            setKeyError('')
-            setFilter('')
-          }
-
-          // Other auth types: no-op (warning shown tells them to run hermes model)
-          return
-        }
-
-        const fullProviderIdx = providerIndexAfterClearingFilter(providerRows, provider)
-
-        if (fullProviderIdx >= 0) {
-          setProviderIdx(fullProviderIdx)
-        }
-
-        setStage('model')
-        setModelIdx(0)
-        setFilter('')
-
-        return
-      }
-
-      const model = models[modelIdx]
-
-      if (provider && model) {
-        onSelect(
-          `${model} --provider ${provider.slug}${allowPersistGlobal && persistGlobal ? ' --global' : ` ${TUI_SESSION_MODEL_FLAG}`}`
-        )
-      } else {
-        setStage('provider')
-      }
+      activateListSelection(sel)
 
       return
     }

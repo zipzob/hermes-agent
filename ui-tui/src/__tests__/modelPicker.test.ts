@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { providerIndexAfterClearingFilter } from '../components/modelPicker.js'
+import { modelPickerQuickPickIndex, providerIndexAfterClearingFilter } from '../components/modelPicker.js'
 import type { ModelOptionProvider } from '../gatewayTypes.js'
 
 const provider = (slug: string, name = slug): ModelOptionProvider => ({ name, slug })
@@ -48,5 +48,21 @@ describe('ModelPicker provider filtering', () => {
     ]
 
     expect(providerIndexAfterClearingFilter(rows, p)).toBe(0)
+  })
+})
+
+describe('ModelPicker numeric quick pick', () => {
+  it('activates the numbered row in the visible window when no filter is active', () => {
+    expect(modelPickerQuickPickIndex('3', '', 20, 8)).toBe(4)
+    expect(modelPickerQuickPickIndex('0', '', 20, 8)).toBe(11)
+  })
+
+  it('preserves digits as search text once filtering has started', () => {
+    expect(modelPickerQuickPickIndex('5', 'gpt-', 20, 8)).toBeNull()
+  })
+
+  it('ignores non-digits and rows outside the current list', () => {
+    expect(modelPickerQuickPickIndex('x', '', 4, 0)).toBeNull()
+    expect(modelPickerQuickPickIndex('5', '', 4, 0)).toBeNull()
   })
 })
