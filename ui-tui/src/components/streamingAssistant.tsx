@@ -1,5 +1,6 @@
+import { invalidatePrevFrame, useStdout } from '@hermes/ink'
 import { useStore } from '@nanostores/react'
-import { memo } from 'react'
+import { memo, type ReactNode, useLayoutEffect } from 'react'
 
 import type { AppLayoutProgressProps } from '../app/interfaces.js'
 import { toggleTodoCollapsed, useTurnSelector } from '../app/turnStore.js'
@@ -14,11 +15,70 @@ import { TodoPanel } from './todoPanel.js'
 const groupedSegments = (segments: Msg[]): Msg[] =>
   segments.reduce<Msg[]>((acc, msg) => appendToolShelfMessage(acc, msg), [])
 
-interface LiveBlock {
+export interface LiveBlock {
   isStreaming?: boolean
   key: string
   msg: Msg
   tools?: ActiveTool[]
+}
+
+export function LiveTailFrameBoundary({ children, signature }: { children?: ReactNode; signature: string }) {
+  const { stdout } = useStdout()
+
+  useLayoutEffect(() => {
+    invalidatePrevFrame(stdout)
+  }, [signature, stdout])
+
+  useLayoutEffect(
+    () => () => {
+      invalidatePrevFrame(stdout)
+    },
+    [stdout]
+  )
+
+  return <>{children}</>
+}
+
+const lineShape = (value: string | undefined): string => {
+  if (!value) {
+    return '0:0'
+  }
+
+  return `${value.length}:${value.split('\n').length}`
+}
+
+const liveBlockShape = (block: LiveBlock): string =>
+  [
+    block.key,
+    block.msg.kind ?? 'message',
+    block.msg.role,
+    block.msg.tools?.length ?? 0,
+    block.msg.thinking ? lineShape(block.msg.thinking) : '0:0',
+    ...(block.tools ?? []).map(
+      tool => `${tool.id}:${tool.name}:${lineShape(tool.context)}:${lineShape(tool.verboseArgs)}`
+    )
+  ].join(':')
+
+export function liveTailStructuralSignature({
+  blocks,
+  detailsMode,
+  detailsModeCommandOverride,
+  progressVisible,
+  sections
+}: {
+  blocks: LiveBlock[]
+  detailsMode: DetailsMode
+  detailsModeCommandOverride: boolean
+  progressVisible: boolean
+  sections?: SectionVisibility
+}): string {
+  return [
+    progressVisible ? 'progress' : 'no-progress',
+    detailsMode,
+    detailsModeCommandOverride ? 'command-override' : 'no-command-override',
+    JSON.stringify(sections ?? {}),
+    ...blocks.map(liveBlockShape)
+  ].join('|')
 }
 
 export const StreamingAssistant = memo(function StreamingAssistant({
@@ -36,10 +96,6 @@ export const StreamingAssistant = memo(function StreamingAssistant({
   const streaming = useTurnSelector(state => state.streaming)
   const activeTools = useTurnSelector(state => state.tools)
   const showStreamingArea = Boolean(streaming)
-
-  if (!progress.showProgressArea && !showStreamingArea && !activeTools.length) {
-    return null
-  }
 
   // Flatten the live area into one ordered list so each block's leading gap
   // can be derived from the block directly above it — including the boundary
@@ -62,11 +118,23 @@ export const StreamingAssistant = memo(function StreamingAssistant({
     blocks.push({ key: 'pending-tools', msg: { kind: 'trail', role: 'system', text: '', tools: streamPendingTools } })
   }
 
+  const structuralSignature = liveTailStructuralSignature({
+    blocks,
+    detailsMode,
+    detailsModeCommandOverride,
+    progressVisible: progress.showProgressArea,
+    sections
+  })
+
+  if (!progress.showProgressArea && !showStreamingArea && !activeTools.length) {
+    return <LiveTailFrameBoundary signature={structuralSignature} />
+  }
+
   const detailsCtx = { commandOverride: detailsModeCommandOverride, detailsMode, sections }
   let prev = prevMsg
 
   return (
-    <>
+    <LiveTailFrameBoundary signature={structuralSignature}>
       {blocks.map(block => {
         const node = (
           <MessageLine
@@ -97,7 +165,7 @@ export const StreamingAssistant = memo(function StreamingAssistant({
 
         return node
       })}
-    </>
+    </LiveTailFrameBoundary>
   )
 })
 
