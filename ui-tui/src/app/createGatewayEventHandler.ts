@@ -434,6 +434,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
   const { appendMessage, panel, setHistoryItems } = ctx.transcript
   const { setInput } = ctx.composer
   const { submitLiteralRef, submitRef } = ctx.submission
+
   const {
     setProcessing: setVoiceProcessing,
     setRecording: setVoiceRecording,
@@ -982,9 +983,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         setVoiceRecordingDeadline(recordingDeadlineFromStatus(ev.payload ?? {}))
         const silenceRemaining = Number(ev.payload?.silence_remaining_seconds)
         setVoiceSilenceRemaining(
-          ev.payload?.silence_remaining_seconds === null || !Number.isFinite(silenceRemaining)
-            ? null
-            : silenceRemaining
+          ev.payload?.silence_remaining_seconds === null || !Number.isFinite(silenceRemaining) ? null : silenceRemaining
         )
 
         if (state === 'listening') {

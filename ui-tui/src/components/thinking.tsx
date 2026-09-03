@@ -192,7 +192,17 @@ function Detail({
   rails = [],
   t
 }: DetailRow & { branch?: TreeBranch; rails?: TreeRails; t: Theme }) {
-  return <TreeTextRow branch={branch} color={color} content={content} dimColor={dimColor} onClick={onClick} rails={rails} t={t} />
+  return (
+    <TreeTextRow
+      branch={branch}
+      color={color}
+      content={content}
+      dimColor={dimColor}
+      onClick={onClick}
+      rails={rails}
+      t={t}
+    />
+  )
 }
 
 function StreamCursor({

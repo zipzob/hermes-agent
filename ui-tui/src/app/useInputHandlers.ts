@@ -404,13 +404,7 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
     // Recording stop is an emergency/lifecycle control like Ctrl+C. Agent
     // turns and context compression mark input blocked, but must never trap
     // an already-open microphone until silence/max-duration wins.
-    if (
-      shouldRouteVoiceStopWhileBlocked(
-        isBlocked,
-        voice.recording,
-        isVoiceToggleKey(key, ch, voice.recordKey)
-      )
-    ) {
+    if (shouldRouteVoiceStopWhileBlocked(isBlocked, voice.recording, isVoiceToggleKey(key, ch, voice.recordKey))) {
       return voiceRecordToggle()
     }
 

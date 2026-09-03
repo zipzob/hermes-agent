@@ -34,9 +34,10 @@ export function formatVoiceStatusLabel(state: VoiceStatusLabelState): string {
   if (state.recording) {
     const silence = Number(state.silenceRemainingSeconds)
 
-    const silenceLabel = Number.isFinite(silence) && state.silenceRemainingSeconds !== null
-      ? ` silence ${Math.max(0, Math.ceil(silence))}s`
-      : ''
+    const silenceLabel =
+      Number.isFinite(silence) && state.silenceRemainingSeconds !== null
+        ? ` silence ${Math.max(0, Math.ceil(silence))}s`
+        : ''
 
     if (state.deadlineMs === null) {
       return `● REC${silenceLabel}`
@@ -44,9 +45,8 @@ export function formatVoiceStatusLabel(state: VoiceStatusLabelState): string {
 
     const remaining = Math.max(0, Math.ceil((state.deadlineMs - state.nowMs) / 1000))
 
-    const hardLimit = remaining >= 60
-      ? `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}`
-      : `${remaining}s`
+    const hardLimit =
+      remaining >= 60 ? `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}` : `${remaining}s`
 
     return `● REC${silenceLabel} · max ${hardLimit}`
   }

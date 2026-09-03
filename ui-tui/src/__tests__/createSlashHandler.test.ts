@@ -664,9 +664,7 @@ describe('createSlashHandler', () => {
   })
 
   it('/voice silence configures or disables silence endpointing', async () => {
-    const rpc = vi.fn(() =>
-      Promise.resolve({ recording_mode: 'silence', silence_duration_seconds: 60 })
-    )
+    const rpc = vi.fn(() => Promise.resolve({ recording_mode: 'silence', silence_duration_seconds: 60 }))
 
     const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
 

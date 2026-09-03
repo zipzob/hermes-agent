@@ -46,7 +46,12 @@ describe('ApprovalPrompt frame invalidation', () => {
       <ApprovalPrompt
         cols={100}
         onChoice={() => {}}
-        req={{ allowPermanent: true, command: 'echo test', description: 'test command', expiresAtMs: Date.now() + 15 * 60_000 }}
+        req={{
+          allowPermanent: true,
+          command: 'echo test',
+          description: 'test command',
+          expiresAtMs: Date.now() + 15 * 60_000
+        }}
         t={DEFAULT_THEME}
       />,
       {
@@ -89,7 +94,12 @@ describe('ApprovalPrompt frame invalidation', () => {
       <ApprovalPrompt
         cols={100}
         onChoice={() => {}}
-        req={{ allowPermanent: true, command: 'echo test', description: 'test command', expiresAtMs: Date.now() + 15 * 60_000 }}
+        req={{
+          allowPermanent: true,
+          command: 'echo test',
+          description: 'test command',
+          expiresAtMs: Date.now() + 15 * 60_000
+        }}
         t={DEFAULT_THEME}
       />,
       {

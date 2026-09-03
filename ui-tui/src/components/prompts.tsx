@@ -149,7 +149,14 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
   const overflow = rawLines.length - shown.length
 
   return (
-    <Box alignSelf="center" borderColor={t.color.warn} borderStyle="double" flexDirection="column" paddingX={1} width={panelWidth}>
+    <Box
+      alignSelf="center"
+      borderColor={t.color.warn}
+      borderStyle="double"
+      flexDirection="column"
+      paddingX={1}
+      width={panelWidth}
+    >
       <Text bold color={t.color.warn}>
         ⚠ approval required · {req.description}
       </Text>

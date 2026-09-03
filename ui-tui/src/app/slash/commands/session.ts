@@ -319,8 +319,12 @@ export const sessionCommands: SlashCommand[] = [
       const [command = '', value = ''] = normalized.split(/\s+/, 2)
 
       const action =
-        command === 'on' || command === 'off' || command === 'tts' || command === 'status' ||
-        command === 'dictation' || command === 'silence'
+        command === 'on' ||
+        command === 'off' ||
+        command === 'tts' ||
+        command === 'status' ||
+        command === 'dictation' ||
+        command === 'silence'
           ? command
           : 'status'
 
@@ -396,9 +400,10 @@ export const sessionCommands: SlashCommand[] = [
 
             const recordingMode = r.recording_mode === 'silence' ? 'silence auto-stop' : 'manual stop'
 
-            const cutoff = typeof r.max_recording_seconds === 'number' && r.max_recording_seconds > 0
-              ? `${r.max_recording_seconds}s`
-              : 'unlimited'
+            const cutoff =
+              typeof r.max_recording_seconds === 'number' && r.max_recording_seconds > 0
+                ? `${r.max_recording_seconds}s`
+                : 'unlimited'
 
             ctx.transcript.sys(`  Recording:  ${recordingMode}`)
             ctx.transcript.sys(

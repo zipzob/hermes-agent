@@ -256,7 +256,9 @@ export function ModelPicker({
     const model = models[targetIndex]
 
     if (provider && model) {
-      onSelect(`${model} --provider ${provider.slug}${allowPersistGlobal && persistGlobal ? ' --global' : ` ${TUI_SESSION_MODEL_FLAG}`}`)
+      onSelect(
+        `${model} --provider ${provider.slug}${allowPersistGlobal && persistGlobal ? ' --global' : ` ${TUI_SESSION_MODEL_FLAG}`}`
+      )
     } else {
       setStage('provider')
     }

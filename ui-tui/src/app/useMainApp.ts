@@ -185,7 +185,6 @@ export function useMainApp(gw: GatewayClient) {
     }
   }, [stdout])
 
-
   const [historyItems, setHistoryItemsState] = useState<Msg[]>(() => [{ kind: 'intro', role: 'system', text: '' }])
   const [historyGeneration, setHistoryGeneration] = useState(0)
 
@@ -662,11 +661,13 @@ export function useMainApp(gw: GatewayClient) {
     }
 
     let stopped = false
+
     const refresh = () => {
       gw.request<SessionUsageResponse>('session.usage', { session_id: getUiState().sid })
         .then(raw => {
           const result = asRpcResult<SessionUsageResponse>(raw)
           const next = result?.governor_status
+
           if (!stopped && next && next !== getUiState().usage.governor_status) {
             patchUiState(state => ({ ...state, usage: { ...state.usage, governor_status: next } }))
           }
@@ -676,6 +677,7 @@ export function useMainApp(gw: GatewayClient) {
 
     refresh()
     const timer = setInterval(refresh, 5000)
+
     return () => {
       stopped = true
       clearInterval(timer)

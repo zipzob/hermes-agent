@@ -26,7 +26,9 @@ describe('ToolTrail payload disclosure', () => {
       <ToolTrail
         detailsMode="expanded"
         t={DEFAULT_THEME}
-        trail={['Terminal("npm test") (1.0s) :: Args:\n{\n  "command": "npm test"\n}\nResult:\n{\n  "exit_code": 0\n} ✓']}
+        trail={[
+          'Terminal("npm test") (1.0s) :: Args:\n{\n  "command": "npm test"\n}\nResult:\n{\n  "exit_code": 0\n} ✓'
+        ]}
       />,
       {
         patchConsole: false,
