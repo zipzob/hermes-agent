@@ -463,11 +463,12 @@ def test_local_ollama_embedded_startup_holds_shared_inference_lease(
             events.append("ensure-started")
 
     class InlineThread:
-        def __init__(self, *, target, **_kwargs):
+        def __init__(self, *, target, args=(), **_kwargs):
             self._target = target
+            self._args = args
 
         def start(self):
-            self._target()
+            self._target(*self._args)
 
     fake_embed_package = SimpleNamespace()
     fake_daemon_manager = SimpleNamespace(console=None)
