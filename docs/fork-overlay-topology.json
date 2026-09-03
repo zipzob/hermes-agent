@@ -1,0 +1,141 @@
+{
+  "version": 1,
+  "base": "upstream/main",
+  "policy": {
+    "integration_branch": "main",
+    "topic_prefix": "contrib/",
+    "archive_prefix": "archive/",
+    "publish_topics": false,
+    "replay": "roots first; stack children parent-first; compose main once"
+  },
+  "stacks": [
+    [
+      "hindsight-runtime",
+      "local-inference-coordination",
+      "parakeet-stt-shared-service",
+      "voice-staged-dictation"
+    ],
+    [
+      "tui-frame-recovery",
+      "tui-approval-review",
+      "tui-tool-payload-disclosure"
+    ]
+  ],
+  "topics": {
+    "autonomous-session-recovery": {
+      "parent": null,
+      "related_prs": [95709, 94164, 76805],
+      "checks": ["tests/test_tui_gateway_server.py"]
+    },
+    "fork-update-rebase": {
+      "parent": null,
+      "related_prs": [95043, 92769],
+      "checks": ["tests/hermes_cli/test_cmd_update.py", "tests/hermes_cli/test_update_autostash.py"]
+    },
+    "hindsight-runtime": {
+      "parent": null,
+      "related_prs": [60358, 35262, 52782],
+      "checks": ["tests/plugins/memory/test_hindsight_provider.py"]
+    },
+    "kanban-persistence": {
+      "parent": null,
+      "related_prs": [75513],
+      "checks": ["tests/hermes_cli/test_kanban_decompose_db.py", "tests/hermes_cli/test_kanban_specify_db.py"]
+    },
+    "local-inference-coordination": {
+      "parent": "hindsight-runtime",
+      "related_prs": [],
+      "checks": ["tests/tools/test_local_inference_lease.py"]
+    },
+    "parakeet-stt-shared-service": {
+      "parent": "local-inference-coordination",
+      "related_prs": [31907, 5350, 29880],
+      "checks": ["tests/plugins/transcription/test_parakeet_provider.py"]
+    },
+    "test-isolation": {
+      "parent": null,
+      "related_prs": [94274, 59358, 83079],
+      "checks": ["tests/hermes_cli/test_doctor.py"]
+    },
+    "tool-executor-flush": {
+      "parent": null,
+      "related_prs": [61116],
+      "checks": ["tests/run_agent/test_tool_call_incremental_persistence.py"]
+    },
+    "tui-approval-review": {
+      "parent": "tui-frame-recovery",
+      "related_prs": [56978],
+      "checks": ["ui-tui/src/__tests__/approvalPromptRepaint.test.tsx"]
+    },
+    "tui-frame-recovery": {
+      "parent": null,
+      "related_prs": [94061],
+      "checks": ["ui-tui/packages/hermes-ink/src/ink/ink-focus-redraw.test.ts"]
+    },
+    "tui-input-recovery": {
+      "parent": null,
+      "related_prs": [88937, 96410],
+      "checks": [
+        "ui-tui/src/__tests__/streamingAssistantRepaint.test.tsx",
+        "ui-tui/src/__tests__/useMainAppRendererOwnership.test.ts",
+        "ui-tui/src/__tests__/textInputFastEcho.test.ts"
+      ]
+    },
+    "tui-numeric-selection": {
+      "parent": null,
+      "related_prs": [],
+      "checks": ["ui-tui/src/__tests__/modelPicker.test.ts"]
+    },
+    "tui-session-lifecycle": {
+      "parent": null,
+      "related_prs": [95709, 94164],
+      "checks": ["tests/test_tui_gateway_server.py"]
+    },
+    "tui-session-tree-interventions": {
+      "parent": null,
+      "related_prs": [70899, 63764, 76805],
+      "checks": ["tests/test_tui_gateway_server.py"]
+    },
+    "tui-todo-scroll": {
+      "parent": null,
+      "related_prs": [],
+      "checks": ["ui-tui/src/__tests__/liveTodoPlacement.test.ts"]
+    },
+    "tui-tool-payload-disclosure": {
+      "parent": "tui-approval-review",
+      "related_prs": [56978],
+      "checks": ["ui-tui/src/__tests__/useInputHandlers.test.ts"]
+    },
+    "update-managed-install": {
+      "parent": null,
+      "related_prs": [66233, 67011, 67276, 76232, 66638, 52841],
+      "checks": ["tests/hermes_cli/test_tui_npm_install.py"]
+    },
+    "usage-governor": {
+      "parent": null,
+      "related_prs": [53408, 47877, 58493],
+      "checks": ["ui-tui/src/__tests__/appChromeStatusRule.test.tsx"]
+    },
+    "voice-staged-dictation": {
+      "parent": "parakeet-stt-shared-service",
+      "related_prs": [84204, 84486, 61936, 31907],
+      "checks": ["ui-tui/src/__tests__/useInputHandlers.test.ts", "tests/test_tui_gateway_server.py"]
+    },
+    "web-defensive-rendering": {
+      "parent": null,
+      "related_prs": [],
+      "checks": ["web"]
+    },
+    "wsl-voice": {
+      "parent": null,
+      "related_prs": [4317, 59357, 3914],
+      "checks": ["tests/hermes_cli/test_voice_wrapper.py"]
+    }
+  },
+  "archived": {
+    "delegation-routing": "superseded zero-delta compatibility marker",
+    "trace-upload-compat": "superseded zero-delta compatibility marker",
+    "hindsight-runtime-rebased": "duplicate alias",
+    "web-defensive-rendering-rebase": "duplicate alias"
+  }
+}
