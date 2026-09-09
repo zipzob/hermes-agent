@@ -13,13 +13,16 @@ from __future__ import annotations
 import asyncio
 import atexit
 import contextlib
+import contextvars
 import json
 import logging
+import math
 import os
 import queue
 import sys
 import threading
 import time
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -30,7 +33,8 @@ from hermes_cli.config import cfg_get
 from hermes_constants import get_hermes_home
 from hermes_time import now as _hermes_now
 from tools.registry import tool_error
-from utils import read_json_or_empty
+from tools.local_inference_lease import local_inference_lease
+from utils import is_truthy_value, read_json_or_empty
 
 from .embedded import (
     _RETRIABLE_CONNECTION_MARKERS, _build_embedded_profile_env,
@@ -65,21 +69,11 @@ def _ensure_client_dependency() -> None:
 
 
 def _scoped_setting(name: str, default: str = "") -> str:
-    """Profile-scoped read of a retain SHAPING value, with the provider's own default on a miss.
+    """Read non-critical retain shaping without leaking the default profile's env.
 
-    Under ``gateway.multiplex_profiles`` ``os.environ`` holds the DEFAULT profile's ``.env``, so a miss
-    is a miss — never ``os.environ`` (same rule as the daemon's key and base URL in ``embedded.py``).
-    Single-profile deployments are unchanged: with no scope installed ``get_secret`` still reads the
-    process env, where the value IS this profile's own.
-
-    Deliberately narrower than a bare ``get_secret``: this helper is only for presentation shaping
-    (retain source label, speaker prefixes, tags). The isolation-critical values — ``mode``,
-    ``apiKey`` and the ``bankId`` data partition — read through bare ``get_secret`` above and so
-    still fail loud on a scopeless multiplexed read, matching the other scoped credential readers.
-    In ``_load_config`` that read happens FIRST, so a missing scope raises on ``HINDSIGHT_MODE``
-    before this helper is ever reached; swallowing here therefore cannot mask an isolation failure.
-    What it does avoid is losing the whole memory provider (``initialize`` failing, and the manager
-    logging + dropping it) because a speaker prefix could not be resolved.
+    Isolation-critical selectors still use ``get_secret`` directly and therefore
+    fail closed when a multiplexed worker has no installed secret scope.  A
+    missing decorative setting must not disable the whole memory provider.
     """
     try:
         value = get_secret(name, default)
@@ -202,12 +196,39 @@ def _get_loop() -> asyncio.AbstractEventLoop:
 
 
 def _run_sync(coro, timeout: float = _DEFAULT_TIMEOUT):
-    """Schedule *coro* on the shared loop and block until done."""
+    """Schedule *coro* and wait until timeout cancellation cleanup completes."""
     from agent.async_utils import safe_schedule_threadsafe
-    future = safe_schedule_threadsafe(coro, _get_loop())
+
+    async def _bounded():
+        return await asyncio.wait_for(coro, timeout=timeout)
+
+    bounded = _bounded()
+    future = safe_schedule_threadsafe(bounded, _get_loop())
     if future is None:
+        bounded.close()
+        close = getattr(coro, "close", None)
+        if close is not None:
+            close()
         raise RuntimeError("Hindsight loop unavailable")
-    return future.result(timeout=timeout)
+    return future.result()
+
+
+def _shared_inference_timeout(value: Any, default: float) -> float:
+    """Accept only finite, bounded lease wait values from plugin config."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if math.isfinite(parsed) and 0.001 <= parsed <= 3600.0 else default
+
+
+def _context_thread(target, name: str) -> threading.Thread:
+    """Daemon thread running *target* in a snapshot of the spawner's contextvars.
+    Threads start with an EMPTY Context; under multiplex_profiles get_secret fails
+    closed without the profile's secret scope + HERMES_HOME override. (The shared
+    loop needs no wrap: run_coroutine_threadsafe inherits the submitter's context.)"""
+    context = contextvars.copy_context()
+    return threading.Thread(target=lambda: context.run(target), daemon=True, name=name)
 
 
 RETAIN_SCHEMA = {
@@ -260,7 +281,7 @@ def _load_config() -> dict:
     """$HERMES_HOME/hindsight/config.json (profile-scoped), else ~/.hindsight/config.json
     (legacy, shared), else environment variables."""
     for path in (get_hermes_home() / "hindsight" / "config.json", Path.home() / ".hindsight" / "config.json"):
-        # A corrupt (or empty) file falls through to the next source, as before the dedup.
+        # A corrupt or empty profile file falls through to the next source.
         if path.exists() and (data := read_json_or_empty(path)):
             return data
     # Mode, bank (the data partition), endpoint and retain shaping are per-profile .env values like
@@ -348,6 +369,8 @@ class HindsightMemoryProvider(MemoryProvider):
         self._embedded_failure_at = 0.0
         self._embedded_failure_reason = ""
         self._embedded_failure_cooldown = _DEFAULT_EMBEDDED_FAILURE_COOLDOWN
+        self._shared_local_inference = False
+        self._shared_local_inference_timeout = float(_DEFAULT_TIMEOUT)
         self._status_callback: Optional[Callable[[str], None]] = None
 
         # Retain: single-writer model — sync_turn() enqueues, one writer thread
@@ -436,6 +459,7 @@ class HindsightMemoryProvider(MemoryProvider):
             {"key": "llm_base_url", "description": "Endpoint URL (e.g. http://192.168.1.10:8080/v1)", "default": "", "when": {"mode": "local_embedded", "llm_provider": "openai_compatible"}},
             {"key": "llm_api_key", "description": "LLM API key (optional for openai_compatible)", "secret": True, "env_var": "HINDSIGHT_LLM_API_KEY", "when": {"mode": "local_embedded"}},
             {"key": "llm_model", "description": "LLM model", "default": "gpt-4o-mini", "default_from": {"field": "llm_provider", "map": _PROVIDER_DEFAULT_MODELS}, "when": {"mode": "local_embedded"}},
+            {"key": "llm_provider", "description": "LLM provider used by the external Hindsight service (required only for local inference coordination)", "default": "", "choices": ["", "ollama", "openai", "anthropic", "gemini", "groq", "openrouter", "minimax", "lmstudio", "openai_compatible"], "when": {"mode": "local_external"}},
             {"key": "bank_id", "description": "Memory bank name (static fallback when bank_id_template is unset)", "default": "hermes"},
             {"key": "bank_id_template", "description": "Optional template to derive bank_id dynamically. Placeholders: {profile}, {workspace}, {platform}, {user}, {session}. Example: hermes-{profile}", "default": ""},
             {"key": "bank_mission", "description": "Mission/purpose description for the memory bank"},
@@ -458,6 +482,10 @@ class HindsightMemoryProvider(MemoryProvider):
             {"key": "auto_retain", "description": "Automatically retain conversation turns", "default": True},
             {"key": "retain_every_n_turns", "description": "Retain every N turns (1 = every turn)", "default": 1},
             {"key": "retain_async","description": "Process retain asynchronously on the Hindsight server", "default": True},
+            {"key": "shared_local_inference", "description": "Coordinate local Ollama operations with other Hermes GPU workloads", "default": False, "when": {"mode": "local_embedded", "llm_provider": "ollama"}},
+            {"key": "shared_local_inference_timeout", "description": "Seconds to wait for the shared local inference lease", "default": _DEFAULT_TIMEOUT, "when": {"mode": "local_embedded", "llm_provider": "ollama"}},
+            {"key": "shared_local_inference", "description": "Coordinate external local Ollama operations with other Hermes GPU workloads", "default": False, "when": {"mode": "local_external", "llm_provider": "ollama"}},
+            {"key": "shared_local_inference_timeout", "description": "Seconds to wait for the shared local inference lease", "default": _DEFAULT_TIMEOUT, "when": {"mode": "local_external", "llm_provider": "ollama"}},
             {"key": "prefetch_waits_for_retain", "description": "Have the background next-turn prefetch wait for the just-completed retain to become recall-visible on the server (local queue drain + async operation completion) before recalling, so recall includes the just-completed turn (runs off the reply path, adds no response latency)", "default": True},
             {"key": "prefetch_retain_drain_timeout", "description": "Max seconds the background prefetch waits for the retain to become recall-visible (queue drain + server-side completion) before recalling anyway", "default": 10.0},
             {"key": "retain_context", "description": "Context label for retained memories", "default": "conversation between Hermes Agent and the User"},
@@ -562,16 +590,22 @@ class HindsightMemoryProvider(MemoryProvider):
     def _run_hindsight_operation(self, operation):
         """Run an async client operation; for local_embedded, a stale-daemon
         connection failure recreates the client and retries once."""
-        try:
-            return self._run_sync(operation(self._get_client()))
-        except Exception as exc:
-            text = f"{type(exc).__name__}: {exc}".lower()
-            if self._mode != "local_embedded" or not any(m in text for m in _RETRIABLE_CONNECTION_MARKERS):
-                raise
-            logger.info("Hindsight embedded daemon appears unreachable; recreating client and retrying once: %s", exc)
-            self._client = None
-            self._client = client = self._get_client()
-            return self._run_sync(operation(client))
+        def _run():
+            try:
+                return self._run_sync(operation(self._get_client()))
+            except Exception as exc:
+                text = f"{type(exc).__name__}: {exc}".lower()
+                if self._mode != "local_embedded" or not any(m in text for m in _RETRIABLE_CONNECTION_MARKERS):
+                    raise
+                logger.info("Hindsight embedded daemon appears unreachable; recreating client and retrying once: %s", exc)
+                self._client = None
+                self._client = client = self._get_client()
+                return self._run_sync(operation(client))
+
+        if not self._shared_local_inference:
+            return _run()
+        with local_inference_lease("hindsight:ollama", timeout=self._shared_local_inference_timeout):
+            return _run()
 
     # -- retain writer thread + server-side visibility -------------------------
 
@@ -783,6 +817,14 @@ class HindsightMemoryProvider(MemoryProvider):
         default_url = _DEFAULT_LOCAL_URL if self._mode in {"local_embedded", "local_external"} else _DEFAULT_API_URL
         self._api_url = cfg.get("api_url") or get_secret("HINDSIGHT_API_URL", "") or default_url
         self._llm_base_url = cfg.get("llm_base_url", "")
+        self._shared_local_inference = (
+            self._mode in {"local_embedded", "local_external"}
+            and str(cfg.get("llm_provider", "")).strip().lower() == "ollama"
+            and is_truthy_value(cfg.get("shared_local_inference", False), default=False)
+        )
+        self._shared_local_inference_timeout = _shared_inference_timeout(
+            cfg.get("shared_local_inference_timeout", _DEFAULT_TIMEOUT), float(_DEFAULT_TIMEOUT)
+        )
 
         banks = cfg_get(cfg, "banks", "hermes", default={})
         self._bank_id_template = cfg.get("bank_id_template", "") or ""
@@ -803,9 +845,7 @@ class HindsightMemoryProvider(MemoryProvider):
 
     def _apply_retain_settings(self, cfg: dict) -> None:
         def _cfg_or_env(key: str, env_var: str, default: str = "") -> Any:
-            # The env half is the same per-profile value ``_load_config`` resolves through the scope;
-            # a raw read here handed a multiplexed secondary the DEFAULT profile's retain shaping back.
-            return cfg.get(key) or _scoped_setting(env_var, default)
+            return cfg.get(key) or os.environ.get(env_var, default)
 
         self._retain_tags = _normalize_retain_tags(_cfg_or_env("retain_tags", "HINDSIGHT_RETAIN_TAGS"))
         self._tags = self._retain_tags or None
@@ -818,6 +858,10 @@ class HindsightMemoryProvider(MemoryProvider):
             or "Assistant"
         )
         self._apply_retain_policy(cfg)
+        if self._shared_local_inference and self._retain_async:
+            # Holding the lease must cover actual Ollama execution, not merely
+            # server acceptance of an asynchronous retain operation.
+            self._retain_async = False
 
     def _apply_retain_policy(self, cfg: dict) -> None:
         """Pure-config retain knobs (no env/secret reads; ``{}`` yields the defaults)."""
@@ -897,28 +941,33 @@ class HindsightMemoryProvider(MemoryProvider):
             from rich.console import Console
             dem.console = Console(file=open(log_path, "a", encoding="utf-8"), force_terminal=False)
 
-            client = self._get_client()
-            profile = self._config.get("profile", "hermes")
-            # Profile .env out of sync with config -> rewrite and restart a running daemon.
-            # Fail-closed on key material: when this process holds no key (no secret
-            # scope on this thread) but the file does, a rewrite would destroy the
-            # only key copy the daemon subprocess can read. Skip the write AND the
-            # stop: restarting the daemon now would boot it keyless, which is the
-            # exact outage this guards against. _get_client() above already passed
-            # whatever key WAS available into the in-process client kwargs.
-            if _load_simple_env(_embedded_profile_env_path(self._config)) != _build_embedded_profile_env(self._config):
-                if _may_rewrite_profile_env(self._config):
-                    _materialize_embedded_profile_env(self._config)
-                    if client._manager.is_running(profile):
-                        _log("\n=== Config changed, restarting daemon ===\n")
-                        client._manager.stop(profile)
-                else:
-                    logger.warning(
-                        "Hindsight profile env for %r holds an LLM API key this process cannot see "
-                        "(no secret scope); leaving the file untouched so the daemon keeps its key.",
-                        profile)
-                    _log("\n=== Profile env has a key this process cannot see; left untouched ===\n")
-            client._ensure_started()
+            startup_lease = (
+                local_inference_lease("hindsight:ollama-startup", timeout=self._shared_local_inference_timeout)
+                if self._shared_local_inference else nullcontext()
+            )
+            with startup_lease:
+                client = self._get_client()
+                profile = self._config.get("profile", "hermes")
+                # Profile .env out of sync with config -> rewrite and restart a running daemon.
+                # Fail-closed on key material: when this process holds no key (no secret
+                # scope on this thread) but the file does, a rewrite would destroy the
+                # only key copy the daemon subprocess can read. Skip the write AND the
+                # stop: restarting the daemon now would boot it keyless, which is the
+                # exact outage this guards against. _get_client() above already passed
+                # whatever key WAS available into the in-process client kwargs.
+                if _load_simple_env(_embedded_profile_env_path(self._config)) != _build_embedded_profile_env(self._config):
+                    if _may_rewrite_profile_env(self._config):
+                        _materialize_embedded_profile_env(self._config)
+                        if client._manager.is_running(profile):
+                            _log("\n=== Config changed, restarting daemon ===\n")
+                            client._manager.stop(profile)
+                    else:
+                        logger.warning(
+                            "Hindsight profile env for %r holds an LLM API key this process cannot see "
+                            "(no secret scope); leaving the file untouched so the daemon keeps its key.",
+                            profile)
+                        _log("\n=== Profile env has a key this process cannot see; left untouched ===\n")
+                client._ensure_started()
             self._mark_embedded_started()
             _log("\n=== Daemon started successfully ===\n")
         except Exception as e:
