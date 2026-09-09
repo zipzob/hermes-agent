@@ -166,6 +166,8 @@ export function useMainApp(gw: GatewayClient) {
     // first event reflows immediately (the drag stays responsive), the rest
     // collapse to at most one reflow per RESIZE_COALESCE_MS, and the trailing
     // edge always applies the final width so the settled layout is exact.
+    // Ink owns physical resize recovery: it resets the frame cache and emits
+    // atomic erase+paint. This layer only updates React's layout width.
     const coalescer = createResizeCoalescer(() => setCols(stdout.columns ?? 80), RESIZE_COALESCE_MS)
     const sync = () => coalescer.schedule()
 

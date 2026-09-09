@@ -245,6 +245,17 @@ describe('colorizeHint / hintCursorCell', () => {
 })
 
 describe('supportsFastEchoTerminal', () => {
+  it('allows a global fast-echo opt-out for cursor-drift diagnosis', () => {
+    for (const value of ['0', 'false', 'no', 'off']) {
+      expect(supportsFastEchoTerminal({ HERMES_TUI_FAST_ECHO: value } as NodeJS.ProcessEnv)).toBe(false)
+    }
+  })
+
+  it('disables fast-echo under WSL cursor-proxy layers', () => {
+    expect(supportsFastEchoTerminal({ WSL_DISTRO_NAME: 'FedoraLinux-44' } as NodeJS.ProcessEnv)).toBe(false)
+    expect(supportsFastEchoTerminal({ WSL_INTEROP: '/run/WSL/123_interop' } as NodeJS.ProcessEnv)).toBe(false)
+  })
+
   it('disables fast-echo in Apple Terminal', () => {
     expect(supportsFastEchoTerminal({ TERM_PROGRAM: 'Apple_Terminal' } as NodeJS.ProcessEnv)).toBe(false)
   })
