@@ -2,12 +2,29 @@
 
 import os
 import struct
+import subprocess
+import sys
 import time
 import wave
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+
+def test_module_import_does_not_load_audio_during_process_exit():
+    """A no-playback process must not import PortAudio from its atexit hook."""
+    result = subprocess.run(
+        [sys.executable, "-c", "import tools.voice_mode"],
+        cwd=Path(__file__).resolve().parents[2],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def _non_wsl_proc_version(real_open):
@@ -199,11 +216,13 @@ class TestDetectAudioEnvironment:
         assert any("SSH" in n for n in result.get("notices", []))
 
     def test_wsl_without_pulse_blocks_voice(self, monkeypatch, tmp_path):
-        """WSL without PULSE_SERVER should block voice mode."""
+        """WSL without forwarded audio or output fallback should block voice mode."""
         monkeypatch.delenv("SSH_CLIENT", raising=False)
         monkeypatch.delenv("SSH_TTY", raising=False)
         monkeypatch.delenv("SSH_CONNECTION", raising=False)
         monkeypatch.delenv("PULSE_SERVER", raising=False)
+        monkeypatch.delenv("PIPEWIRE_REMOTE", raising=False)
+        monkeypatch.setattr("tools.voice_mode._wsl_powershell_tts_available", lambda: False)
         monkeypatch.setattr("tools.voice_mode._pulse_socket_reachable", lambda: False)
         monkeypatch.setattr("tools.voice_mode._import_audio",
                             lambda: (MagicMock(), MagicMock()))
@@ -351,10 +370,12 @@ class TestTermuxAudioRecorder:
         recorder.start()
         recorder._start_time = time.monotonic() - 1.0
         result = recorder.stop()
+        assert recorder.shutdown() is True
 
         assert result == str(output_path)
         assert command_calls[0][:2] == ["/data/data/com.termux/files/usr/bin/termux-microphone-record", "-f"]
         assert command_calls[1] == ["/data/data/com.termux/files/usr/bin/termux-microphone-record", "-q"]
+        assert len(command_calls) == 2
 
     def test_cancel_removes_partial_termux_recording(self, monkeypatch, temp_voice_dir):
         output_path = Path(temp_voice_dir) / "recording_20260409_120000.aac"
@@ -379,8 +400,111 @@ class TestTermuxAudioRecorder:
         assert output_path.exists() is False
         assert recorder.is_recording is False
 
+    def test_shutdown_retains_termux_state_when_stop_is_not_confirmed(
+        self, monkeypatch, temp_voice_dir
+    ):
+        output_path = Path(temp_voice_dir) / "recording_20260409_120000.aac"
+
+        def fake_run(cmd, **kwargs):
+            if cmd[1] == "-f":
+                Path(cmd[2]).write_bytes(b"aac-bytes")
+                return MagicMock(returncode=0, stdout="", stderr="")
+            return MagicMock(returncode=1, stdout="", stderr="stop failed")
+
+        monkeypatch.setattr(
+            "tools.voice_mode._termux_microphone_command",
+            lambda: "/data/data/com.termux/files/usr/bin/termux-microphone-record",
+        )
+        monkeypatch.setattr("tools.voice_mode._termux_api_app_installed", lambda: True)
+        monkeypatch.setattr(
+            "tools.voice_mode.time.strftime", lambda _fmt: "20260409_120000"
+        )
+        monkeypatch.setattr("tools.voice_mode.subprocess.run", fake_run)
+
+        from tools.voice_mode import TermuxAudioRecorder
+
+        recorder = TermuxAudioRecorder()
+        recorder.start()
+
+        assert recorder.shutdown() is False
+        assert recorder.is_recording is True
+        assert recorder._recording_path == str(output_path)
+        assert output_path.exists()
+
 
 class TestAudioRecorder:
+    def test_pulse_fallback_is_bounded_lossless_16khz_mono_flac(
+        self, monkeypatch, tmp_path
+    ):
+        import tools.voice_mode as vm
+
+        AudioRecorder = vm.AudioRecorder
+
+        popen = MagicMock()
+        process = popen.return_value
+        process.wait.return_value = 0
+        monkeypatch.setattr("shutil.which", lambda command: f"/usr/bin/{command}")
+        monkeypatch.setattr("subprocess.Popen", popen)
+        monkeypatch.setattr(vm, "_TEMP_DIR", str(tmp_path))
+
+        recorder = AudioRecorder()
+        recorder._max_recording_seconds = 300
+        recorder._start_pulse_fallback_recorder(RuntimeError("no PortAudio mic"))
+
+        command = popen.call_args.args[0]
+        assert command == [
+            "/usr/bin/ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "pulse",
+            "-i",
+            "default",
+            "-t",
+            "300",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "flac",
+            recorder._fallback_path,
+        ]
+        assert recorder._fallback_path.endswith(".flac")
+        assert Path(recorder._fallback_path).parent == tmp_path
+        assert Path(recorder._fallback_path).name.startswith("recording_")
+        recorder.cancel()
+
+    def test_pulse_fallback_limit_enters_normal_cutoff_flow(self, monkeypatch):
+        import threading
+
+        from tools.voice_mode import AudioRecorder
+
+        release_process = threading.Event()
+        cutoff_seen = threading.Event()
+        stop_seen = threading.Event()
+        popen = MagicMock()
+        process = popen.return_value
+        process.wait.side_effect = lambda **_kwargs: release_process.wait(2) or 0
+        process.returncode = 0
+        monkeypatch.setattr("shutil.which", lambda command: f"/usr/bin/{command}")
+        monkeypatch.setattr("subprocess.Popen", popen)
+
+        recorder = AudioRecorder()
+        recorder._recording = True
+        recorder._max_recording_seconds = 300
+        recorder._on_cutoff = lambda reason: cutoff_seen.set() if reason == "hard_limit" else None
+        recorder._on_silence_stop = stop_seen.set
+        recorder._start_pulse_fallback_recorder(RuntimeError("no PortAudio mic"))
+
+        release_process.set()
+
+        assert cutoff_seen.wait(1)
+        assert stop_seen.wait(1)
+        recorder.cancel()
+
     def test_start_raises_without_audio_libs(self, monkeypatch):
         def _fail_import():
             raise ImportError("no sounddevice")
@@ -492,6 +616,62 @@ class TestAudioRecorderCancel:
         # Stream is kept alive (persistent) — cancel() does NOT close it.
         mock_stream.stop.assert_not_called()
         mock_stream.close.assert_not_called()
+
+
+class TestAudioRecorderShutdown:
+    def test_close_exception_retains_stream_and_reports_incomplete_closure(self):
+        stream = MagicMock()
+        stream.close.side_effect = RuntimeError("close failed")
+
+        from tools.voice_mode import AudioRecorder
+
+        recorder = AudioRecorder()
+        recorder._stream = stream
+
+        assert recorder._close_stream_with_timeout(timeout=1) is False
+        assert recorder._stream is stream
+
+    def test_close_exception_can_retry_retained_stream(self):
+        stream = MagicMock()
+        stream.close.side_effect = [RuntimeError("close failed"), None]
+
+        from tools.voice_mode import AudioRecorder
+
+        recorder = AudioRecorder()
+        recorder._stream = stream
+
+        assert recorder._close_stream_with_timeout(timeout=1) is False
+        assert recorder._close_stream_with_timeout(timeout=1) is True
+        assert recorder._stream is None
+        assert stream.close.call_count == 2
+
+    def test_close_timeout_reports_incomplete_resource_closure(self):
+        import threading
+
+        close_entered = threading.Event()
+        allow_close = threading.Event()
+        stream = MagicMock()
+
+        def blocked_close():
+            close_entered.set()
+            assert allow_close.wait(timeout=2)
+
+        stream.close.side_effect = blocked_close
+
+        from tools.voice_mode import AudioRecorder
+
+        recorder = AudioRecorder()
+        recorder._stream = stream
+        try:
+            closed = recorder._close_stream_with_timeout(timeout=0)
+            assert close_entered.wait(timeout=1)
+            assert closed is False
+            assert recorder._stream is stream
+            assert recorder._close_stream_with_timeout(timeout=0) is False
+            assert recorder._stream is stream
+            assert stream.close.call_count == 1
+        finally:
+            allow_close.set()
 
 # ============================================================================
 # transcribe_recording
@@ -666,18 +846,22 @@ class TestMacOSAudioOutputPolicy:
 
 class TestCleanupTempRecordings:
     def test_old_files_deleted(self, temp_voice_dir):
-        # Create an "old" file
+        # Create old recordings in both supported local capture formats.
         old_file = temp_voice_dir / "recording_20240101_000000.wav"
         old_file.write_bytes(b"\x00" * 100)
+        old_flac = temp_voice_dir / "recording_20240101_000001.flac"
+        old_flac.write_bytes(b"fLaC" + b"\x00" * 100)
         # Set mtime to 2 hours ago
         old_mtime = time.time() - 7200
         os.utime(str(old_file), (old_mtime, old_mtime))
+        os.utime(str(old_flac), (old_mtime, old_mtime))
 
         from tools.voice_mode import cleanup_temp_recordings
 
         deleted = cleanup_temp_recordings(max_age_seconds=3600)
-        assert deleted == 1
+        assert deleted == 2
         assert not old_file.exists()
+        assert not old_flac.exists()
 
     def test_recent_files_preserved(self, temp_voice_dir):
         # Create a "recent" file
@@ -766,6 +950,44 @@ class TestSilenceDetection:
 
         recorder.cancel()
 
+    def test_silence_progress_counts_down_and_clears_when_speech_resumes(
+        self, mock_sd, fake_clock
+    ):
+        np = pytest.importorskip("numpy")
+
+        mock_sd.InputStream.return_value = MagicMock()
+
+        from tools.voice_mode import AudioRecorder
+
+        recorder = AudioRecorder()
+        recorder._silence_duration = 5.0
+        recorder._min_speech_duration = 0.05
+        progress = []
+        recorder.start(
+            on_silence_stop=lambda: None,
+            on_silence_progress=progress.append,
+        )
+        callback = mock_sd.InputStream.call_args.kwargs["callback"]
+        loud = np.full((1600, 1), 5000, dtype="int16")
+        quiet = np.zeros((1600, 1), dtype="int16")
+
+        callback(loud, 1600, None, None)
+        fake_clock.advance(0.06)
+        callback(loud, 1600, None, None)
+        callback(quiet, 1600, None, None)
+        assert progress[-1] == 5.0
+
+        fake_clock.advance(2.1)
+        callback(quiet, 1600, None, None)
+        assert 2.8 < progress[-1] < 3.0
+
+        callback(loud, 1600, None, None)
+        fake_clock.advance(0.06)
+        callback(loud, 1600, None, None)
+        assert progress[-1] is None
+
+        recorder.cancel()
+
     def test_micro_pause_tolerance_during_speech(self, mock_sd, fake_clock):
         """Brief dips below threshold during speech should NOT reset speech tracking."""
         np = pytest.importorskip("numpy")
@@ -839,13 +1061,14 @@ class TestMaxRecordingCap:
         recorder._max_wait = 60.0
 
         fires = []
+        cutoffs = []
         fired = threading.Event()
 
         def on_stop():
             fires.append(1)
             fired.set()
 
-        recorder.start(on_silence_stop=on_stop)
+        recorder.start(on_silence_stop=on_stop, on_cutoff=cutoffs.append)
         callback = self._get_stream_callback(mock_sd)
 
         loud_frame = np.full((1600, 1), 5000, dtype="int16")
@@ -864,6 +1087,7 @@ class TestMaxRecordingCap:
         assert recorder._on_silence_stop is None
         callback(loud_frame, 1600, None, None)
         assert len(fires) == 1
+        assert cutoffs == ["hard_limit"]
 
         recorder.cancel()
 
@@ -900,6 +1124,71 @@ class TestMaxRecordingCap:
 class TestPlaybackInterrupt:
     """Verify that TTS playback can be interrupted."""
 
+    def test_recorder_shutdown_kills_pulse_fallback(self, tmp_path):
+        from tools.voice_mode import AudioRecorder
+
+        fallback = tmp_path / "fallback.wav"
+        fallback.write_bytes(b"recording")
+        proc = MagicMock()
+        recorder = AudioRecorder()
+        recorder._fallback_process = proc
+        recorder._fallback_path = str(fallback)
+        recorder._stream = "pulse-fallback"
+
+        assert recorder.shutdown() is True
+
+        proc.kill.assert_called_once()
+        proc.wait.assert_called_once_with(timeout=2)
+        assert recorder._fallback_process is None
+        assert recorder._stream is None
+        assert not fallback.exists()
+
+    def test_recorder_shutdown_retains_pulse_fallback_when_wait_times_out(
+        self, tmp_path
+    ):
+        import subprocess
+
+        from tools.voice_mode import AudioRecorder
+
+        fallback = tmp_path / "fallback.flac"
+        fallback.write_bytes(b"recording")
+        proc = MagicMock()
+        proc.wait.side_effect = subprocess.TimeoutExpired("parec", 2)
+        recorder = AudioRecorder()
+        recorder._fallback_process = proc
+        recorder._fallback_path = str(fallback)
+        recorder._stream = "pulse-fallback"
+
+        assert recorder.shutdown() is False
+
+        assert recorder._fallback_process is proc
+        assert recorder._stream == "pulse-fallback"
+        assert fallback.exists()
+
+    def test_recorder_stop_retains_pulse_handle_when_forced_wait_times_out(
+        self, tmp_path
+    ):
+        import subprocess
+
+        from tools.voice_mode import AudioRecorder
+
+        fallback = tmp_path / "fallback.flac"
+        fallback.write_bytes(b"recording")
+        proc = MagicMock()
+        proc.wait.side_effect = subprocess.TimeoutExpired("parec", 2)
+        recorder = AudioRecorder()
+        recorder._recording = True
+        recorder._fallback_process = proc
+        recorder._fallback_path = str(fallback)
+        recorder._stream = "pulse-fallback"
+
+        with pytest.raises(subprocess.TimeoutExpired):
+            recorder.stop()
+
+        assert recorder._fallback_process is proc
+        assert recorder._stream == "pulse-fallback"
+        assert fallback.exists()
+
     def test_stop_playback_terminates_process(self):
         from tools.voice_mode import stop_playback, _playback_lock
         import tools.voice_mode as vm
@@ -916,6 +1205,16 @@ class TestPlaybackInterrupt:
 
         with _playback_lock:
             assert vm._active_playback is None
+
+    def test_stop_playback_stops_sounddevice_when_already_loaded(self, monkeypatch):
+        from tools.voice_mode import stop_playback
+
+        sounddevice = MagicMock()
+        monkeypatch.setitem(sys.modules, "sounddevice", sounddevice)
+
+        stop_playback()
+
+        sounddevice.stop.assert_called_once_with()
 
 # ============================================================================
 # Continuous mode flow
@@ -1315,6 +1614,49 @@ class TestFullDuplexListen:
         # Trip must come from the post-grace speech, not the onset transient:
         # by the time capture starts, we're past calib+transient+bleed blocks.
         assert stream.reads > self.CALIB + 8 + 40
+
+    def test_capture_reports_silence_progress_and_hard_limit(self, mock_sd, monkeypatch):
+        progress = []
+        cutoffs = []
+        levels = [100] * self.CALIB + [5000] * 40
+
+        path, _, _ = self._run(
+            mock_sd,
+            monkeypatch,
+            levels,
+            endpoint_silence_ms=5000,
+            max_utterance_ms=90,
+            on_cutoff=cutoffs.append,
+            on_silence_progress=progress.append,
+        )
+
+        assert path == "/tmp/fd.wav"
+        assert progress == []
+        assert cutoffs == ["hard_limit"]
+
+    def test_capture_silence_countdown_clears_when_speech_resumes(self, mock_sd, monkeypatch):
+        progress = []
+        levels = (
+            [100] * self.CALIB
+            + [5000] * 30
+            + [0] * 40
+            + [5000] * 10
+            + [0] * 200
+        )
+
+        path, _, _ = self._run(
+            mock_sd,
+            monkeypatch,
+            levels,
+            endpoint_silence_ms=5000,
+            max_utterance_ms=300000,
+            on_silence_progress=progress.append,
+        )
+
+        assert path == "/tmp/fd.wav"
+        assert progress[0] == 5.0
+        assert None in progress
+        assert progress[-1] <= 0.05
 
 class TestGetBeepVolume:
     """Issue #55908: beep amplitude must come from config.yaml, with safe fallback."""

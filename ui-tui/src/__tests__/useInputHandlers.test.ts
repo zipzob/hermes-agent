@@ -2,13 +2,15 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { getOverlayState, patchOverlayState, resetOverlayState } from '../app/overlayStore.js'
 import {
+  applyVoiceRecordRequest,
   applyVoiceRecordResponse,
   dismissSensitivePrompt,
   handleIdleHotkeyExit,
   resolveCtrlCComposerAction,
   shouldAllowIdleHotkeyExit,
   shouldDetachEditedHistoryInput,
-  shouldFallThroughForScroll
+  shouldFallThroughForScroll,
+  shouldRouteVoiceStopWhileBlocked
 } from '../app/useInputHandlers.js'
 
 const baseKey = {
@@ -134,14 +136,40 @@ describe('applyVoiceRecordResponse', () => {
     expect(sys).toHaveBeenCalledWith('voice: still transcribing; try again shortly')
   })
 
-  it('keeps optimistic REC state for successful recording starts', () => {
+  it('explains when the interruption listener owns the microphone', () => {
+    const setProcessing = vi.fn()
+    const setRecording = vi.fn()
+    const sys = vi.fn()
+
+    applyVoiceRecordResponse(
+      { reason: 'barge_listener_active', status: 'busy' },
+      true,
+      { setProcessing, setRecording },
+      sys
+    )
+    expect(setRecording).toHaveBeenCalledWith(false)
+    expect(setProcessing).toHaveBeenCalledWith(false)
+    expect(sys).toHaveBeenCalledWith('voice: already listening for your interruption')
+  })
+
+  it('applies authoritative REC state for successful recording starts', () => {
     const setProcessing = vi.fn()
     const setRecording = vi.fn()
 
     applyVoiceRecordResponse({ status: 'recording' }, true, { setProcessing, setRecording }, vi.fn())
 
-    expect(setRecording).not.toHaveBeenCalled()
-    expect(setProcessing).not.toHaveBeenCalled()
+    expect(setRecording).toHaveBeenCalledWith(true)
+    expect(setProcessing).toHaveBeenCalledWith(false)
+  })
+
+  it('shows STT after the gateway confirms recorder stop', () => {
+    const setProcessing = vi.fn()
+    const setRecording = vi.fn()
+
+    applyVoiceRecordResponse({ status: 'stopped' }, false, { setProcessing, setRecording }, vi.fn())
+
+    expect(setRecording).toHaveBeenCalledWith(false)
+    expect(setProcessing).toHaveBeenCalledWith(true)
   })
 
   it('reverts optimistic REC state when the gateway returns null', () => {
@@ -152,6 +180,30 @@ describe('applyVoiceRecordResponse', () => {
 
     expect(setRecording).toHaveBeenCalledWith(false)
     expect(setProcessing).toHaveBeenCalledWith(false)
+  })
+})
+
+describe('voice record request routing', () => {
+  it('clears REC while shutdown is pending, but waits on starts', () => {
+    const setProcessing = vi.fn()
+    const setRecording = vi.fn()
+
+    applyVoiceRecordRequest(false, { setProcessing, setRecording })
+    expect(setRecording).toHaveBeenCalledWith(false)
+    expect(setProcessing).toHaveBeenCalledWith(true)
+
+    setProcessing.mockClear()
+    setRecording.mockClear()
+    applyVoiceRecordRequest(true, { setProcessing, setRecording })
+    expect(setRecording).not.toHaveBeenCalled()
+    expect(setProcessing).not.toHaveBeenCalled()
+  })
+
+  it('routes only an active recording stop while input is blocked', () => {
+    expect(shouldRouteVoiceStopWhileBlocked(true, true, true)).toBe(true)
+    expect(shouldRouteVoiceStopWhileBlocked(true, false, true)).toBe(false)
+    expect(shouldRouteVoiceStopWhileBlocked(true, true, false)).toBe(false)
+    expect(shouldRouteVoiceStopWhileBlocked(false, true, true)).toBe(false)
   })
 })
 

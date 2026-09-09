@@ -142,7 +142,41 @@ def _tts_stream_stop(user_barge: bool = True) -> None:
 
 _fd_listener_lock = threading.Lock()
 _fd_listener_active = False
+_voice_capture_lock = threading.Lock()
+_voice_capture_owner: str | None = None
+_voice_capture_lease = None
 _fd_speak_pipelines: "set[tuple[threading.Event, threading.Event]]" = set()
+
+
+def _acquire_voice_capture(owner: str, session_id: str | None = None) -> bool:
+    global _voice_capture_lease, _voice_capture_owner
+    with _voice_capture_lock:
+        if _voice_capture_owner not in (None, owner):
+            return False
+        if _voice_capture_owner == owner:
+            return True
+        from tools.voice_capture_lease import acquire_voice_capture_lease
+        lease = acquire_voice_capture_lease(
+            owner,
+            session_id=session_id or _voice_event_sid,
+        )
+        if lease is None:
+            return False
+        _voice_capture_lease = lease
+        _voice_capture_owner = owner
+        return True
+
+
+def _release_voice_capture(owner: str) -> None:
+    global _voice_capture_lease, _voice_capture_owner
+    with _voice_capture_lock:
+        if _voice_capture_owner != owner:
+            return
+        lease = _voice_capture_lease
+        _voice_capture_lease = None
+        _voice_capture_owner = None
+        if lease is not None:
+            lease.release()
 
 
 def _arm_full_duplex_listener() -> None:
@@ -150,6 +184,8 @@ def _arm_full_duplex_listener() -> None:
     global _fd_listener_active
     with _fd_listener_lock:
         if _fd_listener_active:
+            return
+        if not _acquire_voice_capture("full_duplex"):
             return
         _fd_listener_active = True
     threading.Thread(target=_full_duplex_listener, daemon=True, name="voice-full-duplex").start()
@@ -177,6 +213,29 @@ def _full_duplex_listener() -> None:
         from tools.voice_mode import (full_duplex_listen, is_audio_output_active,
                                       transcribe_recording)
 
+        _recording_mode, max_recording_seconds = _voice_recording_policy()
+        silence_duration = _voice_silence_duration()
+        capture_started_at_ms = 0
+
+        def _emit_capture_status(state, silence_remaining=None, cutoff_reason=None):
+            nonlocal capture_started_at_ms
+            payload = {
+                "capture_kind": "barge_in",
+                "max_recording_seconds": max_recording_seconds,
+                "recording_mode": "silence",
+                "silence_duration_seconds": silence_duration,
+                "state": state,
+            }
+            if state == "listening":
+                if not capture_started_at_ms:
+                    capture_started_at_ms = int(time.time() * 1000)
+                payload["started_at_ms"] = capture_started_at_ms
+                if silence_remaining is not None:
+                    payload["silence_remaining_seconds"] = silence_remaining
+            if cutoff_reason is not None:
+                payload["cutoff_reason"] = cutoff_reason
+            _voice_emit("voice.status", payload)
+
         def _should_stop() -> bool:
             return not _voice_mode_enabled() or not (
                 _any_session_running() or _fd_tts_pending() or is_audio_output_active())
@@ -184,18 +243,36 @@ def _full_duplex_listener() -> None:
 
         def _on_trigger(phase: str) -> None:
             tripped.set()
+            _emit_capture_status("listening")
             _fd_trip(phase)
         mult, grace_ms = _fd_barge_params(_voice_cfg_dict())
         wav_path = full_duplex_listen(_should_stop, is_playing=is_audio_output_active,
                                       on_trigger=_on_trigger, multiplier=mult or None,
-                                      grace_ms=grace_ms)
+                                      grace_ms=grace_ms,
+                                      endpoint_silence_ms=round(silence_duration * 1000),
+                                      max_utterance_ms=(
+                                          round(max_recording_seconds * 1000)
+                                          if max_recording_seconds > 0 else 2_147_483_647
+                                      ),
+                                      on_silence_progress=lambda remaining: _emit_capture_status(
+                                          "listening", remaining
+                                      ),
+                                      on_cutoff=lambda reason: _emit_capture_status(
+                                          "transcribing", cutoff_reason=reason
+                                      ))
         if not (wav_path and tripped.is_set()):
             return
         try:
+            _emit_capture_status("transcribing")
             result = transcribe_recording(wav_path)
-            if result.get("success") and (result.get("transcript") or "").strip():
+            if not result.get("success"):
+                _voice_emit("voice.transcript", {
+                    "error": str(result.get("error") or "Voice transcription failed")
+                })
+            elif (result.get("transcript") or "").strip():
                 _deliver_fd_transcript(result["transcript"].strip())
         finally:
+            _emit_capture_status("idle")
             with contextlib.suppress(OSError):
                 os.unlink(wav_path)
     except Exception as e:
@@ -203,6 +280,7 @@ def _full_duplex_listener() -> None:
     finally:
         with _fd_listener_lock:
             _fd_listener_active = False
+        _release_voice_capture("full_duplex")
 
 
 def _fd_barge_params(cfg: dict) -> tuple[float, int]:
@@ -298,12 +376,55 @@ def _voice_cfg_number(value, default):
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else default
 
 
+def _voice_input_mode() -> str:
+    return "dictation" if _voice_cfg_dict().get("input_mode") == "dictation" else "submit"
+
+
+def _voice_recording_policy() -> tuple[str, float]:
+    """Return effective termination mode and hard cutoff."""
+    voice_cfg = _voice_cfg_dict()
+    raw_mode = voice_cfg.get("recording_mode")
+    mode = (
+        raw_mode.strip().lower()
+        if isinstance(raw_mode, str)
+        and raw_mode.strip().lower() in {"manual", "silence"}
+        else "silence"
+    )
+    raw_limit = voice_cfg.get("max_recording_seconds")
+    if isinstance(raw_limit, (int, float)) and not isinstance(raw_limit, bool):
+        limit = raw_limit if raw_limit > 0 else 0.0
+    else:
+        limit = 300.0
+    return mode, limit
+
+
+def _voice_silence_duration() -> float:
+    raw_duration = _voice_cfg_dict().get("silence_duration")
+    if (
+        isinstance(raw_duration, (int, float))
+        and not isinstance(raw_duration, bool)
+        and raw_duration > 0
+    ):
+        return float(raw_duration)
+    return 5.0
+
+
 def _voice_status_payload(**extra) -> dict:
     """``{enabled, record_key, tts, **extra}``: record_key (default ``ctrl+b``) rides every voice.toggle
     branch so a tts toggle never resets a custom binding."""
     record_key = _voice_cfg_dict().get("record_key")
     record_key = record_key if isinstance(record_key, str) and record_key else "ctrl+b"
-    return {"enabled": _voice_mode_enabled(), "record_key": record_key, "tts": _voice_tts_enabled(), **extra}
+    recording_mode, max_recording_seconds = _voice_recording_policy()
+    return {
+        "enabled": _voice_mode_enabled(),
+        "input_mode": _voice_input_mode(),
+        "max_recording_seconds": max_recording_seconds,
+        "record_key": record_key,
+        "recording_mode": recording_mode,
+        "silence_duration_seconds": _voice_silence_duration(),
+        "tts": _voice_tts_enabled(),
+        **extra,
+    }
 
 
 # ── Wake word ("Hey Hermes"): process-global detector (one mic). The first eligible transport
@@ -626,9 +747,18 @@ def _voice_toggle_status(rid, params: dict) -> dict:
 
 def _voice_toggle_mode(rid, params: dict) -> dict:
     enabled = params.get("action") == "on"
-    os.environ["HERMES_VOICE"] = "1" if enabled else "0"
     stop_hint = ""
     if enabled:
+        try:
+            from tools.voice_mode import check_voice_requirements
+            requirements = check_voice_requirements()
+        except Exception as e:
+            logger.warning("voice: requirements probe failed during toggle on: %s", e)
+            return _err(rid, 4016, f"voice requirements probe failed: {e}")
+        if not requirements.get("available"):
+            details = str(requirements.get("details") or "Voice mode requirements not met")
+            return _err(rid, 4016, details)
+        os.environ["HERMES_VOICE"] = "1"
         # Spoken-stop hint for the client; sourced from voice.stop_phrases, empty when disabled.
         with contextlib.suppress(Exception):
             from tools.voice_mode_transcript import voice_stop_hint
@@ -637,6 +767,7 @@ def _voice_toggle_mode(rid, params: dict) -> dict:
         if _voice_tts_enabled():
             _tts_lease_async("tui:voice-tts", True)
     else:
+        os.environ["HERMES_VOICE"] = "0"
         # The continuous loop holds the microphone; tear it down with the mode.
         try:
             from hermes_cli.voice import stop_continuous
@@ -645,6 +776,9 @@ def _voice_toggle_mode(rid, params: dict) -> dict:
             pass
         except Exception as e:
             logger.warning("voice: stop_continuous failed during toggle off: %s", e)
+        with contextlib.suppress(Exception):
+            from tools.voice_mode import stop_thinking_sound
+            stop_thinking_sound()
         _set_voice_tts(False)  # TTS is toggled independently later
     return _ok(rid, _voice_status_payload(stop_hint=stop_hint))
 
@@ -664,9 +798,53 @@ def _voice_toggle_tts(rid, params: dict) -> dict:
     return _ok(rid, _voice_status_payload())
 
 
+def _voice_toggle_dictation(rid, params: dict) -> dict:
+    value = str(params.get("value") or "status").strip().lower()
+    current = _voice_input_mode()
+    if value in {"", "status"}:
+        return _ok(rid, {"input_mode": current})
+    if value not in {"on", "off"}:
+        return _err(rid, 4002, "voice dictation expects on|off|status")
+    input_mode = "dictation" if value == "on" else "submit"
+    _write_config_key("voice.input_mode", input_mode)
+    return _ok(rid, {"input_mode": input_mode})
+
+
+def _voice_toggle_silence(rid, params: dict) -> dict:
+    import math
+
+    value = str(params.get("value") or "status").strip().lower()
+    recording_mode, _max_recording_seconds = _voice_recording_policy()
+    current_duration = _voice_silence_duration()
+    if value in {"", "status"}:
+        return _ok(rid, {
+            "recording_mode": recording_mode,
+            "silence_duration_seconds": current_duration,
+        })
+    if value == "off":
+        _write_config_key("voice.recording_mode", "manual")
+        return _ok(rid, {
+            "recording_mode": "manual",
+            "silence_duration_seconds": current_duration,
+        })
+    try:
+        duration = float(value)
+    except ValueError:
+        duration = 0.0
+    if not math.isfinite(duration) or not 1.0 <= duration <= 60.0:
+        return _err(rid, 4002, "voice silence expects off or 1..60 seconds")
+    _write_config_key("voice.silence_duration", duration)
+    _write_config_key("voice.recording_mode", "silence")
+    return _ok(rid, {
+        "recording_mode": "silence",
+        "silence_duration_seconds": duration,
+    })
+
+
 _VOICE_TOGGLE_ACTIONS = {
     "status": _voice_toggle_status, "on": _voice_toggle_mode, "off": _voice_toggle_mode,
-    "tts": _voice_toggle_tts}
+    "tts": _voice_toggle_tts, "dictation": _voice_toggle_dictation,
+    "silence": _voice_toggle_silence}
 
 
 @method("voice.toggle")
@@ -706,6 +884,7 @@ def _(rid, params: dict) -> dict:
     capture; ``stop`` forces transcription. Three silent captures emit ``no_speech_limit``."""
     action = params.get("action", "start")
     wake_paused = False
+    capture_acquired = False
     if action not in {"start", "stop"}:
         return _err(rid, 4019, f"unknown voice action: {action}")
     transport = _caller_transport()
@@ -714,15 +893,27 @@ def _(rid, params: dict) -> dict:
         return _ok(rid, {"status": "busy", "reason": "wake_owned"})
     try:
         global _voice_event_sid, _voice_wake_owner
-        if action == "start" and not _voice_mode_enabled():
-            return _err(rid, 4015, "voice mode is off — enable with /voice on")
-        with _voice_sid_lock:
-            _voice_event_sid = params.get("session_id") or _voice_event_sid
         if action == "stop":
+            with _voice_sid_lock:
+                _voice_event_sid = params.get("session_id") or _voice_event_sid
             from hermes_cli.voice import stop_continuous
             stop_continuous(force_transcribe=True)
             _resume_voice_wake()
             return _ok(rid, {"status": "stopped"})
+
+        if not _voice_mode_enabled():
+            return _err(rid, 4015, "voice mode is off — enable with /voice on")
+        if not _acquire_voice_capture("record", params.get("session_id")):
+            reason = (
+                "barge_listener_active" if _voice_capture_owner == "full_duplex"
+                else "recording_active" if _voice_capture_owner == "record"
+                else "microphone_owned_by_other_process"
+            )
+            return _ok(rid, {"status": "busy", "reason": reason})
+        capture_acquired = True
+        with _voice_sid_lock:
+            _voice_event_sid = params.get("session_id") or _voice_event_sid
+
         from hermes_cli.voice import start_continuous
         # Busy probe holds the no-speech counter during long agent turns; safe to re-register every
         # start (older wrappers lack the setter).
@@ -736,7 +927,9 @@ def _(rid, params: dict) -> dict:
         # subclass of int — a hand-edit like ``silence_threshold: true`` would otherwise forward as ``1``
         # instead of falling back to the documented 200 / 3.0 defaults (Copilot round-12 on #19835).
         voice_cfg = _voice_cfg_dict()
-        max_rec = _voice_cfg_number(voice_cfg.get("max_recording_seconds"), 120.0)
+        recording_mode, max_rec = _voice_recording_policy()
+        input_mode = _voice_input_mode()
+        silence_duration = _voice_silence_duration()
         # Hand the mic to STT if the wake detector holds it; a terminal capture event resumes it.
         with contextlib.suppress(Exception):
             from tools.wake_word import pause_listening
@@ -744,17 +937,76 @@ def _(rid, params: dict) -> dict:
         if wake_paused:
             with _voice_sid_lock:
                 _voice_wake_owner = transport
+
+        def _on_transcript(text):
+            _vr_transcript({
+                "delivery": "draft" if input_mode == "dictation" else "submit",
+                "text": text,
+            })
+
+        def _on_error(error):
+            _vr_transcript({"error": str(error)})
+
+        recording_started_at_ms = 0
+
+        def _status_payload(state, silence_remaining=None):
+            nonlocal recording_started_at_ms
+            payload = {
+                "input_mode": input_mode,
+                "state": state,
+                "recording_mode": recording_mode,
+                "silence_duration_seconds": silence_duration,
+                "max_recording_seconds": max_rec,
+            }
+            if state == "listening":
+                if not recording_started_at_ms:
+                    recording_started_at_ms = int(time.time() * 1000)
+                payload["started_at_ms"] = recording_started_at_ms
+                if silence_remaining is not None:
+                    payload["silence_remaining_seconds"] = silence_remaining
+            return payload
+
+        def _on_status(state):
+            _voice_emit("voice.status", _status_payload(state))
+            if state == "idle":
+                _resume_voice_wake()
+
+        def _on_silence_progress(remaining):
+            payload = _status_payload("listening", remaining)
+            if remaining is None:
+                payload["silence_remaining_seconds"] = None
+            _voice_emit("voice.status", payload)
+
+        def _on_cutoff(reason):
+            payload = _status_payload("transcribing")
+            payload["cutoff_reason"] = reason
+            _voice_emit("voice.status", payload)
+
         started = start_continuous(
-            on_transcript=lambda t: _vr_transcript({"text": t}), on_status=_vr_on_status,
+            on_transcript=_on_transcript, on_error=_on_error, on_status=_on_status,
+            on_capture_stopped=lambda: _release_voice_capture("record"),
             on_silent_limit=lambda: _vr_transcript({"no_speech_limit": True}),
             silence_threshold=_voice_cfg_number(voice_cfg.get("silence_threshold"), 200),
-            silence_duration=_voice_cfg_number(voice_cfg.get("silence_duration"), 3.0),
-            auto_restart=False, max_recording_seconds=max_rec if max_rec > 0 else 0.0,
-            on_stop_phrase=_vr_on_stop_phrase)
+            silence_duration=silence_duration,
+            auto_restart=False, max_recording_seconds=max_rec,
+            on_stop_phrase=_vr_on_stop_phrase,
+            silence_autostop=recording_mode == "silence",
+            on_silence_progress=_on_silence_progress,
+            on_cutoff=_on_cutoff)
         if started is False:
+            _release_voice_capture("record")
             _resume_voice_wake()
-        return _ok(rid, {"status": "busy" if started is False else "recording"})
+            return _ok(rid, {"status": "busy"})
+        return _ok(rid, {
+            "input_mode": input_mode,
+            "status": "recording",
+            "recording_mode": recording_mode,
+            "silence_duration_seconds": silence_duration,
+            "max_recording_seconds": max_rec,
+        })
     except Exception as e:
+        if capture_acquired:
+            _release_voice_capture("record")
         if wake_paused or action == "stop":
             _resume_voice_wake()
         if isinstance(e, ImportError):

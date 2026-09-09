@@ -422,12 +422,12 @@ _thinking_stop: Optional[threading.Event] = None
 
 
 def thinking_sound_enabled() -> bool:
-    """Config gate: ``voice.thinking_sound`` (default True)."""
+    """Config gate: ``voice.thinking_sound`` (default False when absent)."""
     try:
         from utils import is_truthy_value
-        return is_truthy_value(_voice_config().get("thinking_sound", True), default=True)
+        return is_truthy_value(_voice_config().get("thinking_sound", False), default=False)
     except Exception:
-        return True
+        return False
 
 
 def _synth_thinking_blip(np, frequency: float) -> "Any":
@@ -511,6 +511,9 @@ class _RecorderBase:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._recording, self._start_time, self._current_rms = False, 0.0, 0
+        self._max_recording_seconds: float = 0.0
+        self._silence_duration: float = SILENCE_DURATION_SECONDS
+        self._silence_autostop_enabled: bool = True
 
     @property
     def is_recording(self) -> bool:
@@ -535,8 +538,9 @@ class TermuxAudioRecorder(_RecorderBase):
         super().__init__()
         self._recording_path: Optional[str] = None
 
-    def start(self, on_silence_stop=None) -> None:
-        del on_silence_stop  # Termux:API does not expose live silence callbacks.
+    def start(self, on_silence_stop=None, on_silence_progress=None, on_cutoff=None) -> None:
+        # Termux:API does not expose live audio frames for silence callbacks.
+        del on_silence_stop, on_silence_progress, on_cutoff
         mic_cmd = _termux_microphone_command()
         if not mic_cmd:
             raise RuntimeError(
@@ -564,10 +568,11 @@ class TermuxAudioRecorder(_RecorderBase):
             self._start_time, self._recording, self._current_rms = time.monotonic(), True, 0
         logger.info("Termux voice recording started")
 
-    def _stop_termux_recording(self) -> None:
+    def _stop_termux_recording(self) -> bool:
         mic_cmd = _termux_microphone_command()
-        if mic_cmd:
-            _run_quiet([mic_cmd, "-q"], timeout=15, check=False)
+        if not mic_cmd:
+            return False
+        return _run_quiet([mic_cmd, "-q"], timeout=15, check=False).returncode == 0
 
     def _reset_state(self) -> tuple:
         """Clear recording state under the lock; return (was_recording, path, started_at)."""
@@ -577,10 +582,12 @@ class TermuxAudioRecorder(_RecorderBase):
         return was_recording, path, started_at
 
     def stop(self) -> Optional[str]:
-        was_recording, path, started_at = self._reset_state()
-        if not was_recording:
-            return None
-        self._stop_termux_recording()
+        with self._lock:
+            if not self._recording:
+                return None
+        if not self._stop_termux_recording():
+            raise RuntimeError("Termux microphone stop was not confirmed")
+        _, path, started_at = self._reset_state()
         if not path or not os.path.isfile(path):
             return None
         if time.monotonic() - started_at < 0.3 or os.path.getsize(path) <= 0:  # sub-0.3s taps / empty
@@ -589,15 +596,23 @@ class TermuxAudioRecorder(_RecorderBase):
         logger.info("Termux voice recording stopped: %s", path)
         return path
 
-    def cancel(self) -> None:
+    def cancel(self) -> bool:
+        with self._lock:
+            if not self._recording and self._recording_path is None:
+                return True
+        try:
+            if not self._stop_termux_recording():
+                return False
+        except Exception as exc:
+            logger.warning("Termux microphone termination not confirmed: %s", exc)
+            return False
         _, path, _ = self._reset_state()
-        with suppress(Exception):
-            self._stop_termux_recording()
         _unlink_quietly(path)
         logger.info("Termux voice recording cancelled")
+        return True
 
-    def shutdown(self) -> None:
-        self.cancel()
+    def shutdown(self) -> bool:
+        return self.cancel()
 
 
 class AudioRecorder(_RecorderBase):
@@ -610,9 +625,15 @@ class AudioRecorder(_RecorderBase):
     def __init__(self) -> None:
         super().__init__()
         self._stream: Any = None
+        self._fallback_process: Optional[subprocess.Popen] = None
+        self._fallback_path: Optional[str] = None
         self._frames: List[Any] = []
         self._sample_rate: int = SAMPLE_RATE
         self._on_silence_stop = None
+        self._on_silence_progress = None
+        self._on_cutoff = None
+        self._last_silence_progress: Optional[int] = None
+        self._silence_autostop_enabled = True
         self._silence_threshold: int = SILENCE_RMS_THRESHOLD
         self._silence_duration: float = SILENCE_DURATION_SECONDS
         self._min_speech_duration: float = 0.3  # seconds above threshold to confirm speech
@@ -633,6 +654,20 @@ class AudioRecorder(_RecorderBase):
         """``voice.max_recording_seconds`` cap elapsed (<= 0 / unset disables it)."""
         cap = self._max_recording_seconds
         return bool(cap and cap > 0 and elapsed >= cap)
+
+    def _report_silence_progress(self, remaining: Optional[float]) -> None:
+        """Report countdown transitions without flooding callbacks."""
+        bucket = None if remaining is None else max(0, math.ceil(remaining))
+        if bucket == self._last_silence_progress:
+            return
+        self._last_silence_progress = bucket
+        callback = self._on_silence_progress
+        if callback is None:
+            return
+        try:
+            callback(remaining)
+        except Exception as exc:
+            logger.debug("Silence progress callback failed: %s", exc)
 
     def _track_speech(self, rms: int, now: float) -> None:
         """Advance the speech/dip trackers for one block. Speech is confirmed after
@@ -655,6 +690,7 @@ class AudioRecorder(_RecorderBase):
                 elif now - self._resume_start >= self._min_speech_duration:
                     self._silence_start = 0.0
                     self._resume_start = 0.0
+                    self._report_silence_progress(None)
         elif self._has_spoken:
             if self._resume_start > 0:  # dip-tolerant resume reset
                 if self._resume_dip_start == 0.0:
@@ -675,17 +711,28 @@ class AudioRecorder(_RecorderBase):
         """Spoke then silent for ``_silence_duration``; no speech for ``_max_wait``;
         or the hard cap elapsed (independent of speech)."""
         elapsed = now - self._start_time
-        if self._has_spoken and rms <= self._silence_threshold:
+        if self._silence_autostop_enabled and self._has_spoken and rms <= self._silence_threshold:
             if self._silence_start == 0.0:
                 self._silence_start = now
+                self._report_silence_progress(self._silence_duration)
             elif now - self._silence_start >= self._silence_duration:
                 logger.info("Silence detected (%.1fs), auto-stopping", self._silence_duration)
                 return True
-        elif not self._has_spoken and elapsed >= self._max_wait:
+            else:
+                self._report_silence_progress(
+                    self._silence_duration - (now - self._silence_start)
+                )
+        elif self._silence_autostop_enabled and not self._has_spoken and elapsed >= self._max_wait:
             logger.info("No speech within %.0fs, auto-stopping", self._max_wait)
             return True
         if self._max_duration_reached(elapsed):
             logger.info("Max recording length reached (%.0fs), auto-stopping", self._max_recording_seconds)
+            cutoff_callback, self._on_cutoff = self._on_cutoff, None
+            if cutoff_callback is not None:
+                try:
+                    cutoff_callback("hard_limit")
+                except Exception as exc:
+                    logger.debug("Recording cutoff callback failed: %s", exc)
             return True
         return False
 
@@ -693,6 +740,7 @@ class AudioRecorder(_RecorderBase):
         """Invoke ``on_silence_stop`` once, in a daemon thread."""
         with self._lock:
             cb, self._on_silence_stop = self._on_silence_stop, None  # fire only once
+            self._on_cutoff = None
         if not cb:
             return
 
@@ -736,12 +784,64 @@ class AudioRecorder(_RecorderBase):
         except Exception as e:
             with suppress(Exception):
                 stream.close()
+            missing_default_input = any(marker in str(e).lower() for marker in (
+                "error querying device -1", "invalid input device",
+                "no default input", "no default device",
+            ))
+            if os.environ.get("PULSE_SERVER") and missing_default_input:
+                self._start_pulse_fallback_recorder(e)
+                return
             raise RuntimeError(
                 f"Failed to open audio input stream: {e}. "
                 "Check that a microphone is connected and accessible.") from e
         self._stream = stream
 
-    def start(self, on_silence_stop=None) -> None:
+    def _start_pulse_fallback_recorder(self, original_error) -> None:
+        """Capture bounded, lossless audio when PortAudio cannot find a default mic."""
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            raise RuntimeError(
+                f"Failed to open audio input stream: {original_error}. "
+                "PortAudio could not find a default microphone and ffmpeg is not installed for Pulse fallback."
+            ) from original_error
+        os.makedirs(_TEMP_DIR, exist_ok=True)
+        fd, path = tempfile.mkstemp(prefix="recording_", suffix=".flac", dir=_TEMP_DIR)
+        os.close(fd)
+        self._fallback_path = path
+        fallback_cap = self._max_recording_seconds if self._max_recording_seconds > 0 else 300.0
+        self._fallback_process = subprocess.Popen(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "pulse",
+             "-i", "default", "-t", f"{fallback_cap:g}", "-ac", "1", "-ar",
+             str(SAMPLE_RATE), "-c:a", "flac", path],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE, text=False,
+        )
+        process = self._fallback_process
+        self._stream = "pulse-fallback"
+
+        def _monitor_limit() -> None:
+            process.wait()
+            if process.returncode != 0:
+                return
+            with self._lock:
+                if self._fallback_process is not process or not self._recording:
+                    return
+                cutoff_callback, self._on_cutoff = self._on_cutoff, None
+                stop_callback, self._on_silence_stop = self._on_silence_stop, None
+            if cutoff_callback is not None:
+                try:
+                    cutoff_callback("hard_limit")
+                except Exception as exc:
+                    logger.debug("Pulse fallback cutoff callback failed: %s", exc)
+            if stop_callback is not None:
+                try:
+                    stop_callback()
+                except Exception as exc:
+                    logger.error("Pulse fallback stop callback failed: %s", exc, exc_info=True)
+
+        threading.Thread(target=_monitor_limit, daemon=True, name="voice-pulse-limit").start()
+
+    def start(self, on_silence_stop=None, on_silence_progress=None, on_cutoff=None) -> None:
         """Start capturing; *on_silence_stop* is invoked (daemon thread, no args) when
         silence follows speech. Raises ``RuntimeError`` if sounddevice/numpy are missing."""
         try:
@@ -761,34 +861,62 @@ class AudioRecorder(_RecorderBase):
             self._peak_rms = 0
             self._current_rms = 0
             self._on_silence_stop = on_silence_stop
+            self._on_silence_progress = on_silence_progress
+            self._on_cutoff = on_cutoff
+            self._last_silence_progress = None
         self._sample_rate = _default_input_samplerate(sd)
         self._ensure_stream()
         with self._lock:
             self._recording = True
         logger.info("Voice recording started (rate=%d, channels=%d)", self._sample_rate, CHANNELS)
 
-    def _close_stream_with_timeout(self, timeout: float = 3.0) -> None:
-        """Close the stream with a timeout to prevent CoreAudio hangs."""
-        if self._stream is None:
-            return
-        stream, self._stream = self._stream, None
+    def _close_stream_with_timeout(self, timeout: float = 3.0) -> bool:
+        """Close the stream, retaining ownership until concrete closure completes."""
+        with self._lock:
+            if self._stream is None:
+                return True
+            stream = self._stream
+            t = getattr(self, "_stream_close_thread", None)
+            if t is None or not t.is_alive():
+                def _do_close():
+                    succeeded = True
+                    try:
+                        stream.stop()
+                    except Exception as exc:
+                        logger.warning("Audio stream stop failed: %s", exc)
+                        succeeded = False
+                    try:
+                        stream.close()
+                    except Exception as exc:
+                        logger.warning("Audio stream close failed: %s", exc)
+                        succeeded = False
+                    if succeeded:
+                        with self._lock:
+                            if self._stream is stream:
+                                self._stream = None
 
-        def _do_close():
-            with suppress(Exception):
-                stream.stop()
-                stream.close()
-
-        t = threading.Thread(target=_do_close, daemon=True)
-        t.start()
+                t = threading.Thread(target=_do_close, daemon=True)
+                self._stream_close_thread = t
+                t.start()
         clock = __import__("time")  # real clock even when tests patch this module's ``time``
         deadline = clock.monotonic() + timeout
         while t.is_alive() and clock.monotonic() < deadline:  # short joins keep Ctrl+C responsive
             t.join(timeout=0.1)
         if t.is_alive():
-            logger.warning("Audio stream close timed out after %.1fs — forcing ahead", timeout)
+            logger.warning("Audio stream close timed out after %.1fs — retaining ownership", timeout)
+            return False
+        with self._lock:
+            return self._stream is not stream
 
     def stop(self) -> Optional[str]:
         """Stop recording (stream stays alive) and return the WAV path, or None if unusable."""
+        with self._lock:
+            proc = self._fallback_process if self._recording else None
+            fallback_path = self._fallback_path
+            if proc is not None:
+                self._recording, self._current_rms = False, 0
+        if proc is not None:
+            return self._finish_pulse_recording(proc, fallback_path)
         with self._lock:
             if not self._recording:
                 return None
@@ -810,20 +938,72 @@ class AudioRecorder(_RecorderBase):
                 return None
             return self._write_wav(audio_data, sample_rate=self._sample_rate)
 
+    def _finish_pulse_recording(self, proc, fallback_path: Optional[str]) -> Optional[str]:
+        """Finalize fallback capture outside the lock, retaining ownership on timeout."""
+        with suppress(Exception):
+            if proc.stdin:
+                proc.stdin.write(b"q")
+                proc.stdin.flush()
+                proc.stdin.close()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+            proc.wait(timeout=2)
+        with self._lock:
+            if self._fallback_process is proc:
+                self._fallback_process = None
+        if proc.returncode not in (0, 255):
+            stderr = b""
+            with suppress(Exception):
+                if proc.stderr:
+                    stderr = proc.stderr.read()
+            raise RuntimeError(
+                "Pulse fallback recorder failed: "
+                + (stderr.decode("utf-8", errors="ignore").strip() or f"exit {proc.returncode}")
+            )
+        if not fallback_path or not os.path.exists(fallback_path) or os.path.getsize(fallback_path) <= 44:
+            return None
+        audio_path = _new_recording_path(Path(fallback_path).suffix.lstrip(".") or "flac")
+        shutil.move(fallback_path, audio_path)
+        logger.info("Voice recording stopped via Pulse fallback (saved to %s)", audio_path)
+        return audio_path
+
     def _discard(self) -> None:
         with self._lock:
             self._recording, self._frames, self._on_silence_stop, self._current_rms = False, [], None, 0
 
-    def cancel(self) -> None:
+    def cancel(self) -> bool:
         """Stop recording and discard all captured audio (stream stays alive)."""
         self._discard()
+        with self._lock:
+            proc = self._fallback_process
+            fallback_path = self._fallback_path
+        if proc is not None:
+            try:
+                proc.kill()
+                proc.wait(timeout=2)
+            except Exception as exc:
+                logger.warning("Pulse fallback termination not confirmed: %s", exc)
+                return False
+            with self._lock:
+                if self._fallback_process is proc:
+                    self._fallback_process = None
+        if fallback_path:
+            _unlink_quietly(fallback_path)
         logger.info("Voice recording cancelled")
+        return True
 
-    def shutdown(self) -> None:
+    def shutdown(self) -> bool:
         """Release the audio stream. Call when voice mode is disabled."""
-        self._discard()
-        self._close_stream_with_timeout()  # outside the lock: avoids deadlock with the callback
-        logger.info("AudioRecorder shut down")
+        if not self.cancel():
+            return False
+        if self._stream == "pulse-fallback":
+            self._stream = None
+        closed = self._close_stream_with_timeout()  # outside the lock: avoids deadlock with the callback
+        if closed:
+            logger.info("AudioRecorder shut down")
+        return closed
 
     @staticmethod
     def _write_wav(audio_data, *, sample_rate: int = SAMPLE_RATE) -> str:
@@ -1277,17 +1457,47 @@ def _vad_log(msg: str) -> None:
             print(f"[voice-vad] {msg}", file=sys.stderr, flush=True)
 
 
-def _capture_until_quiet(stream, np, block: int, pre_roll, *, endpoint_blocks: int, max_blocks: int) -> str:
+def _capture_until_quiet(
+    stream, np, block: int, pre_roll, *, endpoint_blocks: int, max_blocks: int,
+    endpoint_seconds: Optional[float] = None,
+    on_silence_progress: Optional[Callable[[Optional[float]], None]] = None,
+    on_cutoff: Optional[Callable[[str], None]] = None,
+) -> str:
     """After a trip, read until *endpoint_blocks* of quiet (or *max_blocks*) and write
     pre-roll + capture to a WAV. Playback was cut by the trigger, so silence endpointing works."""
     frames: List[Any] = list(pre_roll)
     quiet = 0
+    silence_bucket: Optional[int] = None
+    endpoint_reached = False
+
+    def _report_progress(remaining: Optional[float]) -> None:
+        nonlocal silence_bucket
+        bucket = None if remaining is None else max(0, math.ceil(remaining))
+        if bucket == silence_bucket:
+            return
+        silence_bucket = bucket
+        if on_silence_progress is not None:
+            on_silence_progress(remaining)
+
     for _ in range(max_blocks):
         data, _ = stream.read(block)
         frames.append(data.copy())
-        quiet = quiet + 1 if _rms(np, data) < SILENCE_RMS_THRESHOLD else 0
+        if _rms(np, data) < SILENCE_RMS_THRESHOLD:
+            if quiet == 0:
+                _report_progress(
+                    endpoint_seconds if endpoint_seconds is not None else endpoint_blocks * 0.03
+                )
+            quiet += 1
+            _report_progress(max(0.0, (endpoint_blocks - quiet) * 0.03))
+        else:
+            if quiet:
+                _report_progress(None)
+            quiet = 0
         if quiet >= endpoint_blocks:
+            endpoint_reached = True
             break
+    if not endpoint_reached and on_cutoff is not None:
+        on_cutoff("hard_limit")
     return AudioRecorder._write_wav(np.concatenate(frames, axis=0))
 
 
@@ -1371,6 +1581,8 @@ def full_duplex_listen(
     on_trigger: Optional[Callable[[str], None]] = None, multiplier: Optional[float] = None,
     sustained_ms: int = 300, calibration_ms: int = 450, grace_ms: int = 500, pre_roll_ms: int = 1200,
     endpoint_silence_ms: int = 1250, max_utterance_ms: int = 30_000,
+    on_silence_progress: Optional[Callable[[Optional[float]], None]] = None,
+    on_cutoff: Optional[Callable[[str], None]] = None,
 ) -> Optional[str]:
     """Listen across an ENTIRE agent turn; return the captured interruption WAV path.
 
@@ -1409,7 +1621,10 @@ def full_duplex_listen(
                     except Exception as e:
                         logger.debug("full-duplex trigger callback failed: %s", e)
                 return _capture_until_quiet(stream, np, block, pre_roll, endpoint_blocks=endpoint_blocks,
-                                            max_blocks=max(1, max_utterance_ms // 30))
+                                            max_blocks=max(1, max_utterance_ms // 30),
+                                            endpoint_seconds=endpoint_silence_ms / 1000.0,
+                                            on_silence_progress=on_silence_progress,
+                                            on_cutoff=on_cutoff)
     except Exception as e:
         logger.debug("Full-duplex listener failed: %s", e)
     return None
@@ -1499,12 +1714,12 @@ def check_voice_requirements() -> Dict[str, Any]:
 
 # ── Temp file cleanup ──
 def cleanup_temp_recordings(max_age_seconds: int = 3600) -> int:
-    """Remove ``recording_*.wav`` temp files older than *max_age_seconds*; returns the count."""
+    """Remove old ``recording_*`` WAV/FLAC temp files; returns the count."""
     if not os.path.isdir(_TEMP_DIR):
         return 0
     deleted, now = 0, time.time()
     for entry in os.scandir(_TEMP_DIR):
-        if entry.is_file() and entry.name.startswith("recording_") and entry.name.endswith(".wav"):
+        if entry.is_file() and entry.name.startswith("recording_") and entry.name.endswith((".wav", ".flac")):
             with suppress(OSError):
                 if now - entry.stat().st_mtime > max_age_seconds:
                     os.unlink(entry.path)
