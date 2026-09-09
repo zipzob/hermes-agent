@@ -191,6 +191,10 @@ export function transcriptBodyWidth(totalCols: number, role: Role, userPrompt: s
   return Math.max(20, available)
 }
 
+export function composerContentColumns(totalCols: number) {
+  return Math.max(1, totalCols - 2)
+}
+
 export function stableComposerColumns(totalCols: number, promptWidth: number, termuxMode = false) {
   // Physical render/wrap width. Always reserve outer composer padding and
   // prompt prefix. Only reserve the transcript scrollbar gutter when the
@@ -199,5 +203,5 @@ export function stableComposerColumns(totalCols: number, promptWidth: number, te
   const afterPrompt = totalCols - promptWidth
   const reserveScrollbar = afterPrompt >= (termuxMode ? 36 : 24) ? 2 : 0
 
-  return Math.max(1, totalCols - promptWidth - 2 - reserveScrollbar)
+  return Math.max(1, composerContentColumns(totalCols) - promptWidth - reserveScrollbar)
 }
