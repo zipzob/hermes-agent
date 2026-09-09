@@ -7,6 +7,8 @@ turn counting, tags), and schema completeness.
 
 import importlib.util
 import json
+import importlib
+import importlib.util
 import os
 import re
 import stat
@@ -30,6 +32,7 @@ from plugins.memory.hindsight import (
     _load_config,
     _load_simple_env,
     _build_embedded_profile_env,
+    _check_local_runtime,
     _normalize_observation_scopes,
     _normalize_retain_tags,
     _resolve_bank_id_template,
@@ -249,6 +252,103 @@ def test_normalize_retain_tags_accepts_csv_and_dedupes():
     ]
 
 
+def test_normalize_retain_tags_accepts_json_array_string():
+    value = json.dumps(["agent:fakeassistantname", "source_system:hermes-agent"])
+    assert _normalize_retain_tags(value) == ["agent:fakeassistantname", "source_system:hermes-agent"]
+
+
+def test_normalize_observation_scopes_empty_is_none():
+    assert _normalize_observation_scopes("") is None
+    assert _normalize_observation_scopes(None) is None
+    assert _normalize_observation_scopes("   ") is None
+
+
+def test_normalize_observation_scopes_keywords_pass_through():
+    assert _normalize_observation_scopes("per_tag") == "per_tag"
+    assert _normalize_observation_scopes("combined") == "combined"
+    assert _normalize_observation_scopes(" all_combinations ") == "all_combinations"
+
+
+def test_normalize_observation_scopes_unknown_keyword_is_none():
+    assert _normalize_observation_scopes("nonsense") is None
+
+
+def test_normalize_observation_scopes_json_list_of_lists():
+    value = json.dumps([["user:alice"], ["team:eng"], ["user:alice", "team:eng"]])
+    assert _normalize_observation_scopes(value) == [
+        ["user:alice"],
+        ["team:eng"],
+        ["user:alice", "team:eng"],
+    ]
+
+
+def test_normalize_observation_scopes_flat_list_is_single_scope():
+    assert _normalize_observation_scopes(["user:alice", "team:eng"]) == [
+        ["user:alice", "team:eng"]
+    ]
+
+
+def test_normalize_observation_scopes_list_of_lists():
+    assert _normalize_observation_scopes([["user:alice"], ["team:eng"]]) == [
+        ["user:alice"],
+        ["team:eng"],
+    ]
+
+
+def test_check_local_runtime_requires_sentence_transformers(monkeypatch):
+    """Missing local embedding deps must fail before daemon startup waits."""
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name: None if name == "sentence_transformers" else object(),
+    )
+
+    available, reason = _check_local_runtime()
+
+    assert available is False
+    assert reason is not None
+    assert "sentence_transformers" in reason
+
+def test_embedded_startup_in_progress_fails_fast():
+    provider = HindsightMemoryProvider()
+    provider._mode = "local_embedded"
+
+    provider._mark_embedded_starting()
+
+    with pytest.raises(RuntimeError, match="still starting"):
+        provider._raise_if_embedded_unhealthy()
+
+
+def test_embedded_startup_failure_circuit_breaker(monkeypatch):
+    provider = HindsightMemoryProvider()
+    provider._mode = "local_embedded"
+    provider._embedded_failure_cooldown = 300.0
+    now = 1000.0
+    monkeypatch.setattr("plugins.memory.hindsight.time.monotonic", lambda: now)
+
+    provider._mark_embedded_failed("missing HINDSIGHT_API_LLM_API_KEY")
+
+    with pytest.raises(RuntimeError) as exc:
+        provider._raise_if_embedded_unhealthy()
+
+    assert "previously failed" in str(exc.value)
+    assert "HINDSIGHT_API_LLM_API_KEY" in str(exc.value)
+
+
+def test_embedded_startup_failure_clears_after_cooldown(monkeypatch):
+    provider = HindsightMemoryProvider()
+    provider._mode = "local_embedded"
+    provider._embedded_failure_cooldown = 10.0
+    times = iter([1000.0, 1011.0])
+    monkeypatch.setattr("plugins.memory.hindsight.time.monotonic", lambda: next(times))
+
+    provider._mark_embedded_failed("temporary startup failure")
+    provider._raise_if_embedded_unhealthy()
+
+    assert provider._embedded_failure_reason == ""
+    assert provider._embedded_failure_at == 0.0
+
+
 # ---------------------------------------------------------------------------
 # Schema tests
 # ---------------------------------------------------------------------------
@@ -371,6 +471,29 @@ class TestConfig:
 
         assert env["HINDSIGHT_EMBED_DAEMON_IDLE_TIMEOUT"] == "0"
 
+
+    def test_embedded_profile_env_includes_local_runtime_limits(self):
+        env = _build_embedded_profile_env({
+            "llm_provider": "ollama",
+            "llm_model": "small-local-model",
+            "llm_max_concurrent": 1,
+            "llm_max_retries": 1,
+            "worker_max_slots": 1,
+            "worker_consolidation_max_slots": 0,
+            "worker_retain_max_slots": 0,
+            "worker_task_retry_backoff_seconds": 300,
+            "retain_llm_max_concurrent": 1,
+            "consolidation_llm_max_concurrent": 1,
+        })
+
+        assert env["HINDSIGHT_API_LLM_MAX_CONCURRENT"] == "1"
+        assert env["HINDSIGHT_API_LLM_MAX_RETRIES"] == "1"
+        assert env["HINDSIGHT_API_WORKER_MAX_SLOTS"] == "1"
+        assert env["HINDSIGHT_API_WORKER_CONSOLIDATION_MAX_SLOTS"] == "0"
+        assert env["HINDSIGHT_API_WORKER_RETAIN_MAX_SLOTS"] == "0"
+        assert env["HINDSIGHT_API_WORKER_TASK_RETRY_BACKOFF_SECONDS"] == "300"
+        assert env["HINDSIGHT_API_RETAIN_LLM_MAX_CONCURRENT"] == "1"
+        assert env["HINDSIGHT_API_CONSOLIDATION_LLM_MAX_CONCURRENT"] == "1"
 
     def test_get_client_passes_idle_timeout_to_hindsight_embedded(self, monkeypatch):
         captured = {}
@@ -1428,6 +1551,29 @@ class TestAvailability:
         p = HindsightMemoryProvider()
         assert p.is_available()
 
+    def test_not_available_without_config(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "plugins.memory.hindsight.get_hermes_home",
+            lambda: tmp_path / "nonexistent",
+        )
+        p = HindsightMemoryProvider()
+        assert not p.is_available()
+
+    def test_available_with_snake_case_api_key_in_config(self, tmp_path, monkeypatch):
+        config_path = tmp_path / "hindsight" / "config.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps({
+            "mode": "cloud",
+            "api_key": "***",
+        }))
+        monkeypatch.setattr(
+            "plugins.memory.hindsight.get_hermes_home",
+            lambda: tmp_path,
+        )
+
+        p = HindsightMemoryProvider()
+
+        assert p.is_available()
 
     def test_local_mode_unavailable_when_runtime_import_fails(self, tmp_path, monkeypatch):
         monkeypatch.setattr(

@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 
 _LOCAL_MODES = {"local", "local_embedded"}
 _RETAIN_CONTEXT_DEFAULT = "conversation between Hermes Agent and the User"
+_DEFAULT_EMBEDDED_FAILURE_COOLDOWN = 300.0
 
 
 def _ensure_client_dependency() -> None:
@@ -338,6 +339,15 @@ class HindsightMemoryProvider(MemoryProvider):
         for name in _SESSION_KWARGS:
             setattr(self, f"_{name}", "")
         self._session_id = self._parent_session_id = self._document_id = ""
+        # Startup is deliberately asynchronous.  Foreground tool calls must not
+        # repeat the daemon manager's full wait while it is running or cooling
+        # down after a known failure.
+        self._embedded_startup_lock = threading.Lock()
+        self._embedded_startup_in_progress = False
+        self._embedded_startup_succeeded = False
+        self._embedded_failure_at = 0.0
+        self._embedded_failure_reason = ""
+        self._embedded_failure_cooldown = _DEFAULT_EMBEDDED_FAILURE_COOLDOWN
         self._status_callback: Optional[Callable[[str], None]] = None
 
         # Retain: single-writer model — sync_turn() enqueues, one writer thread
@@ -499,9 +509,51 @@ class HindsightMemoryProvider(MemoryProvider):
 
     def _get_client(self):
         """Return the cached Hindsight client (created once, reused)."""
+        if self._mode == "local_embedded":
+            self._raise_if_embedded_unhealthy()
         if self._client is None:
             self._client = self._new_embedded_client() if self._mode == "local_embedded" else self._new_cloud_client()
         return self._client
+
+    def _raise_if_embedded_unhealthy(self) -> None:
+        """Avoid duplicate blocked starts after an embedded startup failure."""
+        if self._mode != "local_embedded":
+            return
+        now = time.monotonic()
+        with self._embedded_startup_lock:
+            if self._embedded_startup_in_progress and threading.current_thread().name != "hindsight-daemon-start":
+                raise RuntimeError(
+                    "Hindsight embedded daemon is still starting; memory tools are temporarily unavailable. "
+                    "Retry shortly or inspect ~/.hermes/logs/hindsight-embed.log."
+                )
+            if self._embedded_failure_reason and now - self._embedded_failure_at < self._embedded_failure_cooldown:
+                remaining = max(1, int(self._embedded_failure_cooldown - (now - self._embedded_failure_at)))
+                raise RuntimeError(
+                    "Hindsight embedded daemon startup previously failed; memory tools are temporarily disabled "
+                    f"for {remaining}s: {self._embedded_failure_reason}. "
+                    "Inspect ~/.hermes/logs/hindsight-embed.log or run 'hermes memory status'."
+                )
+            if self._embedded_failure_reason:
+                self._embedded_failure_reason = ""
+                self._embedded_failure_at = 0.0
+
+    def _mark_embedded_starting(self) -> None:
+        with self._embedded_startup_lock:
+            self._embedded_startup_in_progress = True
+
+    def _mark_embedded_started(self) -> None:
+        with self._embedded_startup_lock:
+            self._embedded_startup_in_progress = False
+            self._embedded_startup_succeeded = True
+            self._embedded_failure_reason = ""
+            self._embedded_failure_at = 0.0
+
+    def _mark_embedded_failed(self, reason: BaseException | str) -> None:
+        with self._embedded_startup_lock:
+            self._embedded_startup_in_progress = False
+            self._embedded_startup_succeeded = False
+            self._embedded_failure_reason = str(reason) or type(reason).__name__
+            self._embedded_failure_at = time.monotonic()
 
     def _run_sync(self, coro):
         """Schedule *coro* on the shared loop using the configured timeout."""
@@ -833,6 +885,7 @@ class HindsightMemoryProvider(MemoryProvider):
         import traceback
         log_path = get_hermes_home() / "logs" / "hindsight-embed.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._mark_embedded_starting()
 
         def _log(text: str) -> None:
             with open(log_path, "a", encoding="utf-8") as f:
@@ -866,8 +919,10 @@ class HindsightMemoryProvider(MemoryProvider):
                         profile)
                     _log("\n=== Profile env has a key this process cannot see; left untouched ===\n")
             client._ensure_started()
+            self._mark_embedded_started()
             _log("\n=== Daemon started successfully ===\n")
         except Exception as e:
+            self._mark_embedded_failed(e)
             _log(f"\n=== Daemon startup failed: {e} ===\n" + traceback.format_exc())
 
     def system_prompt_block(self) -> str:

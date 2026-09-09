@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib
+import importlib.util
 import logging
 import os
 import sys
@@ -25,6 +26,17 @@ logger = logging.getLogger(__name__.rpartition(".")[0])
 # config so users can raise it without hand-setting an env var, consistent with "config.json, not raw env
 # vars". See #13125.
 _PORT_HEALTH_GRACE_ENV = "HINDSIGHT_EMBED_PORT_HEALTH_GRACE_TIMEOUT"
+
+_EMBEDDED_RUNTIME_INT_SETTINGS: dict[str, tuple[str, int]] = {
+    "llm_max_concurrent": ("HINDSIGHT_API_LLM_MAX_CONCURRENT", 1),
+    "llm_max_retries": ("HINDSIGHT_API_LLM_MAX_RETRIES", 0),
+    "worker_max_slots": ("HINDSIGHT_API_WORKER_MAX_SLOTS", 1),
+    "worker_consolidation_max_slots": ("HINDSIGHT_API_WORKER_CONSOLIDATION_MAX_SLOTS", 0),
+    "worker_retain_max_slots": ("HINDSIGHT_API_WORKER_RETAIN_MAX_SLOTS", 0),
+    "worker_task_retry_backoff_seconds": ("HINDSIGHT_API_WORKER_TASK_RETRY_BACKOFF_SECONDS", 0),
+    "retain_llm_max_concurrent": ("HINDSIGHT_API_RETAIN_LLM_MAX_CONCURRENT", 1),
+    "consolidation_llm_max_concurrent": ("HINDSIGHT_API_CONSOLIDATION_LLM_MAX_CONCURRENT", 1),
+}
 
 # Stale embedded-daemon connection markers (client recreated, operation retried once).
 _RETRIABLE_CONNECTION_MARKERS = (
@@ -68,6 +80,8 @@ def _check_local_runtime() -> tuple[bool, str | None]:
     embedding stack, and the daemon would then abort on every retain/recall."""
     try:
         for module in ("hindsight", "hindsight_embed.daemon_embed_manager", "sentence_transformers"):
+            if importlib.util.find_spec(module) is None:
+                return False, f"No module named {module!r}"
             importlib.import_module(module)
         return True, None
     except Exception as exc:
@@ -160,6 +174,25 @@ def _may_rewrite_profile_env(config: dict[str, Any]) -> bool:
     return not _on_disk_llm_api_key(config)
 
 
+def _add_embedded_runtime_limits(config: dict[str, Any], env_values: dict[str, str]) -> None:
+    """Export validated local concurrency and retry settings for the daemon."""
+    for config_key, (env_key, minimum) in _EMBEDDED_RUNTIME_INT_SETTINGS.items():
+        raw = config.get(config_key)
+        if raw is None or raw == "":
+            raw = os.environ.get(env_key)
+        if raw is None or raw == "":
+            continue
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            logger.warning("Invalid Hindsight %s value %r; ignoring.", config_key, raw)
+            continue
+        if value < minimum:
+            logger.warning("Hindsight %s must be at least %s, got %r; ignoring.", config_key, minimum, raw)
+            continue
+        env_values[env_key] = str(value)
+
+
 def _build_embedded_profile_env(config: dict[str, Any], *, llm_api_key: str | None = None) -> dict[str, str]:
     """Build the profile-scoped env that standalone hindsight-embed consumes."""
     if llm_api_key is None:
@@ -180,6 +213,7 @@ def _build_embedded_profile_env(config: dict[str, Any], *, llm_api_key: str | No
             base_url = ""
     if base_url:
         env_values["HINDSIGHT_API_LLM_BASE_URL"] = str(base_url)
+    _add_embedded_runtime_limits(config, env_values)
     if (idle_timeout := config.get("idle_timeout")) is None:
         idle_timeout = os.environ.get("HINDSIGHT_IDLE_TIMEOUT")
     if idle_timeout is not None and idle_timeout != "":
