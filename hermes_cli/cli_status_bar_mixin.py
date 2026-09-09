@@ -208,6 +208,7 @@ class CLIStatusBarMixin:
             "battery_label": "",
             "battery_category": "dim",
             "focus_label": "",  # /focus badge: the reduced-output mode is never invisible.
+            "plugin_status_items": [],
             "goal_active": False,
             "goal_turns_used": 0,
             "goal_max_turns": 0}
@@ -217,6 +218,12 @@ class CLIStatusBarMixin:
 
             snapshot["focus_label"] = focus_statusbar_segment(
                 bool(getattr(self, "_focus_view_enabled", False)))
+        except Exception:
+            pass
+
+        try:
+            from hermes_cli.plugins import get_status_items
+            snapshot["plugin_status_items"] = get_status_items()
         except Exception:
             pass
 
@@ -1044,6 +1051,8 @@ class CLIStatusBarMixin:
         if goal_segment:
             add("goal", _STRONG, goal_segment)
         if not narrow:
+            for item in snapshot.get("plugin_status_items", [])[:1]:
+                add("plugin_status", _STRONG, item)
             add("duration", _DIM, duration_label)
         if wide:
             for name in ("prompt_elapsed", "idle_since"):

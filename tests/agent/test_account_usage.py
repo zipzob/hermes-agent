@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -76,6 +77,160 @@ def test_codex_usage_prefers_explicit_live_agent_credentials(monkeypatch, codex_
     assert snapshot.windows[0].used_percent == 21
     assert calls[0]["url"] == "https://chatgpt.com/backend-api/wham/usage"
     assert calls[0]["headers"]["Authorization"] == "Bearer live-agent-token"
+
+
+def test_codex_usage_labels_duration_when_primary_is_weekly(monkeypatch, codex_usage_payload):
+    calls = []
+    codex_usage_payload["rate_limit"] = {
+        "primary_window": {
+            "used_percent": 20,
+            "reset_at": 1785104392,
+            "limit_window_seconds": 604800,
+        },
+        "secondary_window": None,
+    }
+    monkeypatch.setattr(
+        account_usage.httpx,
+        "Client",
+        lambda timeout: _FakeClient(calls, codex_usage_payload),
+    )
+    snapshot = account_usage.fetch_account_usage(
+        "openai-codex",
+        base_url="https://chatgpt.com/backend-api/codex",
+        api_key="live-agent-token",
+    )
+    assert snapshot is not None
+    assert [window.label for window in snapshot.windows] == ["Weekly"]
+
+
+def test_codex_usage_handles_independent_short_and_weekly_windows(monkeypatch, codex_usage_payload):
+    calls = []
+    codex_usage_payload["rate_limit"] = {
+        "primary_window": {
+            "used_percent": 80,
+            "reset_at": 1785104392,
+            "limit_window_seconds": 5 * 60 * 60,
+        },
+        "secondary_window": {
+            "used_percent": 20,
+            "reset_at": 1785500000,
+            "limit_window_seconds": 7 * 24 * 60 * 60,
+        },
+    }
+    codex_usage_payload["additional_rate_limits"] = [{
+        "limit_name": "GPT-5.3-Codex-Spark",
+        "metered_feature": "codex_bengalfox",
+        "rate_limit": {
+            "primary_window": {
+                "used_percent": 40,
+                "reset_at": 1785104904,
+                "limit_window_seconds": 5 * 60 * 60,
+            },
+            "secondary_window": {
+                "used_percent": 10,
+                "reset_at": 1785500500,
+                "limit_window_seconds": 7 * 24 * 60 * 60,
+            },
+        },
+    }]
+    monkeypatch.setattr(
+        account_usage.httpx,
+        "Client",
+        lambda timeout: _FakeClient(calls, codex_usage_payload),
+    )
+
+    snapshot = account_usage.fetch_account_usage(
+        "openai-codex",
+        base_url="https://chatgpt.com/backend-api/codex",
+        api_key="live-agent-token",
+    )
+
+    assert snapshot is not None
+    assert [window.label for window in snapshot.windows] == [
+        "5-hour",
+        "Weekly",
+        "GPT-5.3-Codex-Spark 5-hour",
+        "GPT-5.3-Codex-Spark weekly",
+    ]
+    assert [window.scope for window in snapshot.windows] == [
+        "general", "general", "model_specific", "model_specific",
+    ]
+    assert snapshot.windows[-1].limit_id == "codex_bengalfox"
+
+
+def test_codex_window_period_supports_daily_and_nonstandard_plans():
+    assert account_usage._codex_window_period(24 * 60 * 60, "fallback") == "Daily"
+    assert account_usage._codex_window_period(2 * 24 * 60 * 60, "fallback") == "2-day"
+    assert account_usage._codex_window_period(None, "Session") == "Session"
+
+
+def test_weekly_window_renders_virtual_daily_pace(monkeypatch):
+    monkeypatch.setattr(
+        account_usage,
+        "_utc_now",
+        lambda: datetime(2026, 1, 2, tzinfo=timezone.utc),
+    )
+    snapshot = account_usage.AccountUsageSnapshot(
+        provider="openai-codex",
+        source="usage_api",
+        fetched_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        windows=(account_usage.AccountUsageWindow(
+            label="Weekly",
+            used_percent=20,
+            reset_at=datetime(2026, 1, 8, tzinfo=timezone.utc),
+            window_seconds=7 * 24 * 60 * 60,
+        ),),
+    )
+
+    rendered = "\n".join(account_usage.render_account_usage_lines(snapshot))
+    assert "virtual daily 14.3% budget vs 20.0% used/day" in rendered
+    assert "140.0% of daily pace; 5.7pp over" in rendered
+
+
+def test_usage_renderer_preserves_over_100_percent():
+    snapshot = account_usage.AccountUsageSnapshot(
+        provider="openai-codex",
+        source="usage_api",
+        fetched_at=datetime.now(timezone.utc),
+        windows=(account_usage.AccountUsageWindow(label="Daily", used_percent=127),),
+    )
+
+    rendered = "\n".join(account_usage.render_account_usage_lines(snapshot))
+
+    assert "Daily: 0% remaining (127% used; 27% over limit)" in rendered
+    assert "LIMIT REACHED" in rendered
+
+
+def test_codex_usage_includes_model_specific_additional_limits(monkeypatch, codex_usage_payload):
+    calls = []
+    codex_usage_payload["additional_rate_limits"] = [
+        {
+            "limit_name": "GPT-5.3-Codex-Spark",
+            "metered_feature": "codex_bengalfox",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 62,
+                    "reset_at": 1785104904,
+                    "limit_window_seconds": 604800,
+                },
+                "secondary_window": None,
+            },
+        }
+    ]
+    monkeypatch.setattr(
+        account_usage.httpx,
+        "Client",
+        lambda timeout: _FakeClient(calls, codex_usage_payload),
+    )
+    snapshot = account_usage.fetch_account_usage(
+        "openai-codex",
+        base_url="https://chatgpt.com/backend-api/codex",
+        api_key="live-agent-token",
+    )
+    assert snapshot is not None
+    assert snapshot.windows[-1].label == "GPT-5.3-Codex-Spark weekly"
+    assert snapshot.windows[-1].used_percent == 62
+    assert snapshot.windows[-1].window_seconds == 604800
 
 
 def test_codex_usage_falls_back_to_native_credential_pool(monkeypatch, codex_usage_payload):
@@ -208,6 +363,61 @@ def _usage_payload_with_resets(primary_used, secondary_used, banked):
 
 
 
+def test_redeem_detects_exhausted_model_specific_window(monkeypatch):
+    calls = []
+    payload = _usage_payload_with_resets(60, 30, 1)
+    payload["additional_rate_limits"] = [{
+        "limit_name": "GPT-5.3-Codex-Spark",
+        "rate_limit": {
+            "primary_window": {"used_percent": 100},
+            "secondary_window": {"used_percent": 20},
+        },
+    }]
+    monkeypatch.setattr(
+        account_usage.httpx,
+        "Client",
+        lambda timeout: _FakeResetClient(
+            calls,
+            payload,
+            consume_payload={"code": "reset", "windows_reset": 1},
+        ),
+    )
+
+    result = account_usage.redeem_codex_reset_credit(
+        base_url="https://chatgpt.com/backend-api/codex",
+        api_key="live-agent-token",
+    )
+
+    assert result.redeemed
+    assert [call["method"] for call in calls] == ["GET", "POST"]
+
+
+def test_redeem_force_bypasses_exhaustion_guard(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        account_usage.httpx,
+        "Client",
+        lambda timeout: _FakeResetClient(
+            calls,
+            _usage_payload_with_resets(60, 30, 2),
+            consume_payload={"code": "reset", "windows_reset": 2},
+        ),
+    )
+
+    result = account_usage.redeem_codex_reset_credit(
+        base_url="https://chatgpt.com/backend-api/codex",
+        api_key="live-agent-token",
+        force=True,
+    )
+
+    assert result.redeemed
+    assert result.windows_reset == 2
+    assert result.available_count == 1  # 2 banked - 1 spent
+    assert "1 banked reset remaining" in result.message
+    post = [c for c in calls if c["method"] == "POST"][0]
+    assert post["url"] == "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
+    assert post["json"]["redeem_request_id"]  # idempotency key present
+    assert "credit_id" not in post["json"]
 
 
 
