@@ -117,22 +117,64 @@ export function shouldFallThroughForScroll(key: {
   return false
 }
 
+export const shouldRouteVoiceStopWhileBlocked = (
+  blocked: boolean,
+  recording: boolean,
+  voiceToggleKey: boolean
+): boolean => blocked && recording && voiceToggleKey
+
+export function applyVoiceRecordRequest(
+  starting: boolean,
+  voice: Pick<InputHandlerContext['voice'], 'setProcessing' | 'setRecording'>
+) {
+  if (starting) {
+    return
+  }
+
+  voice.setRecording(false)
+  voice.setProcessing(true)
+}
+
 export function applyVoiceRecordResponse(
   response: null | VoiceRecordResponse,
   starting: boolean,
   voice: Pick<InputHandlerContext['voice'], 'setProcessing' | 'setRecording'>,
   sys: (text: string) => void
 ) {
-  if (!starting || response?.status === 'recording') {
+  if (response?.status === 'recording') {
+    voice.setRecording(true)
+    voice.setProcessing(false)
+
     return
   }
 
-  voice.setRecording(false)
+  if (response?.status === 'stopped') {
+    voice.setRecording(false)
+    voice.setProcessing(true)
+
+    return
+  }
 
   if (response?.status === 'busy') {
+    if (starting) {
+      voice.setRecording(false)
+    }
+
+    if (response.reason === 'barge_listener_active') {
+      voice.setProcessing(false)
+      sys('voice: already listening for your interruption')
+
+      return
+    }
+
     voice.setProcessing(true)
     sys('voice: still transcribing; try again shortly')
-  } else {
+
+    return
+  }
+
+  if (starting) {
+    voice.setRecording(false)
     voice.setProcessing(false)
   }
 }
@@ -348,27 +390,12 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
     const starting = !voice.recording
     const action = starting ? 'start' : 'stop'
 
-    // Optimistic UI — flip the REC badge immediately so the user gets
-    // feedback while the RPC round-trips; the voice.status event is the
-    // authoritative source and may correct us.
-    if (starting) {
-      voice.setRecording(true)
-    } else {
-      voice.setRecording(false)
-      voice.setProcessing(false)
-    }
+    applyVoiceRecordRequest(starting, voice)
 
     gateway
       .rpc<VoiceRecordResponse>('voice.record', { action, session_id: getUiState().sid })
       .then(r => applyVoiceRecordResponse(r, starting, voice, actions.sys))
-      .catch((e: Error) => {
-        // Revert optimistic UI on failure.
-        if (starting) {
-          voice.setRecording(false)
-        }
-
-        actions.sys(`voice error: ${e.message}`)
-      })
+      .catch((e: Error) => actions.sys(`voice error: ${e.message}`))
   }
 
   // Double-Esc discards the draft, matching Claude Code / Gemini CLI. It
@@ -379,6 +406,12 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
 
   useInput((ch, key, event) => {
     const live = getUiState()
+
+    // An open microphone is a lifecycle control: ordinary blocked-input
+    // state must not prevent the configured record key from stopping it.
+    if (shouldRouteVoiceStopWhileBlocked(isBlocked, voice.recording, isVoiceToggleKey(key, ch, voice.recordKey))) {
+      return voiceRecordToggle()
+    }
 
     if (key.escape) {
       const now = Date.now()

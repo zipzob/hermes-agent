@@ -1165,8 +1165,10 @@ DEFAULT_CONFIG = {
             # optional "api_key" / "base_url" keys override the OpenAI audio credentials for this mode only
         },
         "record_key": "ctrl+b",
-        "submit_mode": "direct",  # TUI: direct submits immediately; draft = editable transcript
-        "max_recording_seconds": 120,
+        "submit_mode": "direct",  # Legacy transcript fallback for older TUI clients
+        "input_mode": "submit",  # "submit" = immediate turn; "dictation" = append to composer draft
+        "recording_mode": "silence",  # "silence" = VAD auto-stop; "manual" = record key stops
+        "max_recording_seconds": 300,
         "auto_tts": False,
         # Desktop remote clients call STT/TTS providers DIRECTLY (config + key fetched over
         # authenticated REST at session start) instead of relaying via the gateway.
