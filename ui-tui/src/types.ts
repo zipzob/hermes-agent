@@ -186,6 +186,7 @@ export interface McpServerStatus {
 export type SessionInfo = SessionLiveInfo
 export type { ProjectInfo }
 
+
 export interface SudoReq {
   requestId: string
 }

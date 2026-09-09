@@ -401,8 +401,16 @@ def _fetch_codex_account_usage(
         payload = _get_json(
             _codex_backend_urls(resolved_base_url)[0], _codex_headers(token, account_id), timeout=15.0,
         )
-    windows = _usage_windows(payload.get("rate_limit") or {}, (("primary_window", "Session"), ("secondary_window", "Weekly")),
-                             "used_percent", "reset_at")
+    windows = _codex_usage_windows(payload.get("rate_limit") or {})
+    additional = payload.get("additional_rate_limits") or []
+    if isinstance(additional, list):
+        for item in additional:
+            if isinstance(item, dict):
+                windows.extend(_codex_usage_windows(
+                    item.get("rate_limit") or {},
+                    name=str(item.get("limit_name") or "Additional Codex limit").strip(),
+                    limit_id=str(item.get("metered_feature") or "").strip() or None,
+                ))
     details: list[str] = []
     count = _codex_banked_resets(payload)
     if count > 0:
