@@ -72,7 +72,15 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
         "sounddevice==0.5.5",
         "numpy==2.4.3",
     ),
-    # SILK voice-note decoding (WeChat/QQ); silk-v3 codec binding.
+    "stt.parakeet": (
+        "torch==2.13.0",
+        "transformers==5.14.1",
+        "librosa==0.11.0",
+        "sounddevice==0.5.5",
+        "numpy==2.4.3",
+    ),
+    # SILK voice-note decoding (WeChat/QQ .silk voice messages); pilk is a
+    # small silk-v3 codec binding installed on first .silk transcription.
     "stt.silk": ("pilk==0.2.4",),
 
     # ─── Wake word ("Hey Hermes") engines (sync with the `wake` extra) ──────
