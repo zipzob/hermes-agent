@@ -24,6 +24,34 @@ class FakeTty extends EventEmitter {
 const tick = () => new Promise<void>(resolve => queueMicrotask(resolve))
 
 describe('Ink resize healing', () => {
+  it('erases physical-only ghosts when an overlay invalidates the previous frame', () => {
+    const stdout = new FakeTty()
+    const stdin = new FakeTty()
+    const stderr = new FakeTty()
+
+    const ink = new Ink({
+      exitOnCtrlC: false,
+      patchConsole: false,
+      stderr: stderr as unknown as NodeJS.WriteStream,
+      stdin: stdin as unknown as NodeJS.ReadStream,
+      stdout: stdout as unknown as NodeJS.WriteStream
+    })
+
+    ink.setAltScreenActive(true)
+    ink.render(React.createElement(Text, null, 'hello'))
+    ink.onRender()
+    stdout.chunks = []
+
+    ink.invalidatePrevFrame()
+    ink.onRender()
+
+    const out = stdout.chunks.join('')
+    expect(out).toContain(ERASE_SCREEN)
+    expect(out.indexOf(ERASE_SCREEN)).toBeLessThan(out.lastIndexOf('hello'))
+
+    ink.unmount()
+  })
+
   it('heals same-dimension alt-screen resize events with an erase before repaint', async () => {
     const stdout = new FakeTty()
     const stdin = new FakeTty()
