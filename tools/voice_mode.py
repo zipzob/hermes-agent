@@ -1130,12 +1130,21 @@ def stop_playback() -> None:
         proc = _active_playback
         _active_playback = None
     if proc and proc.poll() is None:
-        with suppress(Exception):
+        try:
             proc.terminate()
+            proc.wait(timeout=2)
             logger.info("Audio playback interrupted")
-    with suppress(Exception):  # also stop sounddevice playback if active
-        sd, _ = _import_audio()
-        sd.stop()
+        except subprocess.TimeoutExpired:
+            with suppress(Exception):
+                proc.kill()
+                proc.wait(timeout=2)
+        except Exception:
+            pass
+    # Cleanup must not import PortAudio during interpreter shutdown. Stop it
+    # only when normal runtime already loaded the module.
+    with suppress(Exception):
+        if (sd := sys.modules.get("sounddevice")) is not None:
+            sd.stop()
 
 
 def _is_wsl2_env() -> bool:
