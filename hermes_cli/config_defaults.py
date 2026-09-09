@@ -1065,8 +1065,9 @@ DEFAULT_CONFIG = {
         "echo_transcripts": True,
         # No seeded "provider": a stored value counts as an explicit user pick; unset = autodetect
         # ladder. Valid: "local" (faster-whisper) | "groq" | "openai" | "mistral" | "elevenlabs" |
-        # "deepinfra". Global language hint unless a per-provider language overrides it. "en"
-        # because Whisper auto-detect misreads short/accented clips; "" = auto; or "es", "zh", ...
+        # "parakeet" (shared local service) | "deepinfra". Global language
+        # hint unless a per-provider language overrides it. "en" avoids Whisper
+        # short/accented-clip misidentification; "" restores auto-detect.
         "language": "en",
         # Client-side ffmpeg silence trim before cloud upload (local whisper uses VAD): silence
         # inflates upload time, billing and hallucinations. Failure = raw upload.
@@ -1085,6 +1086,19 @@ DEFAULT_CONFIG = {
             "no_speech_prob_threshold": 0.6,
             "logprob_threshold": -1.0,
             "unload_after_idle_seconds": 0,  # 0 = never; e.g. 300 frees the model after 5min
+        },
+        "parakeet": {
+            "model": "nvidia/parakeet-tdt-0.6b-v3",
+            "language": "",
+            "device": "auto",  # auto, cpu, cuda
+            "dtype": "auto",  # auto, float16, float32
+            "shared_gpu": True,
+            "shared_gpu_timeout": 180,
+            "startup_timeout": 30,
+            "request_timeout": 300,
+            "idle_timeout": 300,
+            "base_url": "",  # empty = managed loopback service on 127.0.0.1:18765
+            "ollama_base_url": "",  # empty = derive from this profile's Hindsight config
         },
         "groq": {
             # whisper-large-v3, whisper-large-v3-turbo, distil-whisper-large-v3-en
