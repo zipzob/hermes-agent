@@ -2005,8 +2005,12 @@ def _resume_status_from_events(conn: sqlite3.Connection, task_id: str) -> str:
 
 
 def recompute_ready(conn: sqlite3.Connection, failure_limit: int = None) -> int:
-    """Promote ``todo``/``blocked`` tasks whose parents are all done/archived;
+    """Promote dependency-gated ``todo``/``blocked`` tasks whose parents are complete;
     returns the count. Opens its own IMMEDIATE txn — call OUTSIDE any write txn.
+
+    Parent-free ``todo`` tasks are accepted backlog and require an explicit
+    operator promotion; only a task that had dependency state participates in
+    this reconciliation.
 
     ``blocked`` is skipped when sticky (explicit ``kanban_block``) or when
     ``consecutive_failures`` reached the limit (else the breaker could never
@@ -2035,6 +2039,8 @@ def recompute_ready(conn: sqlite3.Connection, failure_limit: int = None) -> int:
                 "JOIN task_links l ON l.parent_id = t.id "
                 "WHERE l.child_id = ?", (task_id,),
             ).fetchall()
+            if not parents and cur_status == "todo":
+                continue
             if all(p["status"] in ("done", "archived") for p in parents):
                 resume_status = _resume_status_from_events(conn, task_id)
                 if cur_status == "blocked":
@@ -3530,11 +3536,26 @@ def delete_archived_task(conn: sqlite3.Connection, task_id: str) -> bool:
 def delete_task(conn: sqlite3.Connection, task_id: str) -> bool:
     """Hard-delete a task and its related rows in one txn; False when not found."""
     with write_txn(conn):
+        child_ids = [
+            row["child_id"]
+            for row in conn.execute(
+                "SELECT child_id FROM task_links WHERE parent_id = ?", (task_id,)
+            ).fetchall()
+        ]
         cur = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         if cur.rowcount != 1:
             return False
         _delete_task_relations(conn, task_id)
-    recompute_ready(conn)
+        # A child that became parent-free because THIS parent was removed was
+        # previously dependency-gated, unlike ordinary accepted backlog.
+        for child_id in child_ids:
+            has_parent = conn.execute(
+                "SELECT 1 FROM task_links WHERE child_id = ? LIMIT 1", (child_id,)
+            ).fetchone()
+            if has_parent is None and conn.execute(
+                "UPDATE tasks SET status = 'ready' WHERE id = ? AND status = 'todo'", (child_id,)
+            ).rowcount:
+                _append_event(conn, child_id, "promoted", {"reason": "parent_deleted"})
     return True
 
 
