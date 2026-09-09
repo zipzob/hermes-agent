@@ -1025,6 +1025,7 @@ def _run_prompt_submit(
                     session.pop("_hosted_room_task", None)
             session.pop("_auto_continue_scheduled", None)
             _emit_settled_session_info(sid, session, st.agent)
+            _reschedule_ws_orphan_reap_after_turn(sid, session)
         return st.result, goal_followup
     def run():
         from agent.notification_presentation import notification_turn

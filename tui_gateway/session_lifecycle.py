@@ -826,6 +826,17 @@ def _schedule_ws_orphan_reap(
     timer.start()
 
 
+def _reschedule_ws_orphan_reap_after_turn(sid: str, session: dict) -> None:
+    """Re-arm detached-session cleanup after a turn outlives its first grace timer.
+
+    The orphan timer deliberately leaves active turns alone. Once that timer
+    fires, a settled detached session needs another timer to observe the
+    now-idle state; a reattached transport must never be scheduled.
+    """
+    if session.get("transport") is _detached_ws_transport:
+        _schedule_ws_orphan_reap(sid)
+
+
 def _close_sessions_for_transport(transport, *, end_reason: str = "ws_disconnect") -> tuple[int, int]:
     """Single WS-disconnect teardown entry point: reap close_on_disconnect sessions (sidecar/dashboard) immediately;
     re-point the rest at the detached transport (later emits miss the dead socket) for the grace-windowed WS-orphan

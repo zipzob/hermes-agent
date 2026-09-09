@@ -495,6 +495,21 @@ def is_approval_bypass_active() -> bool:
 
 # --- Result builders shared by the gates ----------------------------------------------------------------------------
 
+
+def _get_delegated_child_auto_approve() -> bool:
+    """Return the non-interactive execute-code policy for delegate_task children."""
+    try:
+        from hermes_cli.config import cfg_get, load_config
+
+        value = cfg_get(
+            load_config(), "delegation", "subagent_auto_approve", default=False
+        )
+        return is_truthy_value(value)
+    except Exception:
+        return False
+
+
+
 def _approved() -> dict:
     return {"approved": True, "message": None}
 
@@ -1270,11 +1285,37 @@ def check_execute_code_guard(code: str, env_type: str, has_host_access: bool = F
             )
         return _approved()
 
+    # delegate_task children have no interactive approval surface. They inherit
+    # the parent's gateway ContextVars only for completion routing, so resolve
+    # locally and fail closed instead of queuing a gateway approval they cannot answer.
+    try:
+        from agent.delegation_context import is_delegated_child_context
+
+        delegated_child = is_delegated_child_context()
+    except Exception:
+        delegated_child = False
+    if delegated_child:
+        if _get_delegated_child_auto_approve():
+            logger.warning(
+                "Delegated child auto-approved execute_code script for session %s",
+                get_current_session_key(default=""),
+            )
+            return {"approved": True, "message": None, "subagent_auto_approved": True}
+        return _denied(
+            "BLOCKED: delegate_task children cannot request interactive execute_code "
+            "approval. Use ordinary scoped tools, or set delegation.subagent_auto_approve: "
+            "true only for trusted autonomous workers.",
+            pattern_key=pattern_key,
+            description=description,
+            outcome="blocked",
+        )
+
     # Only gateway/ask contexts get the one-shot whole-script approval. In an interactive CLI the script's terminal()
     # calls are guarded per-call (context propagates into the RPC thread, #33057), so a whole-script prompt would fire
     # on every execute_code call. Ask-mode still takes this path even with INTERACTIVE set (how gateway/smart tests
     # and messaging ask-mode drive whole-script approval); when that leaks into a CLI with no notify callback, the
     # engine falls through to the CLI Dangerous Command panel instead of a silent pending_approval.
+
     if not is_gateway and not is_ask:
         return _approved()
 
