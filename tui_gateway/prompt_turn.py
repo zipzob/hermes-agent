@@ -882,6 +882,7 @@ def _run_prompt_submit(
                     session.pop("_hosted_room_task", None)
             session.pop("_auto_continue_scheduled", None)
             _emit_settled_session_info(sid, session, st.agent)
+            _reschedule_ws_orphan_reap_after_turn(sid, session)
         _run_post_turn_followups(rid, sid, session, st.result, goal_followup)
     run_thread = threading.Thread(target=run, daemon=True)
     # The handle is resolved BEFORE _sessions_lock: a profile session opens its own SessionDB through the
