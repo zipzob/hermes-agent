@@ -45,6 +45,7 @@ import {
   toolTrailLabel
 } from '../lib/text.js'
 import { estimatedMsgHeight, messageHeightKey } from '../lib/virtualHeights.js'
+import { formatVoiceStatusLabel } from '../lib/voiceStatus.js'
 import { onUserWidgets } from '../sdk/userWidgets.js'
 import type { Msg, PanelSection, SlashCatalog } from '../types.js'
 
@@ -213,11 +214,25 @@ export function useMainApp(gw: GatewayClient) {
   const [voiceTts, setVoiceTts] = useState(false)
   const [voiceRecording, setVoiceRecording] = useState(false)
   const [voiceProcessing, setVoiceProcessing] = useState(false)
+  const [voiceRecordingDeadline, setVoiceRecordingDeadline] = useState<null | number>(null)
+  const [voiceSilenceRemaining, setVoiceSilenceRemaining] = useState<null | number>(null)
+  const [voiceClockNow, setVoiceClockNow] = useState(() => Date.now())
   const [voiceRecordKey, setVoiceRecordKey] = useState<ParsedVoiceRecordKey>(DEFAULT_VOICE_RECORD_KEY)
   const [sessionStartedAt, setSessionStartedAt] = useState(() => Date.now())
   const [dashboardFreshSessionId, setDashboardFreshSessionId] = useState<null | string>(null)
   const [turnStartedAt, setTurnStartedAt] = useState<null | number>(null)
   const [lastTurnEndedAt, setLastTurnEndedAt] = useState<null | number>(null)
+
+  useEffect(() => {
+    if (!voiceRecording || voiceRecordingDeadline === null) {
+      return
+    }
+
+    setVoiceClockNow(Date.now())
+    const id = setInterval(() => setVoiceClockNow(Date.now()), 1000)
+
+    return () => clearInterval(id)
+  }, [voiceRecording, voiceRecordingDeadline])
   // Bumped by the gateway `reaction` event (core-detected affection).
   const goodVibesTick = useStore($goodVibesTick)
   const [bellOnComplete, setBellOnComplete] = useState(false)
@@ -904,7 +919,9 @@ export function useMainApp(gw: GatewayClient) {
         transcript: { appendMessage, panel, setHistoryItems },
         voice: {
           setProcessing: setVoiceProcessing,
+          setRecordingDeadline: setVoiceRecordingDeadline,
           setRecording: setVoiceRecording,
+          setSilenceRemaining: setVoiceSilenceRemaining,
           setVoiceEnabled,
           setVoiceTts
         }
@@ -922,7 +939,9 @@ export function useMainApp(gw: GatewayClient) {
       setHistoryItems,
       setVoiceEnabled,
       setVoiceProcessing,
+      setVoiceRecordingDeadline,
       setVoiceRecording,
+      setVoiceSilenceRemaining,
       stdout,
       submitLiteralRef,
       submitRef,
@@ -1384,11 +1403,15 @@ export function useMainApp(gw: GatewayClient) {
       turnStartedAt: ui.sid ? turnStartedAt : null,
       // CLI parity: the classic prompt_toolkit status bar shows a red dot
       // on REC (cli.py:_get_voice_status_fragments line 2344).
-      voiceLabel: voiceRecording
-        ? '● REC'
-        : voiceProcessing
-          ? '◉ STT'
-          : `voice ${voiceEnabled ? 'on' : 'off'}${voiceTts ? ' [tts]' : ''}`
+      voiceLabel: formatVoiceStatusLabel({
+        deadlineMs: voiceRecordingDeadline,
+        enabled: voiceEnabled,
+        nowMs: voiceClockNow,
+        processing: voiceProcessing,
+        recording: voiceRecording,
+        silenceRemainingSeconds: voiceSilenceRemaining,
+        tts: voiceTts
+      })
     }),
     [
       cwd,
@@ -1400,8 +1423,11 @@ export function useMainApp(gw: GatewayClient) {
       turnStartedAt,
       ui,
       voiceEnabled,
+      voiceClockNow,
       voiceProcessing,
       voiceRecording,
+      voiceRecordingDeadline,
+      voiceSilenceRemaining,
       voiceTts
     ]
   )

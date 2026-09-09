@@ -112,10 +112,18 @@ class CLIVoiceMixin:
         # Config-driven silence params, numeric-guarded against YAML scalar corruption.
         rec = self._voice_recorder
         rec._silence_threshold = _numeric_or(voice_cfg.get("silence_threshold"), 200)
-        rec._silence_duration = _numeric_or(voice_cfg.get("silence_duration"), 3.0)
+        rec._silence_duration = _numeric_or(voice_cfg.get("silence_duration"), 5.0)
         # voice.max_recording_seconds — hard cap on one recording; explicit <= 0 disables it.
         _max_rec = _numeric_or(voice_cfg.get("max_recording_seconds"), None)
-        rec._max_recording_seconds = (_max_rec if _max_rec > 0 else 0.0) if _max_rec is not None else 120.0
+        rec._max_recording_seconds = (_max_rec if _max_rec > 0 else 0.0) if _max_rec is not None else 300.0
+        raw_recording_mode = voice_cfg.get("recording_mode")
+        recording_mode = (
+            raw_recording_mode.strip().lower()
+            if isinstance(raw_recording_mode, str)
+            and raw_recording_mode.strip().lower() in {"manual", "silence"}
+            else "silence"
+        )
+        rec._silence_autostop_enabled = recording_mode == "silence"
 
         def _on_silence():
             """Called by AudioRecorder when silence is detected after speech."""
@@ -136,7 +144,7 @@ class CLIVoiceMixin:
                 self._voice_recording = False
             raise
         _label = self._voice_record_key_label()
-        if getattr(self._voice_recorder, "supports_silence_autostop", True):
+        if recording_mode == "silence" and getattr(self._voice_recorder, "supports_silence_autostop", True):
             _recording_hint = f"auto-stops on silence | {_label} to stop & exit continuous"
         elif _is_termux_environment():
             _recording_hint = f"Termux:API capture | {_label} to stop"
@@ -211,8 +219,6 @@ class CLIVoiceMixin:
             if self._voice_recorder is None:
                 return
             wav_path = self._voice_recorder.stop()
-            # Audio cue: double beep after stream stopped (no CoreAudio conflict)
-            self._voice_beep(frequency=660, count=2)
             if wav_path is None:
                 _cprint(f"{_DIM}No speech detected.{_RST}")
                 return
@@ -237,6 +243,8 @@ class CLIVoiceMixin:
                 self._voice_invalidate()
                 self._pending_input.put(_VoiceInputMessage(transcript))
                 submitted = True
+                # Confirm usable STT output, not merely recorder shutdown.
+                self._voice_beep(frequency=660, count=2)
             elif result.get("success"):
                 _cprint(f"{_DIM}No speech detected.{_RST}")
             else:

@@ -373,13 +373,22 @@ export interface VoiceToggleResponse {
   available?: boolean
   details?: string
   enabled?: boolean
+  input_mode?: 'dictation' | 'submit'
+  max_recording_seconds?: number
   record_key?: string
+  recording_mode?: 'manual' | 'silence'
+  silence_duration_seconds?: number
   stop_hint?: string
   stt_available?: boolean
   tts?: boolean
 }
 
 export interface VoiceRecordResponse {
+  input_mode?: 'dictation' | 'submit'
+  max_recording_seconds?: number
+  reason?: 'barge_listener_active' | 'microphone_owned_by_other_process' | 'recording_active' | 'wake_owned'
+  recording_mode?: 'manual' | 'silence'
+  silence_duration_seconds?: number
   status?: 'busy' | 'recording' | 'stopped'
   text?: string
 }

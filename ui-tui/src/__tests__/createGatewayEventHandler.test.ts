@@ -55,7 +55,9 @@ const buildCtx = (appended: Msg[]) =>
     },
     voice: {
       setProcessing: vi.fn(),
+      setRecordingDeadline: vi.fn(),
       setRecording: vi.fn(),
+      setSilenceRemaining: vi.fn(),
       setVoiceEnabled: vi.fn()
     }
   }) as any
@@ -83,6 +85,46 @@ describe('createGatewayEventHandler', () => {
     resetServerRequestsForTests()
     turnController.fullReset()
     patchUiState({ showReasoning: true })
+  })
+
+  it('stores and clears the authoritative voice recording deadline', () => {
+    const ctx = buildCtx([])
+    const onEvent = createGatewayEventHandler(ctx)
+
+    onEvent({
+      payload: { max_recording_seconds: 300, silence_remaining_seconds: 4.2, started_at_ms: 1_000, state: 'listening' },
+      type: 'voice.status'
+    } as any)
+    expect(ctx.voice.setRecordingDeadline).toHaveBeenLastCalledWith(301_000)
+    expect(ctx.voice.setSilenceRemaining).toHaveBeenLastCalledWith(4.2)
+
+    onEvent({ payload: { state: 'transcribing' }, type: 'voice.status' } as any)
+    expect(ctx.voice.setRecordingDeadline).toHaveBeenLastCalledWith(null)
+    expect(ctx.voice.setSilenceRemaining).toHaveBeenLastCalledWith(null)
+  })
+
+  it('reports a hard recording cutoff while switching to STT', () => {
+    const ctx = buildCtx([])
+    const onEvent = createGatewayEventHandler(ctx)
+    onEvent({ payload: { cutoff_reason: 'hard_limit', state: 'transcribing' }, type: 'voice.status' } as any)
+
+    expect(ctx.voice.setRecording).toHaveBeenLastCalledWith(false)
+    expect(ctx.voice.setProcessing).toHaveBeenLastCalledWith(true)
+    expect(ctx.system.sys).toHaveBeenCalledWith('voice: 5-minute recording limit reached — transcribing captured audio')
+  })
+
+  it('reports transcription errors and appends explicit draft deliveries', () => {
+    const ctx = buildCtx([])
+    const onEvent = createGatewayEventHandler(ctx)
+
+    onEvent({ payload: { error: 'Parakeet unavailable' }, type: 'voice.transcript' } as any)
+    expect(ctx.system.sys).toHaveBeenCalledWith('voice error: Parakeet unavailable')
+    expect(ctx.submission.submitRef.current).not.toHaveBeenCalled()
+
+    onEvent({ payload: { delivery: 'draft', text: 'second section' }, type: 'voice.transcript' } as any)
+    const update = ctx.composer.setInput.mock.calls.at(-1)?.[0]
+    expect((update as (current: string) => string)('first section')).toBe('first section\n\nsecond section')
+    expect(ctx.submission.submitRef.current).not.toHaveBeenCalled()
   })
 
   it('heals missed completion and blocking prompts only from the focused authoritative idle snapshot', () => {

@@ -171,8 +171,10 @@ def _safe_call(cb: Optional[Callable], *args: Any, warn: Optional[str] = None) -
             logger.warning(warn, e)
 
 
-def _transcribe_wav(wav_path: str, fail_msg: str, debug_prefix: Optional[str] = None) -> Optional[str]:
-    """Transcribe ``wav_path``, unlink it, and return the cleaned transcript (or None).
+def _transcribe_wav_result(
+    wav_path: str, fail_msg: str, debug_prefix: Optional[str] = None
+) -> tuple[Optional[str], Optional[str]]:
+    """Transcribe and unlink audio, returning ``(clean_text, provider_error)``.
 
     transcribe_recording returns {"success", "transcript", "error"?} — NOT {"text"}; the wrong key
     silently masqueraded as "not hearing the user". Empty text and Whisper hallucinations are
@@ -185,16 +187,24 @@ def _transcribe_wav(wav_path: str, fail_msg: str, debug_prefix: Optional[str] = 
         if debug_prefix:
             _debug(f"{debug_prefix}: transcribe -> success={success} text={text!r} err={result.get('error')!r}")
         if success and text and not is_whisper_hallucination(text):
-            return text
+            return text, None
+        if not success:
+            return None, str(result.get("error") or "Voice transcription failed")
     except Exception as e:
         logger.warning(fail_msg, e)
         if debug_prefix:
             _debug(f"{debug_prefix}: transcribe raised {type(e).__name__}: {e}")
+        return None, str(e)
     finally:
         with contextlib.suppress(Exception):
             if os.path.isfile(wav_path):
                 os.unlink(wav_path)
-    return None
+    return None, None
+
+
+def _transcribe_wav(wav_path: str, fail_msg: str, debug_prefix: Optional[str] = None) -> Optional[str]:
+    """Compatibility wrapper returning only cleaned transcript text."""
+    return _transcribe_wav_result(wav_path, fail_msg, debug_prefix)[0]
 
 
 def _deactivate(on_status: Optional[Callable[[str], None]] = None) -> None:
@@ -211,6 +221,8 @@ _recorder_lock = threading.Lock()
 
 # Continuous (VAD) state.
 _continuous_lock = threading.Lock()
+_continuous_capture_stop_lock = threading.Lock()
+_continuous_capture_stopped_notified = False
 _continuous_active = False
 _continuous_stopping = False
 _continuous_auto_restart: bool = True
@@ -247,11 +259,13 @@ def _voice_activity_held() -> bool:
         return False
 
 
-# (on_transcript, on_status, on_silent_limit, on_stop_phrase) of the active loop; guarded by
+# (on_transcript, on_status, on_silent_limit, on_stop_phrase, on_capture_stopped,
+# on_error, on_silence_progress, on_cutoff)
+# of the active loop; guarded by
 # ``_continuous_lock``. on_stop_phrase is the explicit user-intent stop (the user SAYS a bare stop
 # phrase), distinct from on_silent_limit (a timeout) so consumers end the conversation like a
 # manual stop instead of reporting "no speech detected"; unset → on_silent_limit fires.
-_NO_CALLBACKS: tuple = (None, None, None, None)
+_NO_CALLBACKS: tuple = (None, None, None, None, None, None, None, None)
 _continuous_callbacks: tuple = _NO_CALLBACKS
 _continuous_no_speech_count = 0
 _CONTINUOUS_NO_SPEECH_LIMIT = 3
@@ -259,17 +273,57 @@ _CONTINUOUS_NO_SPEECH_LIMIT = 3
 
 def _turn_transcript(
     wav_path: Optional[str], fail_msg: str, where: str, tail: str, trace: bool = False
-) -> tuple[Optional[str], bool, str]:
+) -> tuple[Optional[str], bool, str, Optional[str]]:
     """Transcribe a finished capture → (deliverable text, is_stop_phrase, stop_text).
 
     A bare stop phrase ("stop") is explicit user intent to end the voice chat: it is never sent
     to the agent, so the deliverable text becomes None. ``trace`` adds transcription breadcrumbs.
     """
-    transcript = _transcribe_wav(wav_path, fail_msg, where if trace else None) if wav_path else None
+    transcript, transcription_error = (
+        _transcribe_wav_result(wav_path, fail_msg, where if trace else None)
+        if wav_path else (None, None)
+    )
     if not (transcript and is_voice_stop_phrase(transcript)):
-        return transcript, False, ""
+        return transcript, False, "", transcription_error
     _debug(f"{where}: stop phrase {transcript!r} — {tail}")
-    return None, True, transcript
+    return None, True, transcript, transcription_error
+
+
+def _prepare_continuous_capture() -> None:
+    """Reset once-only shutdown notification before opening the microphone."""
+    global _continuous_capture_stopped_notified
+    with _continuous_capture_stop_lock:
+        _continuous_capture_stopped_notified = False
+
+
+def _shutdown_continuous_capture(
+    rec: Any,
+    *,
+    keep_audio: bool,
+    on_capture_stopped: Optional[Callable[[], None]],
+) -> Optional[str]:
+    """Serialize recorder shutdown and notify ownership release exactly once."""
+    global _continuous_capture_stopped_notified
+    with _continuous_capture_stop_lock:
+        wav_path: Optional[str] = None
+        try:
+            if keep_audio:
+                wav_path = rec.stop()
+            else:
+                rec.cancel()
+        except Exception as exc:
+            logger.warning("failed to %s recorder: %s", "stop" if keep_audio else "cancel", exc)
+            if keep_audio:
+                _safe_call(rec.cancel, warn="failed to cancel recorder: %s")
+        shutdown_complete = False
+        try:
+            shutdown_complete = rec.shutdown() is not False
+        except Exception as exc:
+            logger.warning("failed to shut down recorder: %s", exc)
+        if shutdown_complete and not _continuous_capture_stopped_notified:
+            _continuous_capture_stopped_notified = True
+            _safe_call(on_capture_stopped)
+        return wav_path
 
 
 def _signal_halt(stop_phrase: bool, stop_text: str, on_stop_phrase, on_silent_limit) -> None:
@@ -331,12 +385,17 @@ def stop_and_transcribe() -> Optional[str]:
 def start_continuous(
     on_transcript: Callable[[str], None],
     on_status: Optional[Callable[[str], None]] = None,
+    on_capture_stopped: Optional[Callable[[], None]] = None,
     on_silent_limit: Optional[Callable[[], None]] = None,
     silence_threshold: int = 200,
     silence_duration: float = 3.0,
     auto_restart: bool = True,
     max_recording_seconds: float = 0.0,
     on_stop_phrase: Optional[Callable[[str], None]] = None,
+    silence_autostop: bool = True,
+    on_silence_progress: Optional[Callable[[Optional[float]], None]] = None,
+    on_cutoff: Optional[Callable[[str], None]] = None,
+    on_error: Optional[Callable[[str], None]] = None,
 ) -> bool:
     """Start a VAD-driven continuous recording loop.
 
@@ -357,7 +416,10 @@ def start_continuous(
             return False
         _continuous_active = True
         _continuous_auto_restart = auto_restart
-        _continuous_callbacks = (on_transcript, on_status, on_silent_limit, on_stop_phrase)
+        _continuous_callbacks = (
+            on_transcript, on_status, on_silent_limit, on_stop_phrase,
+            on_capture_stopped, on_error, on_silence_progress, on_cutoff,
+        )
         if auto_restart:
             _continuous_no_speech_count = 0
 
@@ -366,6 +428,7 @@ def start_continuous(
         rec = _continuous_recorder
         rec._silence_threshold = silence_threshold
         rec._silence_duration = silence_duration
+        rec._silence_autostop_enabled = bool(silence_autostop)
         # Same numeric-with-bool-excluded guard as cli.py:_voice_start_recording.
         cap_ok = isinstance(max_recording_seconds, (int, float)) and not isinstance(max_recording_seconds, bool)
         rec._max_recording_seconds = max_recording_seconds if cap_ok and max_recording_seconds > 0 else 0.0
@@ -375,7 +438,12 @@ def start_continuous(
     # conflict on macOS.
     _play_beep(frequency=880, count=1)
     try:
-        rec.start(on_silence_stop=_continuous_on_silence)
+        _prepare_continuous_capture()
+        rec.start(
+            on_silence_stop=_continuous_on_silence,
+            on_silence_progress=on_silence_progress,
+            on_cutoff=on_cutoff,
+        )
     except Exception as e:
         logger.error("failed to start continuous recording: %s", e)
         _debug(f"start_continuous: rec.start raised {type(e).__name__}: {e}")
@@ -395,65 +463,99 @@ def stop_continuous(force_transcribe: bool = False) -> None:
     global _continuous_active, _continuous_stopping, _continuous_recorder, _continuous_no_speech_count
     global _continuous_callbacks
 
+    retry_pending_shutdown = False
     with _continuous_lock:
         if not _continuous_active:
-            return
-        _continuous_active = False
-        rec = _continuous_recorder
-        callbacks = _continuous_callbacks
-        track_no_speech = force_transcribe and not _continuous_auto_restart
-        _continuous_stopping = rec is not None
-        _continuous_callbacks = _NO_CALLBACKS
-        if not track_no_speech:
-            _continuous_no_speech_count = 0
+            if not _continuous_stopping or _continuous_recorder is None:
+                return
+            retry_pending_shutdown = True
+            rec = _continuous_recorder
+            callbacks = _continuous_callbacks
+            track_no_speech = False
+        else:
+            _continuous_active = False
+            rec = _continuous_recorder
+            callbacks = _continuous_callbacks
+            track_no_speech = force_transcribe and not _continuous_auto_restart
+            _continuous_stopping = rec is not None
+            if not track_no_speech:
+                _continuous_no_speech_count = 0
 
-    on_transcript, on_status = callbacks[0], callbacks[1]
+    (on_transcript, on_status, _, _, on_capture_stopped, _on_error,
+     _on_silence_progress, _on_cutoff) = callbacks
+    if retry_pending_shutdown:
+        _shutdown_continuous_capture(
+            rec,
+            keep_audio=False,
+            on_capture_stopped=on_capture_stopped,
+        )
+        with _continuous_lock:
+            if _continuous_capture_stopped_notified:
+                _continuous_stopping = False
+                _continuous_callbacks = _NO_CALLBACKS
+        return
+
     if rec is not None:
         if force_transcribe and on_transcript:
             _safe_call(on_status, "transcribing")
-            try:
-                wav_path = rec.stop()
-            except Exception as e:
-                logger.warning("failed to stop recorder: %s", e)
-                _safe_call(rec.cancel, warn="failed to cancel recorder: %s")
-                wav_path = None
+            wav_path = _shutdown_continuous_capture(
+                rec,
+                keep_audio=True,
+                on_capture_stopped=on_capture_stopped,
+            )
             threading.Thread(
                 target=_finish_forced_stop, args=(wav_path, callbacks, track_no_speech), daemon=True
             ).start()
             return
-        # cancel() (not stop()) discards buffered frames — the loop is over, we don't want to
-        # transcribe a half-captured turn.
-        _safe_call(rec.cancel, warn="failed to cancel recorder: %s")
-    _finish_stop(on_status)
+        # Discard buffered frames, close the stream, and release ownership only after closure.
+        _shutdown_continuous_capture(
+            rec,
+            keep_audio=False,
+            on_capture_stopped=on_capture_stopped,
+        )
+    with _continuous_lock:
+        shutdown_complete = _continuous_capture_stopped_notified or rec is None
+        if shutdown_complete:
+            _continuous_stopping = False
+            _continuous_callbacks = _NO_CALLBACKS
+    if shutdown_complete:
+        _safe_call(on_status, "idle")
 
 
 def _finish_forced_stop(wav_path: Optional[str], callbacks: tuple, track_no_speech: bool) -> None:
     """Background tail of ``stop_continuous(force_transcribe=True)``: transcribe, deliver, tally."""
-    on_transcript, on_status, on_silent_limit, on_stop_phrase = callbacks
+    (on_transcript, on_status, on_silent_limit, on_stop_phrase,
+     _on_capture_stopped, on_error, _on_silence_progress, _on_cutoff) = callbacks
     # With auto_restart=False the CLIENT drives the loop, so a stop phrase must fire the stop
     # signal — discarding the transcript alone would leave the conversation running forever.
-    transcript, stop_phrase, stop_text = _turn_transcript(
+    transcript, stop_phrase, stop_text, transcription_error = _turn_transcript(
         wav_path, "failed to stop/transcribe recorder: %s", "stop_continuous", "ending voice chat"
     )
     if stop_phrase:
         _signal_halt(True, stop_text, on_stop_phrase, on_silent_limit)
     if transcript:
         _safe_call(on_transcript, transcript, warn="on_transcript callback raised: %s")
+    elif transcription_error:
+        _safe_call(on_error, transcription_error, warn="on_error callback raised: %s")
     if track_no_speech:
-        held = _voice_activity_held()
+        held = bool(transcription_error) or _voice_activity_held()
         with _continuous_lock:
             should_halt, _ = _tally_silence(bool(transcript) or stop_phrase, held, "stop_continuous")
         if should_halt:
             _safe_call(on_silent_limit)
-    _finish_stop(on_status)
+    _finish_stop(on_status, completed=bool(transcript))
 
 
-def _finish_stop(on_status) -> None:
-    """Clear the stopping flag, play the CLI-parity 660 Hz × 2 "stopped" cue, report idle."""
-    global _continuous_stopping
+def _finish_stop(on_status, *, completed: bool) -> None:
+    """Finalize only after capture shutdown; beep only for usable STT text."""
+    global _continuous_stopping, _continuous_callbacks
     with _continuous_lock:
+        if not _continuous_capture_stopped_notified:
+            return
         _continuous_stopping = False
-    _play_beep(frequency=660, count=2)
+        _continuous_callbacks = _NO_CALLBACKS
+    if completed:
+        _play_beep(frequency=660, count=2)
     _safe_call(on_status, "idle")
 
 
@@ -477,24 +579,31 @@ def _continuous_on_silence() -> None:
             _debug("_continuous_on_silence: loop inactive — abort")
             return
         rec = _continuous_recorder
-        on_transcript, on_status, on_silent_limit, on_stop_phrase = _continuous_callbacks
+        (on_transcript, on_status, on_silent_limit, on_stop_phrase,
+         on_capture_stopped, on_error, on_silence_progress, on_cutoff) = (
+            _continuous_callbacks
+        )
     if rec is None:
         _debug("_continuous_on_silence: no recorder — abort")
         return
 
     _safe_call(on_status, "transcribing")
-    wav_path = rec.stop()
+    wav_path = _shutdown_continuous_capture(
+        rec,
+        keep_audio=True,
+        on_capture_stopped=on_capture_stopped,
+    )
     # Peak RMS tells at a glance whether the mic was too quiet for SILENCE_RMS_THRESHOLD (200)
     # when stop() returns None despite the VAD firing.
     _debug(f"_continuous_on_silence: rec.stop -> {wav_path!r} (peak_rms={getattr(rec, '_peak_rms', -1)})")
-    # CLI parity: double beep after the stream stops (safe from the CoreAudio conflict).
-    _play_beep(frequency=660, count=2)
-
-    transcript, stop_phrase, stop_text = _turn_transcript(
+    transcript, stop_phrase, stop_text, transcription_error = _turn_transcript(
         wav_path, "continuous transcription failed: %s", "_continuous_on_silence", "ending loop", trace=True
     )
     # Held check runs outside the lock (the probe may call into the host surface).
-    held = transcript is None and not stop_phrase and _voice_activity_held()
+    held = (
+        transcript is None and not stop_phrase
+        and (transcription_error is not None or _voice_activity_held())
+    )
     with _continuous_lock:
         if not _continuous_active:
             _debug("_continuous_on_silence: stopped during transcribe — no restart")
@@ -503,6 +612,9 @@ def _continuous_on_silence() -> None:
 
     if transcript:
         _safe_call(on_transcript, transcript, warn="on_transcript callback raised: %s")
+        _play_beep(frequency=660, count=2)
+    elif transcription_error:
+        _safe_call(on_error, transcription_error, warn="on_error callback raised: %s")
     if stop_phrase or limit_hit:
         _debug(f"_continuous_on_silence: halting ({'stop phrase' if stop_phrase else f'{no_speech} silent cycles'})")
         with _continuous_lock:
@@ -512,10 +624,16 @@ def _continuous_on_silence() -> None:
         _safe_call(rec.cancel)
         _safe_call(on_status, "idle")
         return
-    _rearm_after_turn(rec, on_status, no_speech)
+    _rearm_after_turn(
+        rec, on_status, no_speech,
+        on_silence_progress=on_silence_progress,
+        on_cutoff=on_cutoff,
+    )
 
 
-def _rearm_after_turn(rec: Any, on_status, no_speech: int) -> None:
+def _rearm_after_turn(
+    rec: Any, on_status, no_speech: int, *, on_silence_progress=None, on_cutoff=None
+) -> None:
     """Wait out in-flight TTS, then restart capture (auto_restart) or stop (client-driven loop).
 
     CLI parity: the mic waits for TTS and then leaves a small gap so the speaker tail isn't
@@ -536,7 +654,12 @@ def _rearm_after_turn(rec: Any, on_status, no_speech: int) -> None:
     _debug(f"_continuous_on_silence: restarting loop (no_speech={no_speech})")
     _play_beep(frequency=880, count=1)
     try:
-        rec.start(on_silence_stop=_continuous_on_silence)
+        _prepare_continuous_capture()
+        rec.start(
+            on_silence_stop=_continuous_on_silence,
+            on_silence_progress=on_silence_progress,
+            on_cutoff=on_cutoff,
+        )
     except Exception as e:
         logger.error("failed to restart continuous recording: %s", e)
         _debug(f"_continuous_on_silence: restart raised {type(e).__name__}: {e}")
