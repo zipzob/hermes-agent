@@ -1249,6 +1249,10 @@ class _ConcurrentBatch:
         self.gate = _StartOrderGate(_start_order_gate_timeout(timeout_s))
         self.authorization_gate = _ConcurrentToolAuthorizationGate()
         self.timed_out_indices: set[int] = set()
+        # A completed slot becomes externally visible only once every earlier
+        # call has been committed. This preserves provider call/result order
+        # while allowing a completed prefix to survive a wedged later tool.
+        self.emitted_indices: set[int] = set()
 
     def _dispatch_worker(self, index: int, ref: _ToolCallRef, scope_block, start_gate: _WorkerStartOnce) -> Optional[_ToolOutcome]:
         """Run one call through the middleware and synthesize its slot outcome; ``None`` when
@@ -1350,13 +1354,51 @@ class _ConcurrentBatch:
     def _running_names(self, not_done, future_to_index) -> list[str]:
         return [self.parsed_calls[future_to_index[f]].name for f in not_done if f in future_to_index]
 
-    def await_completion(self, futures, future_to_index, deadline: float | None) -> bool:
-        """Wait with periodic heartbeats and interrupt checks; True when the batch was
-        abandoned (deadline or interrupt) and the executor must not join its workers."""
+    def _flush_completed_prefix(self, budget: BudgetConfig) -> bool:
+        """Commit every newly-finished ordered prefix before projecting it to the UI.
+
+        The canonical append + session flush must precede callbacks: an early
+        completion can otherwise be visible but lost when a later worker wedges
+        or terminates the process."""
+        for i, pc in enumerate(self.parsed_calls):
+            if i in self.emitted_indices:
+                continue
+            outcome = self.results[i]
+            if outcome is None:
+                return True
+            ref, function_result = outcome.ref, outcome.result
+            effect_disposition = "none" if outcome.blocked else None
+            if pc.parse_error is not None:
+                ref.emit_invalid_arguments(self.agent, function_result)
+            committed = _commit_tool_result(
+                self.agent, self.messages, ref, function_result,
+                budget=budget, tool_duration=outcome.duration, is_error=outcome.is_error,
+                blocked=outcome.blocked, effect_disposition=effect_disposition,
+                observed=True, error_preview=lambda res: _multimodal_text_summary(res)[:200],
+            )
+            if committed is None:
+                return False
+            _persisted, display_function_result, risk_metadata = committed
+            # Mark durable result before callbacks so re-entrant observers cannot
+            # make the final drain duplicate this tool_call_id.
+            self.emitted_indices.add(i)
+            if self.agent._should_emit_quiet_tool_messages():
+                cute_msg = _get_cute_tool_message_impl(ref.name, ref.args, outcome.duration, result=display_function_result)
+                self.agent._safe_print(f"  {cute_msg}")
+            elif _tool_progress_enabled(self.agent):
+                _print_tool_completed(self.agent, i + 1, outcome.duration, _multimodal_text_summary(display_function_result))
+            _emit_tool_complete_and_risk(self.agent, ref, display_function_result, risk_metadata, outcome.blocked)
+        return True
+
+    def await_completion(self, futures, future_to_index, deadline: float | None, budget: BudgetConfig) -> bool:
+        """Wait with periodic early-prefix publication, heartbeats and interrupt checks.
+        True means abandonment or a failed incremental persistence flush."""
         agent = self.agent
         _conc_start = time.time()
         while True:
-            wait_timeout = 5.0
+            # Fast polling publishes a completed prefix while a later tool is
+            # still running; five-second polling made the TUI appear frozen.
+            wait_timeout = 0.5
             if deadline is not None:
                 remaining = deadline + self.authorization_gate.excluded_seconds() - time.monotonic()
                 if remaining <= 0:
@@ -1365,6 +1407,8 @@ class _ConcurrentBatch:
                     wait_timeout = min(wait_timeout, remaining)
             if deadline is None or remaining > 0:
                 _done, not_done = concurrent.futures.wait(futures, timeout=wait_timeout)
+            if not self._flush_completed_prefix(budget):
+                return True
             if not not_done:
                 return False
 
@@ -1408,7 +1452,7 @@ class _ConcurrentBatch:
                 concurrent.futures.wait(not_done, timeout=3.0)
             return True
 
-    def run(self) -> None:
+    def run(self, budget: BudgetConfig) -> None:
         """Dispatch the runnable calls on a daemon pool and wait for the batch."""
         runnable = [i for i, pc in enumerate(self.parsed_calls) if pc.parse_error is None]
         if not runnable:
@@ -1421,7 +1465,7 @@ class _ConcurrentBatch:
         abandon_executor = False
         try:
             futures, future_to_index = self.submit_all(executor, runnable)
-            abandon_executor = self.await_completion(futures, future_to_index, deadline)
+            abandon_executor = self.await_completion(futures, future_to_index, deadline, budget)
         finally:
             # Every abandoning exit releases gate-parked workers and leaves wedged threads
             # detached rather than joining them; normal completion joins.
@@ -1455,6 +1499,8 @@ def _append_batch_results(agent, messages: list, effective_task_id: str, batch: 
     """Append every slot's result in original call order; returns False at the first
     failed flush (the caller must stop the batch)."""
     for i, pc in enumerate(batch.parsed_calls):
+        if i in batch.emitted_indices:
+            continue
         r = batch.results[i]
         # A worker may finish between the deadline snapshot and this loop;
         # prefer its real result over a fabricated timeout.
@@ -1521,7 +1567,7 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
 
     spinner = _start_quiet_tool_spinner(agent, "", {}, label=f"⚡ running {num_tools} tools concurrently")
     try:
-        batch.run()
+        batch.run(_tool_budget)
     finally:
         if spinner:
             finished = [r for r in batch.results if r is not None]
