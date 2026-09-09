@@ -332,7 +332,10 @@ def _run_npm_install_deterministic(
             return _run_npm_watching_for_engine_failure(
                 [npm_exe, *args, "--include=dev", *extra_args], cwd=cwd, env=run_env, capture_output=capture_output,
             )
-        if (cwd / "package-lock.json").exists():
+        workspace_scoped = "--workspace" in extra_args or any(
+            arg.startswith("--workspace=") for arg in extra_args
+        )
+        if (cwd / "package-lock.json").exists() and not workspace_scoped:
             ci_result = _run(["ci"])
             if ci_result.returncode == 0:
                 return ci_result
