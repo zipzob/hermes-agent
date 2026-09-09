@@ -228,6 +228,7 @@ class CLIStatusBarMixin:
             "battery_category": "dim",
             "focus_label": "",  # /focus badge: the reduced-output mode is never invisible.
             "git_branch": "",
+            "plugin_status_items": [],
             "goal_active": False,
             "goal_turns_used": 0,
             "goal_max_turns": 0}
@@ -248,6 +249,12 @@ class CLIStatusBarMixin:
                 from hermes_cli.status_bar_git import current_git_branch
 
                 snapshot["git_branch"] = current_git_branch()
+        except Exception:
+            pass
+
+        try:
+            from hermes_cli.plugins import get_status_items
+            snapshot["plugin_status_items"] = get_status_items()
         except Exception:
             pass
 
@@ -1082,6 +1089,8 @@ class CLIStatusBarMixin:
         if git_branch:
             add("git_branch", _DIM, f"⎇ {git_branch}")
         if not narrow:
+            for item in snapshot.get("plugin_status_items", [])[:1]:
+                add("plugin_status", _STRONG, item)
             add("duration", _DIM, duration_label)
         if wide:
             for name in ("prompt_elapsed", "idle_since"):

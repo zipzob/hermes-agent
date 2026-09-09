@@ -1971,6 +1971,11 @@ def _get_usage(agent) -> dict:
     with contextlib.suppress(Exception):
         from tools.async_delegation import active_count as _async_active_count
         usage["active_subagents"] = _async_active_count()
+    with contextlib.suppress(Exception):
+        from hermes_cli.plugins import get_status_items
+        status_items = get_status_items()
+        if status_items:
+            usage["governor_status"] = status_items[0][:40]
     # Dev-only live credits-spent readout, gated on HERMES_DEV_CREDITS so the payload stays clean otherwise.
     if is_truthy_value(os.environ.get("HERMES_DEV_CREDITS")):
         with contextlib.suppress(Exception):

@@ -162,6 +162,37 @@ describe('StatusRule session title', () => {
   })
 })
 
+describe('StatusRule resource governor indicator', () => {
+  it('renders projected quota risk as a warning, not current exhaustion', () => {
+    const governor = 'bal G7d11→75Y S5h80→100R C94'
+
+    const element = StatusRule({
+      ...baseProps,
+      cols: 120,
+      usage: { ...baseProps.usage, governor_status: governor }
+    })
+
+    expect(textContent(element)).toContain(governor)
+    expect(findElementWithText(element, governor)?.props.color).toBe(DEFAULT_THEME.color.warn)
+  })
+
+  it('renders exhausted quota as an error', () => {
+    const governor = 'bal G7d11→75Y S5h100→100E C94'
+
+    const element = StatusRule({
+      ...baseProps,
+      cols: 120,
+      usage: { ...baseProps.usage, governor_status: governor }
+    })
+
+    expect(findElementWithText(element, governor)?.props.color).toBe(DEFAULT_THEME.color.error)
+  })
+
+  it('omits the segment when no governor plugin item exists', () => {
+    expect(textContent(StatusRule({ ...baseProps }))).not.toContain('G14→56G')
+  })
+})
+
 describe('StatusRule background-subagent indicator', () => {
   it('renders ⛓ N on a wide terminal when subagents are running', () => {
     const element = StatusRule({

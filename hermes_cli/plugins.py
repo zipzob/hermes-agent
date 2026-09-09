@@ -913,6 +913,14 @@ class PluginContext:
         logger.debug("Plugin %s registered %d redaction pattern(s)", self.manifest.name, count)
         return count
 
+    def register_status_item(self, name: str, callback: Callable[[], str]) -> Optional[PluginRegistration]:
+        """Register a compact, read-only status item with normal unload ownership."""
+        clean = name.strip().lower()
+        if not clean:
+            raise ValueError("status item name must not be empty")
+        return self._register_entry("status_item", clean, self._manager._status_items, callback,
+                                    "Plugin %s registered status item: %s", clean)
+
     def register_hook(self, hook_name: str, callback: Callable) -> PluginRegistration:
         """Register a lifecycle hook callback (unknown names warn but are still stored)."""
         return self._track_callback("hook", hook_name, callback, self._manager._hooks, VALID_HOOKS)
@@ -1134,6 +1142,18 @@ def _resolve_hook_callback_timeout() -> float:
 class PluginManager(PluginLoaderMixin, PluginDispatchMixin, PluginLedgerMixin):
     """Central manager that discovers, loads, and invokes plugins."""
 
+    def status_items(self) -> List[str]:
+        """Return bounded status text; one broken item cannot break the UI."""
+        items: List[str] = []
+        for callback in list(self._status_items.values()):
+            try:
+                text = str(callback() or "").strip().replace("\n", " ")
+                if text:
+                    items.append(text[:40])
+            except Exception:
+                logger.debug("Plugin status item failed", exc_info=True)
+        return items
+
     def __init__(self, scope_key: Optional[str] = None) -> None:
         # Home is captured immutably: unload may run from another profile context, but every
         # inverse must target the registration's original scope.
@@ -1158,6 +1178,7 @@ class PluginManager(PluginLoaderMixin, PluginDispatchMixin, PluginLedgerMixin):
         self._cli_commands: Dict[str, dict] = {}
         self._plugin_commands: Dict[str, dict] = {}
         self._system_prompt_sections: Dict[str, PluginSystemPromptSection] = {}
+        self._status_items: Dict[str, Callable[[], str]] = {}
         self._plugin_skills: Dict[str, Dict[str, Any]] = {}
         self._portable_mcp_servers: Dict[str, Dict[str, Any]] = {}
         self._aux_tasks: Dict[str, Dict[str, Any]] = {}
@@ -1540,6 +1561,11 @@ def _clear_plugin_submodules(manager: Optional[PluginManager]) -> None:
         with _MODULE_NAMESPACE_LOCK:
             if _BARE_MODULE_SCOPE.get(module_name) == manager.scope_key:
                 _BARE_MODULE_SCOPE.pop(module_name, None)
+
+
+def get_status_items() -> List[str]:
+    """Return compact status-bar items registered by enabled plugins."""
+    return get_plugin_manager().status_items()
 
 
 def get_plugin_manager() -> PluginManager:
