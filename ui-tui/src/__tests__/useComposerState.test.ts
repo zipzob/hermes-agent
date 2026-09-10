@@ -1,6 +1,40 @@
 import { describe, expect, it } from 'vitest'
 
-import { looksLikeDroppedPath } from '../app/useComposerState.js'
+import { collapsedPaste, looksLikeDroppedPath } from '../app/useComposerState.js'
+import { prepareSlashSubmission, shouldInterpolateSubmission } from '../app/useSubmission.js'
+import { looksLikeSlashCommand } from '../domain/slash.js'
+
+describe('collapsed slash paste', () => {
+  it('keeps the goal command visible while preserving its multiline body', () => {
+    const text = '/goal Update Hermes\nPreserve lifecycle fixes\nVerify every contribution'
+    const paste = collapsedPaste(text, 1)
+
+    expect(paste.display).toMatch(/^\/goal \[\[/)
+    expect(looksLikeSlashCommand(paste.display)).toBe(true)
+    expect(paste.token.text).toBe('Update Hermes\nPreserve lifecycle fixes\nVerify every contribution')
+    expect(prepareSlashSubmission(paste.display, [paste.token]).command).toBe(text)
+  })
+
+  it('does not promote hidden shell or interpolation syntax', () => {
+    for (const text of ['!touch /tmp/never-run\nsecond line', '{!touch /tmp/never-run}\nsecond line']) {
+      const paste = collapsedPaste(text, 2)
+
+      expect(paste.display.startsWith('!')).toBe(false)
+      expect(looksLikeSlashCommand(paste.display)).toBe(false)
+      expect(shouldInterpolateSubmission(paste.display)).toBe(false)
+      expect(paste.token.text).toBe(text)
+    }
+  })
+
+  it('keeps inline slash references and absolute paths as ordinary pasted text', () => {
+    for (const text of ['Explain /goal\nnot a command', '/home/zip/example\nnot a command']) {
+      const paste = collapsedPaste(text, 3)
+
+      expect(looksLikeSlashCommand(paste.display)).toBe(false)
+      expect(paste.token.text).toBe(text)
+    }
+  })
+})
 
 describe('looksLikeDroppedPath', () => {
   it('recognizes macOS screenshot temp paths and file URIs', () => {
