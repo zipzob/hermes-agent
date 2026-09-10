@@ -165,8 +165,15 @@ class CLITuiMixin:
         selected = state.get("selected", 0)
         show_full = state.get("show_full", False)
         title = "⚠️  Dangerous Command"
+        remaining = max(0, int(self._approval_deadline - time.monotonic()))
+        remaining_minutes, remaining_seconds = divmod(remaining, 60)
+        expiry_text = (
+            f"Expires in: {remaining_minutes}m {remaining_seconds:02d}s "
+            "(no response: deny)"
+        )
 
-        preview_lines = wrap(description, 60)
+        preview_lines = wrap(expiry_text, 60)
+        preview_lines.extend(wrap(description, 60))
         preview_lines.extend(wrap(command, 60))
         for i, choice in enumerate(choices):
             prefix = '❯ ' if i == selected else '  '
@@ -175,7 +182,8 @@ class CLITuiMixin:
         box_width = _panel_box_width(title, preview_lines)
         inner_text_width = max(8, box_width - 2)
 
-        # Pre-wrap the mandatory content — command + choices must always render.
+        # Pre-wrap mandatory expiry + command + choices so they always render.
+        expiry_wrapped = wrap(expiry_text, inner_text_width)
         cmd_wrapped = wrap(command, inner_text_width)
         if not show_full and "view" in choices and len(cmd_wrapped) > 4:
             cmd_wrapped = cmd_wrapped[:3] + wrap("… (choose Show full command)", inner_text_width)
@@ -188,12 +196,12 @@ class CLITuiMixin:
         # title + blank + blank-between-cmd/choices + bottom border (5); when that doesn't fit,
         # drop the separator blanks (3) so every choice stays on-screen in compact terminals.
         available = max(0, _term_rows() - _PANEL_RESERVED_BELOW)
-        use_compact_chrome = 5 + len(cmd_wrapped) + len(choice_wrapped) > available
+        use_compact_chrome = 5 + len(expiry_wrapped) + len(cmd_wrapped) + len(choice_wrapped) > available
         chrome_rows = 3 if use_compact_chrome else 5
 
         # A command too long to leave room for the choices (e.g. "view" on a multi-hundred-char
         # command) is truncated so approve/deny still render; keep at least 1 command row.
-        max_cmd_rows = max(1, available - chrome_rows - len(choice_wrapped))
+        max_cmd_rows = max(1, available - chrome_rows - len(expiry_wrapped) - len(choice_wrapped))
         if len(cmd_wrapped) > max_cmd_rows:
             keep = max(1, max_cmd_rows - 1) if max_cmd_rows > 1 else 1
             cmd_wrapped = cmd_wrapped[:keep] + wrap(
@@ -201,7 +209,7 @@ class CLITuiMixin:
 
         # Remaining rows go to the description (minus the blank separator in full mode), capped
         # at 10 so the panel stays compact even on huge terminals.
-        mandatory_no_desc = chrome_rows + len(cmd_wrapped) + len(choice_wrapped)
+        mandatory_no_desc = chrome_rows + len(expiry_wrapped) + len(cmd_wrapped) + len(choice_wrapped)
         available_for_desc = available - mandatory_no_desc - (0 if use_compact_chrome else 1)
         available_for_desc = max(0, min(available_for_desc, 10))
         desc_wrapped = wrap(description, inner_text_width) if description else []
@@ -210,10 +218,12 @@ class CLITuiMixin:
         elif len(desc_wrapped) > available_for_desc:
             desc_wrapped = desc_wrapped[:max(1, available_for_desc - 1)] + ["… (description truncated)"]
 
-        # Render title → command → choices → description; description last so any overflow
+        # Render title → expiry → command → choices → description; description last so any overflow
         # clips the least-critical content, never the command or choices.
         panel = _Panel('class:approval-border', box_width)
         panel.row('class:approval-title', title)
+        for wrapped in expiry_wrapped:
+            panel.row('class:approval-desc', wrapped)
         if not use_compact_chrome:
             panel.blank()
         for wrapped in cmd_wrapped:

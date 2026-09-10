@@ -4,6 +4,7 @@ import { getOverlayState, patchOverlayState, resetOverlayState } from '../app/ov
 import {
   applyVoiceRecordRequest,
   applyVoiceRecordResponse,
+  denyApproval,
   dismissSensitivePrompt,
   handleIdleHotkeyExit,
   resolveCtrlCComposerAction,
@@ -208,6 +209,39 @@ describe('voice record request routing', () => {
 })
 
 describe('dismissSensitivePrompt', () => {
+  it('keeps a newer approval visible when an earlier Ctrl-C denial resolves', async () => {
+    resetOverlayState()
+    const approval = { command: 'test', description: 'test', requestId: 'old', toolId: 'old-tool' }
+    patchOverlayState({ approval })
+    let resolve!: (value: object) => void
+
+    const rpc = vi.fn().mockReturnValue(
+      new Promise(done => {
+        resolve = done
+      })
+    )
+
+    const pending = denyApproval(approval, rpc)
+    const newer = { ...approval, requestId: 'new', toolId: 'new-tool' }
+
+    patchOverlayState({ approval: newer })
+    resolve({})
+    await pending
+    expect(rpc).toHaveBeenCalledWith('approval.respond', expect.objectContaining({ choice: 'deny', request_id: 'old' }))
+    expect(getOverlayState().approval).toEqual(newer)
+    resetOverlayState()
+  })
+
+  it.each([null, {}])('clears the matching Ctrl-C prompt only after acknowledgement: %s', async response => {
+    resetOverlayState()
+    const approval = { command: 'test', description: 'test', requestId: 'current' }
+    patchOverlayState({ approval })
+    const rpc = vi.fn().mockResolvedValue(response)
+    await denyApproval(approval, rpc)
+    expect(getOverlayState().approval).toEqual(response ? null : approval)
+    resetOverlayState()
+  })
+
   it('clears a sudo overlay before a stale cancel RPC resolves', async () => {
     resetOverlayState()
     patchOverlayState({ sudo: { requestId: 'sudo-1' } })

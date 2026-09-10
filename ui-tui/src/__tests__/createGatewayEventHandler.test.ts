@@ -1314,12 +1314,24 @@ describe('createGatewayEventHandler', () => {
         choices: ['once', 'deny'],
         command: 'rm -rf /tmp/x',
         description: 'smart deny override',
-        smart_denied: true
+        name: 'terminal',
+        request_id: 'approval-smart-deny',
+        smart_denied: true,
+        tool_id: 'tool-smart-deny'
       },
       type: 'approval.request'
     } as any)
 
-    expect(getOverlayState().approval).toMatchObject({ choices: ['once', 'deny'], smartDenied: true })
+    expect(getOverlayState().approval).toMatchObject({
+      choices: ['once', 'deny'],
+      requestId: 'approval-smart-deny',
+      smartDenied: true,
+      toolId: 'tool-smart-deny',
+      toolName: 'terminal'
+    })
+    expect(getTurnState().tools).toEqual([
+      expect.objectContaining({ id: 'tool-smart-deny', name: 'terminal', state: 'approval-pending' })
+    ])
   })
 
   it('still surfaces terminal turn failures as errors', () => {

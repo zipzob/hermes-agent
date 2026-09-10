@@ -636,7 +636,7 @@ class CLIStreamMixin:
         Drives the TUI spinner (tool.started stamps the elapsed timer); in "all"/"new"/"verbose"
         progress modes tool.completed also commits a stacked scrollback line (tool history).
         """
-        from cli import CLI_CONFIG, _DIM, _RST, _cprint, _hermes_home
+        from cli import CLI_CONFIG, _DIM, _RST, _cprint, _hermes_home, logger
         # MoA reference outputs (display-only events from the MoA facade): render each answer
         # as a labelled thinking-style block BEFORE the aggregator acts.
         if event_type == "moa.reference":
@@ -732,6 +732,46 @@ class CLIStreamMixin:
             # Store args for stacked scrollback line on completion
             self._pending_tool_info.setdefault(function_name, []).append(
                 function_args if function_args is not None else {})
+            # Verbose mode commits the full redacted input at start; the
+            # spinner preview alone is transient and loses multiline commands.
+            if getattr(self, "tool_progress_mode", "off") == "verbose" and function_args:
+                try:
+                    from agent.display import redact_tool_args_for_display
+
+                    display_args = redact_tool_args_for_display(
+                        function_name, function_args
+                    ) or function_args
+                    primary_key = (
+                        "command" if function_name == "terminal"
+                        else "code" if function_name == "execute_code"
+                        else None
+                    )
+                    if primary_key and isinstance(display_args.get(primary_key), str):
+                        rendered = (
+                            f"  {_DIM}┊ {function_name} {primary_key}:{_RST}\n"
+                            f"{display_args[primary_key]}"
+                        )
+                        remaining_args = {
+                            key: value
+                            for key, value in display_args.items()
+                            if key != primary_key
+                        }
+                        if remaining_args:
+                            rendered += "\n" + json.dumps(
+                                remaining_args, indent=2, ensure_ascii=False
+                            )
+                    else:
+                        rendered = (
+                            f"  {_DIM}┊ {function_name} arguments:{_RST}\n"
+                            + json.dumps(display_args, indent=2, ensure_ascii=False)
+                        )
+                    _cprint(rendered)
+                except Exception:
+                    logger.debug(
+                        "Verbose tool-input rendering failed for %s",
+                        function_name,
+                        exc_info=True,
+                    )
             self._invalidate()
 
     def _on_tool_start(self, tool_call_id: str, function_name: str, function_args: dict):

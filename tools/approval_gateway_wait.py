@@ -117,6 +117,17 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
     the leader, so the follower falls through to a fresh prompt."""
     from tools import approval as _approval
 
+    # Gateway clients need a wall-clock deadline to render their expiry state;
+    # the blocking wait below still uses the monotonic timeout.
+    approval_data = dict(approval_data)
+    # Tool lifecycle and approval notifications are separate event streams.
+    # Preserve the context-local call id so the client can identify the tool
+    # that is blocked without changing approval resolution semantics.
+    approval_data.setdefault("tool_id", _ctx._approval_tool_call_id.get())
+    approval_data.setdefault(
+        "expires_at_ms",
+        int((time.time() + max(_ctx._get_approval_timeout(), 0)) * 1000),
+    )
     primary_key = approval_data.get("pattern_key", "")
     payload = {
         "command": approval_data.get("command", ""),

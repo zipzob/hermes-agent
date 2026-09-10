@@ -1542,6 +1542,34 @@ class TestApprovalTimeoutIsNotConsent:
         thread.join(timeout=5)
         assert result_holder["result"]["approved"] is True
 
+    def test_gateway_approval_captures_active_tool_identity(self, monkeypatch):
+        from tools import approval as mod
+
+        self._force_short_timeout(monkeypatch, seconds=2)
+        notified = []
+        mod.register_gateway_notify(self.SESSION_KEY, notified.append)
+        result_holder = {}
+
+        def guarded_command():
+            session_token = mod.set_current_session_key(self.SESSION_KEY)
+            observability_tokens = mod.set_current_observability_context(tool_call_id="terminal-42")
+            try:
+                result_holder["result"] = mod.check_all_command_guards("rm -rf /tmp/example", "local")
+            finally:
+                mod.reset_current_observability_context(observability_tokens)
+                mod.reset_current_session_key(session_token)
+
+        thread = threading.Thread(target=guarded_command)
+        thread.start()
+        for _ in range(200):
+            if notified:
+                break
+            time.sleep(0.005)
+
+        assert notified[0]["tool_id"] == "terminal-42"
+        assert mod.resolve_gateway_approval(self.SESSION_KEY, "deny", request_id=notified[0]["request_id"]) == 1
+        thread.join(timeout=5)
+
     def test_stale_request_id_cannot_resolve_current_approval(self, monkeypatch):
         from tools import approval as mod
 

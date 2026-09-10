@@ -1308,6 +1308,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
       case 'approval.request': {
         const description = String(ev.payload.description ?? 'dangerous command')
+        const expiresAtMs = Number(ev.payload.expires_at_ms)
         // Only an explicit false (tirith warning) drops the permanent-allow option.
         const allowPermanent = ev.payload.allow_permanent !== false
 
@@ -1317,9 +1318,22 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
             choices: ev.payload.choices,
             command: String(ev.payload.command ?? ''),
             description,
-            smartDenied: ev.payload.smart_denied === true
+            expiresAtMs: Number.isFinite(expiresAtMs) ? expiresAtMs : undefined,
+            requestId: typeof ev.payload.request_id === 'string' ? ev.payload.request_id : undefined,
+            smartDenied: ev.payload.smart_denied === true,
+            toolId: typeof ev.payload.tool_id === 'string' ? ev.payload.tool_id : undefined,
+            toolName: typeof ev.payload.name === 'string' ? ev.payload.name : undefined
           }
         })
+
+        if (typeof ev.payload.tool_id === 'string' && ev.payload.tool_id) {
+          turnController.recordToolApproval(
+            ev.payload.tool_id,
+            typeof ev.payload.name === 'string' ? ev.payload.name : 'tool',
+            String(ev.payload.command ?? '')
+          )
+        }
+
         setStatus('approval needed')
         ringPromptBell()
 

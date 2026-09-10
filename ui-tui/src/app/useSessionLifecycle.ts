@@ -9,6 +9,7 @@ import { introMsg, toTranscriptMessages } from '../domain/messages.js'
 import { ZERO } from '../domain/usage.js'
 import { type GatewayClient } from '../gatewayClient.js'
 import type {
+  ApprovalRequestPayload,
   SessionActivateResponse,
   SessionCloseResponse,
   SessionCreateResponse,
@@ -18,7 +19,7 @@ import type {
   SetupStatusResponse
 } from '../gatewayTypes.js'
 import { asRpcResult } from '../lib/rpc.js'
-import type { Msg, PanelSection, SessionInfo, Usage } from '../types.js'
+import type { ApprovalReq, Msg, PanelSection, SessionInfo, Usage } from '../types.js'
 
 import type { ComposerActions, GatewayRpc, StateSetter } from './interfaces.js'
 import { patchOverlayState } from './overlayStore.js'
@@ -30,6 +31,27 @@ import { getUiState, patchUiState } from './uiStore.js'
 export { refreshSessionView, scheduleResumeScrollToBottom } from './sessionResumeView.js'
 
 const usageFrom = (info: null | SessionInfo): Usage => (info?.usage ? { ...ZERO, ...info.usage } : ZERO)
+
+/** Restore an approval queued while this client was detached. */
+export const approvalOverlayFromPending = (pending?: ApprovalRequestPayload): ApprovalReq | null => {
+  if (!pending) {
+    return null
+  }
+
+  const expiresAtMs = Number(pending.expires_at_ms)
+
+  return {
+    allowPermanent: pending.allow_permanent !== false,
+    choices: pending.choices,
+    command: String(pending.command ?? ''),
+    description: String(pending.description ?? 'dangerous command'),
+    expiresAtMs: Number.isFinite(expiresAtMs) ? expiresAtMs : undefined,
+    requestId: typeof pending.request_id === 'string' ? pending.request_id : undefined,
+    smartDenied: pending.smart_denied === true,
+    toolId: typeof pending.tool_id === 'string' ? pending.tool_id : undefined,
+    toolName: typeof pending.name === 'string' ? pending.name : undefined
+  }
+}
 
 const statusFromLiveSession = (status?: string, running = false) => {
   if (status === 'waiting') {
@@ -303,6 +325,18 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
           const running = Boolean(r.running || r.status === 'working' || r.status === 'waiting')
 
           resetSession()
+          const pendingApproval = approvalOverlayFromPending(r.pending_approval)
+
+          patchOverlayState({ approval: pendingApproval })
+
+          if (pendingApproval?.toolId) {
+            turnController.recordToolApproval(
+              pendingApproval.toolId,
+              pendingApproval.toolName ?? 'tool',
+              pendingApproval.command
+            )
+          }
+
           setSessionStartedAt(r.started_at ? r.started_at * 1000 : Date.now())
           const transcript = [...toTranscriptMessages(r.messages), ...liveSessionInflightMessages(r.inflight)]
           setHistoryItems(info ? [introMsg(info), ...transcript] : transcript)
@@ -355,6 +389,18 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
             const running = Boolean(r.running || r.status === 'working' || r.status === 'waiting')
 
             resetSession()
+            const pendingApproval = approvalOverlayFromPending(r.pending_approval)
+
+            patchOverlayState({ approval: pendingApproval })
+
+            if (pendingApproval?.toolId) {
+              turnController.recordToolApproval(
+                pendingApproval.toolId,
+                pendingApproval.toolName ?? 'tool',
+                pendingApproval.command
+              )
+            }
+
             setSessionStartedAt(r.started_at ? r.started_at * 1000 : Date.now())
 
             const resumed = [...toTranscriptMessages(r.messages), ...liveSessionInflightMessages(r.inflight)]

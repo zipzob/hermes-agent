@@ -26,7 +26,7 @@ import {
   type InputHandlerResult,
   type OverlayState
 } from './interfaces.js'
-import { $isBlocked, $overlayState, patchOverlayState } from './overlayStore.js'
+import { $isBlocked, $overlayState, getOverlayState, patchOverlayState } from './overlayStore.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
 import { getUiState } from './uiStore.js'
@@ -217,6 +217,20 @@ export function dismissSensitivePrompt(
   }
 }
 
+export function denyApproval(approval: NonNullable<OverlayState['approval']>, rpc: GatewayRpc) {
+  return rpc<ApprovalRespondResponse>('approval.respond', {
+    choice: 'deny',
+    request_id: approval.requestId,
+    session_id: getUiState().sid
+  }).then(r => {
+    if (r && getOverlayState().approval?.requestId === approval.requestId) {
+      patchOverlayState({ approval: null })
+      turnController.recordToolApprovalResolved(approval.toolId)
+      patchTurnState({ outcome: 'denied' })
+    }
+  })
+}
+
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
 
 export function shouldDetachEditedHistoryInput(historyIdx: null | number, history: readonly string[], value: string) {
@@ -270,9 +284,7 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
     }
 
     if (overlay.approval) {
-      return gateway
-        .rpc<ApprovalRespondResponse>('approval.respond', { choice: 'deny', session_id: getUiState().sid })
-        .then(r => r && (patchOverlayState({ approval: null }), patchTurnState({ outcome: 'denied' })))
+      return denyApproval(overlay.approval, gateway.rpc)
     }
 
     if (overlay.sudo || overlay.secret || overlay.vaultUnlock) {

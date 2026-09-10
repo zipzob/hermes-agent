@@ -2,6 +2,7 @@ export interface ActiveTool {
   context?: string
   id: string
   name: string
+  state?: 'approval-pending' | 'running'
   verboseArgs?: string
   startedAt?: number
 }
@@ -100,7 +101,11 @@ export interface ApprovalReq {
   choices?: string[]
   command: string
   description: string
+  expiresAtMs?: number
+  requestId?: string
   smartDenied?: boolean
+  toolId?: string
+  toolName?: string
 }
 
 export interface ConfirmReq {

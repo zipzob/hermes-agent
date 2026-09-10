@@ -923,9 +923,33 @@ class TurnController {
     const sample = `${name} ${context}`.trim()
 
     this.toolTokenAcc += sample ? estimateTokensRough(sample) : 0
-    this.activeTools = [...this.activeTools, { context, id: toolId, name, startedAt: Date.now(), verboseArgs }]
+    const next = { context, id: toolId, name, startedAt: Date.now(), state: 'running' as const, verboseArgs }
+    this.activeTools = this.activeTools.some(tool => tool.id === toolId)
+      ? this.activeTools.map(tool => (tool.id === toolId ? { ...tool, ...next } : tool))
+      : [...this.activeTools, next]
 
     patchTurnState({ toolTokens: this.toolTokenAcc, tools: this.activeTools })
+  }
+
+  recordToolApproval(toolId: string, name: string, context: string) {
+    if (this.interrupted || !toolId) {
+      return
+    }
+
+    const existing = this.activeTools.find(tool => tool.id === toolId)
+    this.activeTools = existing
+      ? this.activeTools.map(tool => (tool.id === toolId ? { ...tool, state: 'approval-pending' } : tool))
+      : [...this.activeTools, { context, id: toolId, name, startedAt: Date.now(), state: 'approval-pending' }]
+    patchTurnState({ tools: this.activeTools })
+  }
+
+  recordToolApprovalResolved(toolId?: string) {
+    if (this.interrupted || !toolId) {
+      return
+    }
+
+    this.activeTools = this.activeTools.map(tool => (tool.id === toolId ? { ...tool, state: 'running' } : tool))
+    patchTurnState({ tools: this.activeTools })
   }
 
   reset() {

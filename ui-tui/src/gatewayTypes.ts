@@ -191,6 +191,7 @@ export interface SessionResumeResponse {
   info?: SessionInfo
   message_count?: number
   messages: GatewayTranscriptMessage[]
+  pending_approval?: ApprovalRequestPayload
   resumed?: string
   running?: boolean
   session_id: string
@@ -223,11 +224,24 @@ export interface SessionInflightTurn {
   user?: string
 }
 
+export interface ApprovalRequestPayload {
+  allow_permanent?: boolean
+  choices?: string[]
+  command: string
+  description: string
+  expires_at_ms?: number
+  name?: string
+  request_id?: string
+  smart_denied?: boolean
+  tool_id?: string
+}
+
 export interface SessionActivateResponse {
   inflight?: null | SessionInflightTurn
   info?: SessionInfo
   message_count?: number
   messages: GatewayTranscriptMessage[]
+  pending_approval?: ApprovalRequestPayload
   running?: boolean
   session_id: string
   session_key?: string
@@ -791,7 +805,11 @@ export type GatewayEvent =
         choices?: string[]
         command: string
         description: string
+        expires_at_ms?: number
+        name?: string
+        request_id?: string
         smart_denied?: boolean
+        tool_id?: string
       }
       session_id?: string
       type: 'approval.request'

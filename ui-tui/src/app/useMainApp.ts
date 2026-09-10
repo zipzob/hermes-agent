@@ -55,7 +55,7 @@ import { createSlashHandler } from './createSlashHandler.js'
 import { planGatewayRecovery } from './gatewayRecovery.js'
 import { getInputSelection } from './inputSelectionStore.js'
 import { type GatewayRpc, type StateSetter, type TranscriptRow } from './interfaces.js'
-import { $overlayState, patchOverlayState } from './overlayStore.js'
+import { $overlayState, getOverlayState, patchOverlayState } from './overlayStore.js'
 import { $goodVibesTick } from './petFlashStore.js'
 import { scrollWithSelectionBy } from './scroll.js'
 import { turnController } from './turnController.js'
@@ -1075,13 +1075,26 @@ export function useMainApp(gw: GatewayClient) {
   )
 
   const answerApproval = useCallback(
-    (choice: string) =>
-      respondWith('approval.respond', { choice, session_id: ui.sid }, () => {
+    (choice: string) => {
+      const approval = overlay.approval
+
+      if (!approval) {
+        return
+      }
+
+      return respondWith('approval.respond', { choice, request_id: approval.requestId, session_id: ui.sid }, () => {
+        // A delayed response must not dismiss a newer approval request.
+        if (getOverlayState().approval?.requestId !== approval.requestId) {
+          return
+        }
+
         patchOverlayState({ approval: null })
+        turnController.recordToolApprovalResolved(approval.toolId)
         patchTurnState({ outcome: choice === 'deny' ? 'denied' : `approved (${choice})` })
         patchUiState({ status: 'running…' })
-      }),
-    [respondWith, ui.sid]
+      })
+    },
+    [overlay.approval, respondWith, ui.sid]
   )
 
   const answerSudo = useCallback(
