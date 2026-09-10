@@ -82,6 +82,23 @@ type CacheEntry =
 const FRAME_MS = 160
 const POLL_MS = 2500
 
+export async function runPetSyncSingleFlight<T>(
+  lock: { current: boolean },
+  task: () => Promise<T>
+): Promise<T | undefined> {
+  if (lock.current) {
+    return undefined
+  }
+
+  lock.current = true
+
+  try {
+    return await task()
+  } finally {
+    lock.current = false
+  }
+}
+
 // Only the standalone TUI owns a real terminal it can splat image escapes into;
 // when piped (or running under the dashboard PTY the gateway resolves to
 // half-blocks anyway) we never ask for graphics.
@@ -114,6 +131,7 @@ export function usePet(): PetRender {
   const [enabled, setEnabled] = useState(false)
   const [grid, setGrid] = useState<PetGrid | null>(null)
   const [kitty, setKitty] = useState<KittyView | null>(null)
+  const syncInFlightRef = useRef(false)
 
   const cache = useRef<Map<string, CacheEntry>>(new Map())
   const slugRef = useRef('')

@@ -573,7 +573,13 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
     skip_install_for_fresh_termux_bundle = termux_startup and not tui_dev and not termux_need_rebuild
     did_install = False
     if not skip_install_for_fresh_termux_bundle and _tui_need_npm_install(tui_dir):
-        _install_tui_dependencies(tui_dir, termux_startup=termux_startup)
+        try:
+            _install_tui_dependencies(tui_dir, termux_startup=termux_startup)
+        except KeyboardInterrupt:
+            # Bootstrap runs before Ink owns the terminal, so an ordinary
+            # cancellation must not escape as a Python traceback.
+            print("\nHermes startup cancelled.")
+            raise SystemExit(130) from None
         did_install = True
 
     if tui_dev:

@@ -228,7 +228,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       patchUiState({
         info,
         sid: r.session_id,
-        status: info?.version ? 'ready' : 'starting agent…',
+        status: 'ready',
         storedSid,
         usage: usageFrom(info)
       })
