@@ -490,7 +490,7 @@ def _prune_completed_locked() -> None:
     """Drop the oldest completed records beyond the cap. Caller holds ``_records_lock``.
     ``stalling``/``finalizing`` are still live: evicting one makes the late runner return hit
     ``_finalize``'s missing-record path and silently drop a real result."""
-    completed = [(rid, r) for rid, r in _records.items() if r.get("status") not in _LIVE_STATES]
+    completed = [(rid, r) for rid, r in _records.items() if not _occupies_slot(r)]
     completed.sort(key=lambda kv: kv[1].get("completed_at") or kv[1].get("dispatched_at") or 0)
     for rid, _ in completed[: max(0, len(completed) - _MAX_RETAINED_COMPLETED)]:
         _records.pop(rid, None)

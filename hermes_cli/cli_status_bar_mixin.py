@@ -224,6 +224,7 @@ class CLIStatusBarMixin:
             "active_background_tasks": 0,
             "active_background_processes": 0,
             "active_background_subagents": 0,
+            "stalled_background_subagents": 0,
             "battery_label": "",
             "battery_category": "dim",
             "focus_label": "",  # /focus badge: the reduced-output mode is never invisible.
@@ -283,8 +284,11 @@ class CLIStatusBarMixin:
         except Exception:
             pass
         try:
-            from tools.async_delegation import active_count as _async_active_count
-            snapshot["active_background_subagents"] = _async_active_count()
+            from tools.async_delegation import status_snapshot
+            lifecycle = status_snapshot(parent_session_id=str(
+                getattr(agent, "session_id", "") or getattr(self, "session_id", "") or ""))
+            snapshot["active_background_subagents"] = lifecycle["active_tasks"]
+            snapshot["stalled_background_subagents"] = lifecycle["stalled_tasks"]
         except Exception:
             pass
 
@@ -1037,6 +1041,13 @@ class CLIStatusBarMixin:
             if count:
                 add(name, style(count) if callable(style) else style, f"{glyph} {count}")
 
+        # Stalled lifecycle warnings are safety state and remain visible even
+        # when optional fields are filtered. Active subagents keep their normal
+        # place with the other background-work counters below.
+        stalled = snapshot.get("stalled_background_subagents", 0)
+        if stalled:
+            segs.append([(_STRONG, f"⚠ ⛓ {stalled} stalled")])
+
         if _ok("model"):
             if styled:
                 segs.append([(_SB, " ☤ "), (_STRONG, model_short)])
@@ -1079,6 +1090,7 @@ class CLIStatusBarMixin:
             add_count("bg_tasks", "active_background_tasks", "▶")
             add_count("bg_processes", "active_background_processes", "⚙")
             add_count("bg_subagents", "active_background_subagents", "⛓")
+
         if goal_segment:
             add("goal", _STRONG, goal_segment)
         git_branch = snapshot.get("git_branch") or ""

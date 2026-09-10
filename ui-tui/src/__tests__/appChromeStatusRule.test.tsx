@@ -239,10 +239,7 @@ describe('StatusRule background-subagent indicator', () => {
     expect(textContent(element)).not.toContain('resumes when')
   })
 
-  it('drops the subagent segment before the bg segment on a narrow terminal', () => {
-    // cols=44 is below the subagents breakpoint (92) but the bg breakpoint
-    // (88) too — both gone. Assert the lower-priority subagent indicator is
-    // not shown when space is tight even with a live count.
+  it('keeps live subagents visible on a narrow terminal', () => {
     const element = StatusRule({
       ...baseProps,
       cols: 44,
@@ -250,7 +247,19 @@ describe('StatusRule background-subagent indicator', () => {
       usage: { ...baseProps.usage, active_subagents: 2 }
     })
 
-    expect(textContent(element)).not.toContain('⛓')
+    expect(textContent(element)).toContain('⛓ 2')
+  })
+
+  it('pins unresolved stalls even with optional fields disabled, without promising automatic recovery', () => {
+    const element = StatusRule({
+      ...baseProps,
+      cols: 44,
+      statusBarFields: new Set(),
+      usage: { ...baseProps.usage, active_subagents: 0, stalled_subagents: 2 }
+    })
+
+    expect(textContent(element)).toContain('⚠ ⛓ 2 stalled')
+    expect(textContent(element)).not.toContain('resumes when')
   })
 })
 

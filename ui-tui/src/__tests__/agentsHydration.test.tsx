@@ -5,12 +5,15 @@ import React from 'react'
 import { expect, it, vi } from 'vitest'
 
 import { $delegationState, resetDelegationState } from '../app/delegationStore.js'
+import { patchUiState, resetUiState } from '../app/uiStore.js'
 import { AgentsOverlay } from '../components/agentsOverlay.js'
 import type { GatewayClient } from '../gatewayClient.js'
 import { DEFAULT_THEME } from '../theme.js'
 
 it('does not undo an acknowledged pause when opening status resolves late', async () => {
   resetDelegationState()
+  resetUiState()
+  patchUiState({ sid: 'session-a' })
   let resolveStatus!: (value: unknown) => void
 
   const status = new Promise(resolve => {
@@ -34,7 +37,9 @@ it('does not undo an acknowledged pause when opening status resolves late', asyn
   )
 
   try {
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith('delegation.status', {}))
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith('delegation.status', { session_id: 'session-a' })
+    )
     stdin.write('p')
     await vi.waitFor(() => expect($delegationState.get().paused).toBe(true))
     resolveStatus({ paused: false, max_spawn_depth: 4 })
@@ -45,5 +50,6 @@ it('does not undo an acknowledged pause when opening status resolves late', asyn
     view.unmount()
     view.cleanup()
     resetDelegationState()
+    resetUiState()
   }
 })

@@ -243,6 +243,7 @@ export interface SessionUndoResponse {
 
 export interface SessionUsageResponse {
   active_subagents?: number
+  stalled_subagents?: number
   avg_latency_s?: number
   avg_tps?: number
   cache_hit_pct?: number
@@ -493,7 +494,19 @@ export interface RollbackRestoreResponse {
 
 // ── Delegation control RPCs ──────────────────────────────────────────
 
+export interface DelegationLifecycle {
+  active_tasks: number
+  stalled_tasks: number
+  batches: {
+    delegation_id: string
+    status: string
+    task_count: number
+    runner_settled: boolean
+  }[]
+}
+
 export interface DelegationStatusResponse {
+  lifecycle?: DelegationLifecycle
   active?: {
     depth?: number
     goal?: string
