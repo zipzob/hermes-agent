@@ -2071,9 +2071,16 @@ _correction_method("session.redirect", "redirect", "redirected",
 @method("delegation.status")
 def _(rid, params: dict) -> dict:
     from tools import delegate_tool as dt
-    return _ok(rid, {"active": dt.list_active_subagents(), "paused": dt.is_spawn_paused(),
-                     "max_spawn_depth": dt._get_max_spawn_depth(),
-                     "max_concurrent_children": dt._get_max_concurrent_children()})
+    from tools.async_delegation import status_snapshot
+    result = {"active": dt.list_active_subagents(), "paused": dt.is_spawn_paused(),
+              "max_spawn_depth": dt._get_max_spawn_depth(),
+              "max_concurrent_children": dt._get_max_concurrent_children()}
+    sid = str(params.get("session_id") or "")
+    if sid:
+        if (err := _sess_nowait(params, rid)[1]) is not None:
+            return err
+        result["lifecycle"] = status_snapshot(origin_ui_session_id=sid)
+    return _ok(rid, result)
 
 
 @method("delegation.pause")

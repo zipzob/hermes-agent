@@ -533,6 +533,15 @@ export function StatusRule({
   // display.status_bar.fields visibility gate (same key + names as the
   // classic CLI bar). null = user hasn't customized → everything shows.
   const ok = (name: string) => statusBarFields === null || statusBarFields.has(name)
+  const subagentCount = usage.active_subagents ?? 0
+  const stalledCount = usage.stalled_subagents ?? 0
+
+  const subagentLabel =
+    stalledCount > 0
+      ? `⚠ ⛓ ${stalledCount} stalled${subagentCount > 0 ? ` + ${subagentCount} running` : ''}`
+      : ok('bg_subagents') && subagentCount > 0
+        ? `⛓ ${subagentCount}`
+        : ''
 
   // On narrow terminals the context read-out collapses to a bare token count
   // (`12k tok`) and the visual fill bar is dropped entirely.
@@ -582,6 +591,7 @@ export function StatusRule({
 
   const essentialWidth =
     stringWidth('─ ') +
+    (subagentLabel ? stringWidth(subagentLabel) + stringWidth(' │ ') : 0) +
     batteryWidth +
     slotWidth +
     stringWidth(' │ ') +
@@ -647,10 +657,6 @@ export function StatusRule({
   const showVoice = segs.voice && ok('voice') && !!voiceLabel && fits(SEP + stringWidth(voiceLabel))
   const showSessionCount = !!sessionCountText && fits(SEP + stringWidth(sessionCountText))
   const showBg = segs.bg && ok('bg_tasks') && bgCount > 0 && fits(SEP + stringWidth(`${bgCount} bg`))
-  const subagentCount = typeof usage.active_subagents === 'number' ? usage.active_subagents : 0
-
-  const showSubagents =
-    segs.subagents && ok('bg_subagents') && subagentCount > 0 && fits(SEP + stringWidth(`⛓ ${subagentCount}`))
 
   // Parked-background reassurance: a top-level delegate_task runs in the
   // background, so the turn ends (idle) while the subagent keeps working and its
@@ -661,7 +667,7 @@ export function StatusRule({
   const resumeHintText =
     subagentCount === 1 ? '↩ resumes when subagent finishes' : `↩ resumes when ${subagentCount} subagents finish`
 
-  const showResumeHint = !busy && subagentCount > 0 && fits(SEP + stringWidth(resumeHintText))
+  const showResumeHint = !busy && stalledCount === 0 && subagentCount > 0 && fits(SEP + stringWidth(resumeHintText))
   // Dev-gated readout (HERMES_DEV_CREDITS), lowest priority,
   // so it consumes tail budget LAST and drops first on a narrow terminal.
   const showDevCredits = !!devCreditsText && fits(SEP + stringWidth(devCreditsText))
@@ -693,6 +699,12 @@ export function StatusRule({
             ellipsizes instead of crushing model │ ctx (R3-M7). */}
         <Box flexDirection="row" flexShrink={0}>
           <Text color={t.color.border}>{'─ '}</Text>
+          {subagentLabel ? (
+            <Text color={stalledCount > 0 ? t.color.warn : t.color.accent}>
+              {subagentLabel}
+              {' │ '}
+            </Text>
+          ) : null}
           {showBattery ? (
             <Text color={batteryColorVal}>
               {batteryText}
@@ -825,11 +837,7 @@ export function StatusRule({
             {bgCount} bg
           </Text>
         ) : null}
-        {showSubagents ? (
-          <Text color={t.color.muted} wrap="truncate-end">
-            {' │ '}⛓ {subagentCount}
-          </Text>
-        ) : null}
+
         {showResumeHint ? (
           <Text color={t.color.muted} dim wrap="truncate-end">
             {' │ '}

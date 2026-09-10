@@ -14,6 +14,7 @@ import { $spawnDiff, $spawnHistory, clearDiffPair, type SpawnSnapshot } from '..
 import { $uiState } from '../app/uiStore.js'
 import type { GatewayClient } from '../gatewayClient.js'
 import type { DelegationPauseResponse, DelegationStatusResponse, SubagentInterruptResponse } from '../gatewayTypes.js'
+import { reconcileDelegationLifecycle } from '../lib/delegationLifecycle.js'
 import { asRpcResult } from '../lib/rpc.js'
 import { statusGlyph as agentStatusGlyph } from '../lib/subagentGlyph.js'
 import {
@@ -583,8 +584,14 @@ function DiffView({
 // ── Main overlay ─────────────────────────────────────────────────────
 
 export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: AgentsOverlayProps) {
-  const liveSubagents = useAgentRoster()
+  const rosterSubagents = useAgentRoster()
   const delegation = useStore($delegationState)
+
+  const liveSubagents = useMemo(
+    () => reconcileDelegationLifecycle(rosterSubagents, delegation.lifecycle),
+    [rosterSubagents, delegation.lifecycle]
+  )
+
   const history = useStore($spawnHistory)
   const diffPair = useStore($spawnDiff)
   const { stdout } = useStdout()
@@ -676,7 +683,7 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
     // A control acknowledgement or newer hydration must win over this request.
     const initial = $delegationState.get()
     let active = true
-    gw.request<DelegationStatusResponse>('delegation.status', {})
+    gw.request<DelegationStatusResponse>('delegation.status', { session_id: sid })
       .then(r => {
         if (active && $delegationState.get() === initial) {
           applyDelegationStatus(asRpcResult<DelegationStatusResponse>(r))
@@ -687,7 +694,7 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
     return () => {
       active = false
     }
-  }, [gw])
+  }, [gw, sid])
 
   useEffect(() => {
     if (cursor >= rows.length) {
@@ -933,11 +940,21 @@ export function AgentsOverlay({ gw, initialHistoryIndex = 0, onClose, t }: Agent
         </Text>
       </Box>
 
+      {delegation.lifecycle ? (
+        <Text color={delegation.lifecycle.stalled_tasks > 0 ? t.color.warn : t.color.muted}>
+          Live backend: {delegation.lifecycle.active_tasks} active tasks · {delegation.lifecycle.stalled_tasks} stalled
+          tasks
+          {replayMode ? ' · tree below is historical, not live status' : ''}
+        </Text>
+      ) : null}
+
       {mode === 'steer' && selected && sid ? (
         <AgentSteerForm cols={cols} gw={gw} id={selected.item.id} onClose={() => setMode('detail')} sid={sid} t={t} />
       ) : rows.length === 0 ? (
         <Box flexDirection="column" flexGrow={1}>
-          <Text color={t.color.muted}>No subagents this turn. Trigger delegate_task to populate the tree.</Text>
+          <Text color={t.color.muted}>
+            No cached subagent details for this turn. Backend counts above are authoritative.
+          </Text>
         </Box>
       ) : mode === 'list' ? (
         <Box flexDirection="column" flexGrow={1} flexShrink={1} minHeight={0}>

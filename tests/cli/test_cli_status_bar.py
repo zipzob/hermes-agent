@@ -55,6 +55,40 @@ def _attach_agent(
 
 
 class TestCLIStatusBar:
+    def test_unsettled_warning_survives_narrow_width_and_hidden_fields(self, monkeypatch):
+        from tools import async_delegation as ad
+        cli_obj = _make_cli()
+        cli_obj.session_id = "parent-a"
+        monkeypatch.setattr(ad, "_records", {
+            "a": {"delegation_id": "a", "parent_session_id": "parent-a", "status": "stalled",
+                  "goals": ["one", "two"], "_runner_settled": False},
+            "b": {"delegation_id": "b", "parent_session_id": "parent-b", "status": "running"},
+        })
+        snapshot = cli_obj._get_status_bar_snapshot()
+        assert snapshot["active_background_subagents"] == 0
+        assert snapshot["stalled_background_subagents"] == 2
+        cli_obj._status_bar_visible = True
+        cli_obj._get_tui_terminal_width = lambda: 44
+        cli_obj._get_status_bar_field_set = lambda: frozenset({"model"})
+        for text in (cli_obj._build_status_bar_text(44), "".join(t for _, t in cli_obj._get_status_bar_fragments())):
+            assert text.startswith("⚠ ⛓ 2 stalled")
+
+    def test_active_tasks_keep_background_counter_position(self, monkeypatch):
+        from tools import async_delegation as ad
+        cli_obj = _make_cli()
+        cli_obj.session_id = "parent-a"
+        monkeypatch.setattr(ad, "_records", {
+            "a": {"delegation_id": "a", "parent_session_id": "parent-a", "status": "running",
+                  "goals": ["one", "two"], "_runner_settled": False},
+        })
+        snapshot = cli_obj._get_status_bar_snapshot()
+        cli_obj._status_bar_visible = True
+        cli_obj._get_tui_terminal_width = lambda default=(80, 24): 80
+        cli_obj._get_status_bar_field_set = lambda: None
+        for text in (cli_obj._build_status_bar_text(80), "".join(t for _, t in cli_obj._get_status_bar_fragments())):
+            assert "⛓ 2" in text
+            assert not text.startswith("⛓ 2")
+
     def test_session_title_is_right_aligned_after_it_is_queued(self):
         cli_obj = _make_cli()
         cli_obj._pending_title = "weekly-digest"

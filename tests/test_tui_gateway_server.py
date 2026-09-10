@@ -20151,7 +20151,7 @@ def test_get_usage_perf_readouts_guard_negative_latency():
 
 def test_get_usage_includes_active_subagents(monkeypatch):
     import tools.async_delegation as ad_mod
-    monkeypatch.setattr(ad_mod, "active_count", lambda: 4)
+    monkeypatch.setattr(ad_mod, "status_snapshot", lambda **_: {"active_tasks": 4, "stalled_tasks": 2})
     usage = server._get_usage(_BareAgent())
     assert usage["active_subagents"] == 4
 
@@ -20170,7 +20170,7 @@ def test_get_usage_includes_bounded_governor_status(monkeypatch):
 
 def test_get_usage_active_subagents_zero(monkeypatch):
     import tools.async_delegation as ad_mod
-    monkeypatch.setattr(ad_mod, "active_count", lambda: 0)
+    monkeypatch.setattr(ad_mod, "status_snapshot", lambda **_: {"active_tasks": 0, "stalled_tasks": 0})
     usage = server._get_usage(_BareAgent())
     assert usage["active_subagents"] == 0
 
@@ -20179,10 +20179,10 @@ def test_get_usage_safe_when_active_count_raises(monkeypatch):
     """A raising active_count() must not break the usage payload."""
     import tools.async_delegation as ad_mod
 
-    def _boom():
+    def _boom(**_):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(ad_mod, "active_count", _boom)
+    monkeypatch.setattr(ad_mod, "status_snapshot", _boom)
     usage = server._get_usage(_BareAgent())
     # Field omitted, but the rest of the payload is intact.
     assert "active_subagents" not in usage
