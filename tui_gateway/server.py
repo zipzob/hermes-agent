@@ -2728,7 +2728,9 @@ def _session_live_item(sid: str, session: dict, current_sid: str = "") -> dict:
         "current": sid == current_sid, "id": sid,
         "last_active": float(session.get("last_active") or session.get("created_at") or now),
         "message_count": len(history),
-        "model": str(getattr(agent, "model", "") or _resolve_model()), "preview": preview,
+        "model": str(getattr(agent, "model", "") or _resolve_model()),
+        "parent_session_id": session.get("parent_session_id") or None,
+        "preview": preview,
         "session_key": key, "started_at": float(session.get("created_at") or now), "status": status,
         "title": _session_live_title(session, key),
     }

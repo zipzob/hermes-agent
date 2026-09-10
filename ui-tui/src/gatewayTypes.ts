@@ -192,6 +192,7 @@ export interface SessionActiveItem {
   last_active?: number
   message_count?: number
   model?: string
+  parent_session_id?: null | string
   preview?: string
   session_key?: string
   started_at?: number
@@ -300,6 +301,8 @@ export interface SessionCloseResponse {
 
 export interface SessionInterruptResponse {
   ok?: boolean
+  status?: 'interrupted'
+  turn_isolation?: boolean
 }
 
 export interface SessionSteerResponse {
