@@ -11,7 +11,7 @@ import type { GatewayClient } from '../gatewayClient.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import type { Theme } from '../theme.js'
 
-import { OverlayHint, useOverlayKeys, windowItems } from './overlayControls.js'
+import { OverlayHint, useOverlayKeys, windowItems, windowOffset } from './overlayControls.js'
 import { chipRowProps, clampOverlayWidth } from './overlayPrimitives.js'
 
 const VISIBLE = 12
@@ -59,6 +59,27 @@ export function providerIndexAfterClearingFilter(
   }
 
   return providerRows.findIndex(row => row.provider.slug === provider.slug)
+}
+
+/** Select a visible row by number without stealing digits from an active filter. */
+export function modelPickerQuickPickIndex(
+  ch: string,
+  filter: string,
+  count: number,
+  selected: number,
+  visible = VISIBLE
+): number | null {
+  if (filter.trim()) {
+    return null
+  }
+
+  const n = ch === '0' ? 10 : Number(ch)
+
+  if (!Number.isInteger(n) || n < 1 || n > Math.min(10, count, visible)) {
+    return null
+  }
+
+  return windowOffset(count, selected, visible) + n - 1
 }
 
 export function ModelPicker({
@@ -234,6 +255,61 @@ export function ModelPicker({
   // filter, so the shared overlay q/Esc handler must yield to our own handler.
   const listStage = stage === 'provider' || stage === 'model' || stage === 'reasoning'
   useOverlayKeys({ disabled: listStage, onBack: back, onClose: onCancel })
+
+  const activateListSelection = (targetIndex: number) => {
+    if (stage === 'provider') {
+      const selectedProvider = filteredProviderRows[targetIndex]?.provider
+
+      if (!selectedProvider) {
+        return
+      }
+
+      if (selectedProvider.authenticated === false) {
+        if (selectedProvider.auth_type === 'api_key' && selectedProvider.key_env) {
+          const fullProviderIdx = providerIndexAfterClearingFilter(providerRows, selectedProvider)
+
+          if (fullProviderIdx >= 0) {
+            setProviderIdx(fullProviderIdx)
+          }
+
+          setStage('key')
+          setKeyInput('')
+          setKeyError('')
+          setFilter('')
+        }
+
+        return
+      }
+
+      const fullProviderIdx = providerIndexAfterClearingFilter(providerRows, selectedProvider)
+
+      if (fullProviderIdx >= 0) {
+        setProviderIdx(fullProviderIdx)
+      }
+
+      setStage('model')
+      setModelIdx(0)
+      setFilter('')
+
+      return
+    }
+
+    const model = models[targetIndex]
+
+    if (!provider || !model) {
+      setStage('provider')
+
+      return
+    }
+
+    if (pickerOffersReasoning(provider, model)) {
+      setPendingModel(model)
+      setReasoningIdx(0)
+      setStage('reasoning')
+    } else {
+      onSelect(modelPickerCommand(model, provider.slug, allowPersistGlobal && persistGlobal))
+    }
+  }
 
   useInput((ch, key) => {
     // Key entry stage handles its own input
@@ -429,58 +505,17 @@ export function ModelPicker({
       return
     }
 
+    const quickPickIndex = modelPickerQuickPickIndex(ch, filter, count, sel)
+
+    if (quickPickIndex !== null) {
+      setSel(quickPickIndex)
+      activateListSelection(quickPickIndex)
+
+      return
+    }
+
     if (key.return) {
-      if (stage === 'provider') {
-        if (!provider) {
-          return
-        }
-
-        if (provider.authenticated === false) {
-          // api_key providers: prompt for key inline
-          if (provider.auth_type === 'api_key' && provider.key_env) {
-            const fullProviderIdx = providerIndexAfterClearingFilter(providerRows, provider)
-
-            if (fullProviderIdx >= 0) {
-              setProviderIdx(fullProviderIdx)
-            }
-
-            setStage('key')
-            setKeyInput('')
-            setKeyError('')
-            setFilter('')
-          }
-
-          // Other auth types: no-op (warning shown tells them to run hermes model)
-          return
-        }
-
-        const fullProviderIdx = providerIndexAfterClearingFilter(providerRows, provider)
-
-        if (fullProviderIdx >= 0) {
-          setProviderIdx(fullProviderIdx)
-        }
-
-        setStage('model')
-        setModelIdx(0)
-        setFilter('')
-
-        return
-      }
-
-      const model = models[modelIdx]
-
-      if (provider && model) {
-        if (pickerOffersReasoning(provider, model)) {
-          // Step 3/3: effort for the picked model (skipped on reasoning-free routes).
-          setPendingModel(model)
-          setReasoningIdx(0)
-          setStage('reasoning')
-        } else {
-          onSelect(modelPickerCommand(model, provider.slug, allowPersistGlobal && persistGlobal))
-        }
-      } else {
-        setStage('provider')
-      }
+      activateListSelection(sel)
 
       return
     }
