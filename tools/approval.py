@@ -119,9 +119,11 @@ _gateway_queues: dict[str, list] = {}        # session_key → [_ApprovalEntry, 
 _gateway_notify_cbs: dict[str, object] = {}  # session_key → callable(approval_data)
 
 
-def register_gateway_notify(session_key: str, cb) -> None:
+def register_gateway_notify(session_key: str, cb, *, require_delivery_ack: bool = False) -> None:
     """Register ``cb(approval_data: dict) -> None`` for sending approval requests. The callback
     bridges sync→async: it runs in the agent thread and must schedule the send on the loop."""
+    if require_delivery_ack:
+        setattr(cb, "requires_delivery_ack", True)
     with _lock:
         _gateway_notify_cbs[session_key] = cb
 
@@ -131,8 +133,10 @@ def unregister_gateway_notify(session_key: str) -> None:
     they don't hang forever (agent run finished or interrupted)."""
     with _lock:
         _gateway_notify_cbs.pop(session_key, None)
-        for entry in _gateway_queues.pop(session_key, []):
-            entry.event.set()
+        entries = _gateway_queues.pop(session_key, [])
+    for entry in entries:
+        entry.ack_event.set()
+        entry.event.set()
 
 
 def resolve_gateway_approval(session_key: str, choice: str,
@@ -212,6 +216,7 @@ def ack_gateway_approval(session_key: str, request_id: str) -> bool:
         for entry in _gateway_queues.get(session_key, []):
             if entry.data.get("request_id") == request_id:
                 entry.acknowledged = True
+                entry.ack_event.set()
                 return True
     return False
 
