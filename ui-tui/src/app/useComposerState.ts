@@ -33,6 +33,19 @@ import { getUiState } from './uiStore.js'
 const TOKEN_MAX_COUNT = 32
 const TOKEN_MAX_TOTAL_BYTES = 4 * 1024 * 1024
 
+/** Leave slash dispatch visible; the collapsed body is data, never executable preview text. */
+export const collapsedPaste = (
+  text: string,
+  lineCount: number
+): { display: string; token: Extract<ComposerToken, { kind: 'paste' }> } => {
+  const prefix = /^\/[^\s/]+\s+/.exec(text)?.[0] ?? ''
+  const body = text.slice(prefix.length)
+  const bodyLines = prefix ? body.split('\n').length : lineCount
+  const label = pasteTokenLabel(body, bodyLines).replaceAll('{!', '{ !')
+
+  return { display: prefix + label, token: { kind: 'paste', label, text: body } }
+}
+
 const trimTokens = (tokens: ComposerToken[]): ComposerToken[] => {
   let total = 0
   const out: ComposerToken[] = []
@@ -285,13 +298,14 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
         }
       }
 
-      const label = pasteTokenLabel(cleanedText, lineCount)
-      const inserted = insertAtCursor(value, cursor, label)
+      const paste = collapsedPaste(cleanedText, lineCount)
+      const { label } = paste.token
+      const inserted = insertAtCursor(value, cursor, paste.display)
 
-      setComposerTokens(prev => trimTokens([...prev, { kind: 'paste', label, text: cleanedText }]))
+      setComposerTokens(prev => trimTokens([...prev, paste.token]))
 
       void gw
-        .request<{ path?: string }>('paste.collapse', { text: cleanedText })
+        .request<{ path?: string }>('paste.collapse', { text: paste.token.text })
         .then(r => {
           const path = r?.path
 
