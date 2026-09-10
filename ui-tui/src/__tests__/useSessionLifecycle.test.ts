@@ -8,12 +8,45 @@ import { turnController } from '../app/turnController.js'
 import { getTurnState, resetTurnState } from '../app/turnStore.js'
 import { patchUiState, resetUiState } from '../app/uiStore.js'
 import {
+  approvalOverlayFromPending,
   hydrateLiveSessionInflight,
   liveSessionInflightMessages,
   scheduleResumeScrollToBottom,
   signalFreshSessionBoundary,
   writeActiveSessionFile
 } from '../app/useSessionLifecycle.js'
+
+describe('pending approval restoration', () => {
+  it('maps a reconnect snapshot into the visible approval overlay without changing its choices', () => {
+    expect(
+      approvalOverlayFromPending({
+        allow_permanent: false,
+        choices: ['once', 'deny'],
+        command: 'rm -rf /tmp/example',
+        description: 'destructive command',
+        expires_at_ms: 1_900_000_000_000,
+        name: 'terminal',
+        request_id: 'approval-reconnect-1',
+        smart_denied: true,
+        tool_id: 'tool-reconnect-1'
+      })
+    ).toEqual({
+      allowPermanent: false,
+      choices: ['once', 'deny'],
+      command: 'rm -rf /tmp/example',
+      description: 'destructive command',
+      expiresAtMs: 1_900_000_000_000,
+      requestId: 'approval-reconnect-1',
+      smartDenied: true,
+      toolId: 'tool-reconnect-1',
+      toolName: 'terminal'
+    })
+  })
+
+  it('does not invent an approval overlay when the session has none', () => {
+    expect(approvalOverlayFromPending(undefined)).toBeNull()
+  })
+})
 
 describe('fresh session boundary', () => {
   it('signals only when a live session is replaced by a different session', () => {
