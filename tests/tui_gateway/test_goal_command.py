@@ -180,6 +180,34 @@ def test_goal_bare_shows_status_when_none_set(server, session):
     assert "No active goal" in r["result"]["output"]
 
 
+@pytest.mark.parametrize("argument", ["show", " SHOW "])
+def test_goal_show_preserves_existing_goal_and_budget(server, session, argument):
+    from hermes_cli.goals import GoalManager
+
+    sid, session_key, _ = session
+    mgr = _exhaust_budget(session_key, "implement the field-work roadmap")
+    assert mgr.state is not None
+    before = mgr.state.to_json()
+    result = _call(
+        server, "command.dispatch", name="goal", arg=argument, session_id=sid
+    )["result"]
+    assert result["type"] == "exec"
+    assert "implement the field-work roadmap" in result["output"]
+    assert "message" not in result
+    after = GoalManager(session_key).state
+    assert after is not None
+    assert after.to_json() == before
+
+
+def test_goal_show_without_goal_does_not_create_one(server, session):
+    from hermes_cli.goals import GoalManager
+
+    sid, session_key, _ = session
+    result = _call(server, "command.dispatch", name="goal", arg="show", session_id=sid)["result"]
+    assert result["type"] == "exec"
+    assert not GoalManager(session_key).has_goal()
+
+
 def _exhaust_budget(session_key: str, goal_text: str = "finish the benchmark"):
     """Set a 1-turn goal and drive it to budget-exhaustion auto-pause."""
     from hermes_cli.goals import GoalManager
