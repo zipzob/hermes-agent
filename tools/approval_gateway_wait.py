@@ -21,13 +21,16 @@ from tools.approval_human_wait import activity_heartbeat, human_wait_window
 
 logger = logging.getLogger("tools.approval")
 
+_DELIVERY_ACK_TIMEOUT_SECONDS = 5.0
+
 
 class _ApprovalEntry:
     """One pending dangerous-command approval inside a gateway session."""
-    __slots__ = ("event", "data", "result", "reason", "acknowledged", "settle", "cancelled")
+    __slots__ = ("event", "ack_event", "data", "result", "reason", "acknowledged", "settle", "cancelled")
 
     def __init__(self, data: dict):
         self.event = threading.Event()
+        self.ack_event = threading.Event()
         self.data = dict(data)
         self.data.setdefault("request_id", uuid.uuid4().hex)
         self.acknowledged = False
@@ -40,6 +43,23 @@ class _ApprovalEntry:
         # Why the prompt was withdrawn with nobody answering (interrupt cause, session teardown);
         # followers and teardown read it so a withdrawn prompt never renders as a user deny.
         self.cancelled: str | None = None
+
+
+def _wait_for_delivery_ack(entry: _ApprovalEntry, session_key: str) -> str:
+    """Wait briefly for an ack-capable client to confirm prompt receipt."""
+    deadline = time.monotonic() + _DELIVERY_ACK_TIMEOUT_SECONDS
+    while True:
+        if entry.event.is_set():
+            return "resolved"
+        if entry.acknowledged:
+            return "acknowledged"
+        if is_interrupted():
+            logger.info("Approval delivery wait interrupted for session %s", session_key)
+            return "interrupted"
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return "timeout"
+        entry.ack_event.wait(timeout=min(0.05, remaining))
 
 
 def _poll_event(event: threading.Event, session_key: str, *, interrupt_log: str) -> str:
@@ -113,7 +133,6 @@ def _await_coalesced_leader(session_key: str, leader, payload: dict):
                                       "returning deny for session %s")
     cancelled = _cancel_cause(state, leader)
     if state == "interrupted":
-        # Deny only OUR follower; the leader thread handles its own signal.
         choice, resolved = "deny", True
     elif state == "timeout":
         choice, resolved = None, False
@@ -173,9 +192,18 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
             return adopted
 
     entry = _ApprovalEntry(approval_data)
+    requires_delivery_ack = bool(
+        getattr(notify_cb, "requires_delivery_ack", False)
+    )
     with _approval._lock:
         register_prepared_approval(session_key, entry)
         _approval._gateway_queues.setdefault(session_key, []).append(entry)
+    logger.info(
+        "Gateway approval queued for session %s request %s ack_required=%s",
+        session_key,
+        entry.data.get("request_id"),
+        requires_delivery_ack,
+    )
 
     def _drop_entry(state: str) -> str | None:
         """Leave the queue and return the choice committed so far. Reading ``entry.result`` and
@@ -216,6 +244,24 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
         _drop_entry("notify_failed")
         _ctx._fire_approval_hook("post_approval_response", **payload, choice="notify_failed")
         return {"resolved": False, "choice": None, "notify_failed": True}
+
+    if requires_delivery_ack:
+        delivery_state = _wait_for_delivery_ack(entry, session_key)
+        delivery_failed = delivery_state == "timeout" or (
+            delivery_state == "resolved"
+            and entry.result is None
+            and not entry.acknowledged
+        )
+        if delivery_failed:
+            logger.warning(
+                "Gateway approval delivery unacknowledged (deadline %.1fs) for session %s request %s",
+                _DELIVERY_ACK_TIMEOUT_SECONDS,
+                session_key,
+                entry.data.get("request_id"),
+            )
+            _drop_entry("notify_failed")
+            _ctx._fire_approval_hook("post_approval_response", **payload, choice="notify_failed")
+            return {"resolved": False, "choice": None, "notify_failed": True}
 
     state = _poll_event(entry.event, session_key,
                         interrupt_log="Approval wait interrupted — returning deny for session %s")

@@ -7,10 +7,11 @@ timeout elapses.  Before the fix, ``/stop`` (which calls
 ``AIAgent.interrupt()`` → per-thread interrupt flag) was silently ignored by
 that wait loop, so the session stayed wedged until the timeout fired.
 
-The fix checks ``is_interrupted()`` at the top of the poll loop.  Because the
+The fix checks ``is_interrupted()`` at the top of the poll loop. Because the
 wait runs on the agent's execution thread — the exact thread
-``AIAgent.interrupt()`` flags — the check sees the signal and resolves the
-pending approval as ``deny`` so the agent loop unwinds cleanly.
+``AIAgent.interrupt()`` flags — the check sees the signal and returns a
+distinct interrupted outcome so the agent loop unwinds without attributing a
+human denial that never happened.
 """
 
 import os
@@ -66,7 +67,7 @@ class TestApprovalInterrupt:
         _clear_approval_state()
 
     def test_interrupt_unblocks_pending_approval_quickly(self, monkeypatch):
-        """An interrupt on the waiting thread must resolve the wait as deny
+        """An interrupt on the waiting thread must resolve distinctly
         well before the (here, intentionally long) approval timeout."""
         from tools import approval as mod
         from tools import approval_context
@@ -123,6 +124,34 @@ class TestApprovalInterrupt:
         assert elapsed < 10, f"interrupt path too slow ({elapsed:.1f}s)"
         # Queue entry was cleaned up.
         assert not mod.has_blocking_approval(self.SESSION_KEY)
+
+    def test_command_guard_reports_interruption_without_human_denial(self, monkeypatch):
+        from tools import approval as mod
+        from tools import approval_context
+        from tools.interrupt import set_interrupt
+
+        monkeypatch.setattr(approval_context, "_get_approval_config", lambda: {"timeout": 300})
+        notified = threading.Event()
+        mod.register_gateway_notify(self.SESSION_KEY, lambda _data: notified.set())
+        result_holder = {}
+
+        def _worker():
+            result_holder["result"] = mod.check_all_command_guards(
+                "rm -rf /tmp/whatever", "local"
+            )
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+        assert notified.wait(timeout=5), "approval was never enqueued/notified"
+        set_interrupt(True, thread.ident)
+        thread.join(timeout=10)
+
+        assert not thread.is_alive(), "command guard did not return after interrupt"
+        result = result_holder["result"]
+        assert result["approved"] is False
+        assert result["outcome"] == "interrupted"
+        assert "interrupted before user response" in result["message"]
+        assert "denied by user" not in result["message"]
 
     def test_unrelated_thread_interrupt_does_not_unblock(self, monkeypatch):
         """An interrupt flagged on a *different* thread must NOT release this

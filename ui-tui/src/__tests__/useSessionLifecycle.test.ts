@@ -48,6 +48,12 @@ describe('pending approval restoration', () => {
   it('does not invent an approval overlay when the session has none', () => {
     expect(approvalOverlayFromPending(undefined)).toBeNull()
   })
+
+  it('rejects a pending approval that cannot be correlated to a request', () => {
+    expect(
+      approvalOverlayFromPending({ command: 'rm -rf /tmp/example', description: 'destructive command' })
+    ).toBeNull()
+  })
 })
 
 describe('lazy session startup', () => {

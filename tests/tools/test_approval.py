@@ -1,5 +1,6 @@
 """Tests for the dangerous command approval module."""
 
+import logging
 import os
 import threading
 import time
@@ -1651,12 +1652,97 @@ class TestApprovalTimeoutIsNotConsent:
         ]
         assert hook_calls[-1][1]["choice"] == "notify_failed"
 
+    def test_required_delivery_ack_fails_fast_when_client_never_receives_prompt(
+        self, monkeypatch, caplog
+    ):
+        """A TUI transport write is not proof that the prompt rendered."""
+        from tools import approval as mod
+        from tools import approval_gateway_wait as wait_mod
+
+        self._force_short_timeout(monkeypatch, seconds=2)
+        monkeypatch.setattr(wait_mod, "_DELIVERY_ACK_TIMEOUT_SECONDS", 0.02, raising=False)
+
+        notified = []
+
+        def _notify(data):
+            notified.append(data)
+
+        setattr(_notify, "requires_delivery_ack", True)
+        started = time.monotonic()
+        caplog.set_level(logging.INFO, logger="tools.approval")
+        decision = mod._await_gateway_decision(
+            self.SESSION_KEY,
+            _notify,
+            {
+                "command": "redacted-command",
+                "description": "redacted-description",
+                "pattern_key": "dangerous",
+                "pattern_keys": ["dangerous"],
+            },
+        )
+
+        assert decision == {
+            "resolved": False,
+            "choice": None,
+            "notify_failed": True,
+        }
+        assert time.monotonic() - started < 0.5
+        assert len(notified) == 1
+        assert self.SESSION_KEY not in mod._gateway_queues
+        assert "Gateway approval queued" in caplog.text
+        assert self.SESSION_KEY in caplog.text
+        assert notified[0]["request_id"] in caplog.text
+        assert "redacted-command" not in caplog.text
+
+    def test_ack_capable_client_disconnect_is_delivery_failure(self, monkeypatch):
+        from tools import approval as mod
+
+        self._force_short_timeout(monkeypatch, seconds=2)
+        notified = threading.Event()
+        result_holder = {}
+
+        def _notify(_data):
+            notified.set()
+
+        setattr(_notify, "requires_delivery_ack", True)
+
+        thread = threading.Thread(
+            target=lambda: result_holder.setdefault(
+                "result",
+                mod._await_gateway_decision(
+                    self.SESSION_KEY,
+                    _notify,
+                    {
+                        "command": "redacted-command",
+                        "description": "redacted-description",
+                        "pattern_key": "dangerous",
+                        "pattern_keys": ["dangerous"],
+                    },
+                ),
+            )
+        )
+        thread.start()
+        assert notified.wait(timeout=1)
+        mod.unregister_gateway_notify(self.SESSION_KEY)
+        thread.join(timeout=1)
+
+        assert not thread.is_alive()
+        assert result_holder["result"] == {
+            "resolved": False,
+            "choice": None,
+            "notify_failed": True,
+        }
+
     def test_pending_approval_is_replayable_and_acknowledged(self, monkeypatch):
         from tools import approval as mod
 
         self._force_short_timeout(monkeypatch, seconds=2)
         notified = []
-        mod.register_gateway_notify(self.SESSION_KEY, lambda data: notified.append(data))
+        mod.register_gateway_notify(
+            self.SESSION_KEY,
+            lambda data: notified.append(data),
+            require_delivery_ack=True,
+        )
         result_holder = {}
 
         thread = threading.Thread(
