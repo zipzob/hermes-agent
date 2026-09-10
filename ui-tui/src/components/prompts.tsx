@@ -1,6 +1,7 @@
 import { Box, invalidatePrevFrame, Text, useInput, useStdout, wrapAnsi } from '@hermes/ink'
 import { useEffect, useLayoutEffect, useState } from 'react'
 
+import { useApprovalExpiry } from '../lib/approvalExpiry.js'
 import { isMac } from '../lib/platform.js'
 import { clarifyBatchRevisitState } from '../lib/text.js'
 import type { Theme } from '../theme.js'
@@ -83,6 +84,7 @@ export function approvalAction(
 
 export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptProps) {
   const [sel, setSel] = useState(0)
+  const expiry = useApprovalExpiry(req.expiresAtMs)
   const opts = approvalOptions(req)
   const { stdout } = useStdout()
 
@@ -99,7 +101,7 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
         invalidatePrevFrame(stdout)
       }
     }
-  }, [sel, stdout])
+  }, [expiry, sel, stdout])
 
   useInput((ch, key) => {
     const action = approvalAction(ch, key, sel, opts)
@@ -142,6 +144,8 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
           </Text>
         ) : null}
       </Box>
+
+      {expiry ? <Text color={t.color.warn}>{expiry}</Text> : null}
 
       <Text />
 
