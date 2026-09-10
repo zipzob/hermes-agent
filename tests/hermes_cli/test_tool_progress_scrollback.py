@@ -138,6 +138,17 @@ class TestToolProgressScrollback:
 
         assert mock_print.call_count == 2
 
+    def test_verbose_mode_prints_full_multiline_terminal_command(self):
+        cli = _make_cli(tool_progress="verbose")
+        command = "set -euo pipefail\nprintf 'node: '; node --version\nnpm test"
+
+        with patch.object(_cli_mod, "_cprint") as mock_print:
+            cli._on_tool_progress("tool.started", "terminal", command, {"command": command})
+
+        printed = "\n".join(str(call.args[0]) for call in mock_print.call_args_list)
+        assert "terminal command:" in printed
+        assert command in printed
+
 
 
 
