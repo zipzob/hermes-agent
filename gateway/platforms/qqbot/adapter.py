@@ -1473,8 +1473,6 @@ class QQAdapter(BasePlatformAdapter):
     # Cross-adapter gateway contract: gateway/run.py detects send_exec_approval /
     # send_update_prompt on the adapter class for button-based approval/update UX.
 
-    _APPROVAL_TIMEOUT_SECONDS = 300  # matches gateway's default gateway_timeout
-
     async def send_exec_approval(
         self, chat_id: str, command: str, session_key: str, description: str = "dangerous command",
         metadata: Optional[Dict[str, Any]] = None, allow_permanent: bool = True, allow_session: bool = True,
@@ -1485,9 +1483,11 @@ class QQAdapter(BasePlatformAdapter):
         del allow_session  # QQ's 3-button keyboard has no session tier.
         if smart_denied:
             description += " Owner override applies to this one operation only."
+        from tools.approval_context import _get_approval_timeout
+
         req = ApprovalRequest(
             session_key=session_key, title="Execute this command?", description=description,
-            command_preview=command, timeout_sec=self._APPROVAL_TIMEOUT_SECONDS,
+            command_preview=command, timeout_sec=_get_approval_timeout(),
             allow_permanent=allow_permanent and not smart_denied)
         # QQ requires a msg_id for passive replies; the last inbound id is the natural one.
         return await self.send_approval_request(chat_id, req, reply_to=self._last_msg_id.get(chat_id))
