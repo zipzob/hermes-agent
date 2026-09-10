@@ -891,7 +891,11 @@ class MatrixAdapter(BasePlatformAdapter):
         self._approval_prompts_by_event: Dict[str, _MatrixApprovalPrompt] = {}
         self._approval_prompt_by_session: Dict[str, str] = {}
         self._approval_require_sender: bool = _env_truthy("MATRIX_APPROVAL_REQUIRE_SENDER", "true")
-        self._approval_timeout_seconds = _env_number("MATRIX_APPROVAL_TIMEOUT_SECONDS", 300, int)
+        from tools.approval_context import _get_approval_timeout
+
+        self._approval_timeout_seconds = _env_number(
+            "MATRIX_APPROVAL_TIMEOUT_SECONDS", _get_approval_timeout(), int
+        )
         self._model_picker_prompts_by_event: Dict[str, _MatrixPickerPrompt] = {}
         self._choice_picker_prompts_by_event: Dict[str, _MatrixPickerPrompt] = {}
         # Authz lists: scoped env → this profile's YAML (``allowed_users`` / ``ignore_user_patterns``,

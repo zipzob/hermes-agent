@@ -1469,8 +1469,6 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
     # Cross-adapter gateway contract: gateway/run.py detects send_exec_approval /
     # send_update_prompt on the adapter class for button-based approval/update UX.
 
-    _APPROVAL_TIMEOUT_SECONDS = 300  # matches gateway's default gateway_timeout
-
     async def _send_exec_approval_prompt(self, prompt: ExecApprovalPrompt) -> SendResult:
         """Keyboard-card approval (called while the agent blocks on approval); clicks resolve via
         _default_interaction_dispatch. QQ's 3-button keyboard has no session tier and no thread /
@@ -1478,9 +1476,11 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         description = prompt.description
         if prompt.smart_denied:
             description += " Owner override applies to this one operation only."
+        from tools.approval_context import _get_approval_timeout
+
         req = ApprovalRequest(
             session_key=prompt.session_key, title="Execute this command?", description=description,
-            command_preview=prompt.command, timeout_sec=self._APPROVAL_TIMEOUT_SECONDS,
+            command_preview=prompt.command, timeout_sec=_get_approval_timeout(),
             allow_permanent="always" in prompt.choices)
         # QQ requires a msg_id for passive replies; the last inbound id is the natural one.
         return await self.send_approval_request(

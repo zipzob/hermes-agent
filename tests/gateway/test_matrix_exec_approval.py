@@ -8,6 +8,15 @@ from gateway.config import PlatformConfig
 
 class TestMatrixExecApprovalReactions:
 
+    def test_default_timeout_uses_configured_approval_timeout(self, monkeypatch):
+        monkeypatch.delenv("MATRIX_APPROVAL_TIMEOUT_SECONDS", raising=False)
+        monkeypatch.setattr("tools.approval_context._get_approval_timeout", lambda: 901)
+        from plugins.platforms.matrix.adapter import MatrixAdapter
+
+        adapter = MatrixAdapter(PlatformConfig(enabled=True, token="tok", extra={"homeserver": "https://matrix.example.org"}))
+
+        assert adapter._approval_timeout_seconds == 901
+
 
     @pytest.mark.asyncio
     async def test_reaction_resolves_pending_approval(self, monkeypatch):
