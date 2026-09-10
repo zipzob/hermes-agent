@@ -745,6 +745,26 @@ class TestBuildApprovalText:
         assert xs_in_preview <= 301  # 300 xs + one-off tolerance
 
 
+class TestExecApprovalTimeout:
+    @pytest.mark.asyncio
+    async def test_uses_configured_approval_timeout(self, monkeypatch):
+        from gateway.platforms.qqbot.adapter import QQAdapter
+
+        adapter = QQAdapter(_make_config(app_id="a", client_secret="b"))
+        captured = {}
+
+        async def capture(_chat_id, request, reply_to=None):
+            captured["request"] = request
+            captured["reply_to"] = reply_to
+
+        adapter.send_approval_request = capture
+        monkeypatch.setattr("tools.approval_context._get_approval_timeout", lambda: 901)
+
+        await adapter.send_exec_approval("chat", "rm -rf /tmp/example", "session")
+
+        assert captured["request"].timeout_sec == 901
+
+
 class TestInteractionEventParsing:
     def test_parse_c2c_interaction(self):
         from gateway.platforms.qqbot.keyboards import parse_interaction_event
