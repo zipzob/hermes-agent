@@ -825,7 +825,7 @@ export type GatewayEvent =
         description: string
         expires_at_ms?: number
         name?: string
-        request_id?: string
+        request_id: string
         smart_denied?: boolean
         tool_id?: string
       }

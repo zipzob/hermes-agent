@@ -65,7 +65,7 @@ import { useBatteryPoll } from './useBatteryPoll.js'
 import { useComposerState } from './useComposerState.js'
 import { useConfigSync } from './useConfigSync.js'
 import { useDelegationStatus } from './useDelegationStatus.js'
-import { shouldDetachEditedHistoryInput, useInputHandlers } from './useInputHandlers.js'
+import { approvalResponseParams, shouldDetachEditedHistoryInput, useInputHandlers } from './useInputHandlers.js'
 import { useLongRunToolCharms } from './useLongRunToolCharms.js'
 import { useSessionLifecycle } from './useSessionLifecycle.js'
 import { useSubmission } from './useSubmission.js'
@@ -1089,7 +1089,7 @@ export function useMainApp(gw: GatewayClient) {
         return
       }
 
-      return respondWith('approval.respond', { choice, request_id: approval.requestId, session_id: ui.sid }, () => {
+      return respondWith('approval.respond', approvalResponseParams(choice, approval.requestId, ui.sid), () => {
         // A delayed response must not dismiss a newer approval request.
         if (getOverlayState().approval?.requestId !== approval.requestId) {
           return

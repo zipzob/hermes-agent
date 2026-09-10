@@ -38,6 +38,12 @@ export const approvalOverlayFromPending = (pending?: ApprovalRequestPayload): Ap
     return null
   }
 
+  const requestId = typeof pending.request_id === 'string' ? pending.request_id.trim() : ''
+
+  if (!requestId) {
+    return null
+  }
+
   const expiresAtMs = Number(pending.expires_at_ms)
 
   return {
@@ -46,7 +52,7 @@ export const approvalOverlayFromPending = (pending?: ApprovalRequestPayload): Ap
     command: String(pending.command ?? ''),
     description: String(pending.description ?? 'dangerous command'),
     expiresAtMs: Number.isFinite(expiresAtMs) ? expiresAtMs : undefined,
-    requestId: typeof pending.request_id === 'string' ? pending.request_id : undefined,
+    requestId,
     smartDenied: pending.smart_denied === true,
     toolId: typeof pending.tool_id === 'string' ? pending.tool_id : undefined,
     toolName: typeof pending.name === 'string' ? pending.name : undefined

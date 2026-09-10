@@ -1319,12 +1319,17 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
             command: String(ev.payload.command ?? ''),
             description,
             expiresAtMs: Number.isFinite(expiresAtMs) ? expiresAtMs : undefined,
-            requestId: typeof ev.payload.request_id === 'string' ? ev.payload.request_id : undefined,
+            requestId: ev.payload.request_id,
             smartDenied: ev.payload.smart_denied === true,
             toolId: typeof ev.payload.tool_id === 'string' ? ev.payload.tool_id : undefined,
             toolName: typeof ev.payload.name === 'string' ? ev.payload.name : undefined
           }
         })
+
+        void rpc('approval.received', {
+          request_id: ev.payload.request_id,
+          session_id: ev.session_id
+        }).catch(() => undefined)
 
         if (typeof ev.payload.tool_id === 'string' && ev.payload.tool_id) {
           turnController.recordToolApproval(

@@ -102,7 +102,7 @@ export interface ApprovalReq {
   command: string
   description: string
   expiresAtMs?: number
-  requestId?: string
+  requestId: string
   smartDenied?: boolean
   toolId?: string
   toolName?: string

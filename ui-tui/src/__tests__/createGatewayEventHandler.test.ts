@@ -1290,6 +1290,27 @@ describe('createGatewayEventHandler', () => {
     expect(getOverlayState().approval).toMatchObject({ allowPermanent: true })
   })
 
+  it('acknowledges an approval after accepting it into prompt state', () => {
+    const ctx = buildCtx([])
+    const onEvent = createGatewayEventHandler(ctx)
+
+    onEvent({
+      session_id: 'session-owned-by-event',
+      payload: {
+        command: 'rm -rf /tmp/x',
+        description: 'dangerous command',
+        request_id: 'approval-request-1'
+      },
+      type: 'approval.request'
+    } as any)
+
+    expect(getOverlayState().approval).toMatchObject({ requestId: 'approval-request-1' })
+    expect(ctx.gateway.rpc).toHaveBeenCalledWith('approval.received', {
+      request_id: 'approval-request-1',
+      session_id: 'session-owned-by-event'
+    })
+  })
+
   it('preserves allow_permanent=false on approval overlays (tirith warning)', () => {
     const onEvent = createGatewayEventHandler(buildCtx([]))
 

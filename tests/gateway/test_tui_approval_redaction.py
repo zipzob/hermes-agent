@@ -15,6 +15,20 @@ import pytest
 
 
 class TestTuiApprovalEmitRedaction:
+    def test_session_wiring_requires_client_delivery_ack(self, monkeypatch):
+        from tools import approval
+        from tui_gateway import server as tui_server
+
+        key = "delivery-ack-session"
+        monkeypatch.setattr(tui_server, "_wire_callbacks", lambda _sid: None)
+        monkeypatch.setattr(approval, "load_permanent_allowlist", lambda: None)
+        try:
+            assert tui_server._wire_session_agent("sid-1", key, object()) is True
+            callback = approval._gateway_notify_cbs[key]
+            assert getattr(callback, "requires_delivery_ack", False) is True
+        finally:
+            approval.unregister_gateway_notify(key)
+
     def test_emit_approval_request_redacts_command_in_payload(self, monkeypatch):
         from tui_gateway import server as tui_server
 

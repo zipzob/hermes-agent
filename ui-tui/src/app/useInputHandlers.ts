@@ -217,12 +217,15 @@ export function dismissSensitivePrompt(
   }
 }
 
+export function approvalResponseParams(choice: string, requestId: string, sessionId?: null | string) {
+  return { choice, request_id: requestId, session_id: sessionId }
+}
+
 export function denyApproval(approval: NonNullable<OverlayState['approval']>, rpc: GatewayRpc) {
-  return rpc<ApprovalRespondResponse>('approval.respond', {
-    choice: 'deny',
-    request_id: approval.requestId,
-    session_id: getUiState().sid
-  }).then(r => {
+  return rpc<ApprovalRespondResponse>(
+    'approval.respond',
+    approvalResponseParams('deny', approval.requestId, getUiState().sid)
+  ).then(r => {
     if (r && getOverlayState().approval?.requestId === approval.requestId) {
       patchOverlayState({ approval: null })
       turnController.recordToolApprovalResolved(approval.toolId)

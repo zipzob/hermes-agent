@@ -4,6 +4,7 @@ import { getOverlayState, patchOverlayState, resetOverlayState } from '../app/ov
 import {
   applyVoiceRecordRequest,
   applyVoiceRecordResponse,
+  approvalResponseParams,
   denyApproval,
   dismissSensitivePrompt,
   handleIdleHotkeyExit,
@@ -268,5 +269,15 @@ describe('dismissSensitivePrompt', () => {
     expect(sys).toHaveBeenCalledWith('secret entry cancelled')
     expect(rpc).toHaveBeenCalledWith('secret.respond', { request_id: 'secret-1', value: '' })
     await pending
+  })
+})
+
+describe('approvalResponseParams', () => {
+  it('correlates an approval decision with its exact request and session', () => {
+    expect(approvalResponseParams('once', 'approval-1', 'session-1')).toEqual({
+      choice: 'once',
+      request_id: 'approval-1',
+      session_id: 'session-1'
+    })
   })
 })
