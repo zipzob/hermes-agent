@@ -1967,10 +1967,12 @@ def _get_usage(agent) -> dict:
             for _key, _val in (("avg_latency_s", _total_lat / _n), ("avg_tps", _avg_vel)):
                 if _val is not None and _val == _val and 0 < _val < 1e6:  # guard NaN/negative/absurd provider timings
                     usage[_key] = round(float(_val), 1)
-    # Live count of background/async subagents (CLI status bar ⛓ parity, same async_delegation registry).
+    # Session-scoped dispatch tasks; a terminal event is not runner settlement.
     with contextlib.suppress(Exception):
-        from tools.async_delegation import active_count as _async_active_count
-        usage["active_subagents"] = _async_active_count()
+        from tools.async_delegation import status_snapshot
+        lifecycle = status_snapshot(parent_session_id=str(getattr(agent, "session_id", "") or ""))
+        usage["active_subagents"] = lifecycle["active_tasks"]
+        usage["stalled_subagents"] = lifecycle["stalled_tasks"]
     with contextlib.suppress(Exception):
         from hermes_cli.plugins import get_status_items
         status_items = get_status_items()

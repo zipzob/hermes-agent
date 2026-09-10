@@ -1,8 +1,9 @@
 import { atom } from 'nanostores'
 
-import type { DelegationStatusResponse } from '../gatewayTypes.js'
+import type { DelegationLifecycle, DelegationStatusResponse } from '../gatewayTypes.js'
 
 export interface DelegationState {
+  lifecycle: DelegationLifecycle | null
   // Last known caps from `delegation.status` RPC.  null until fetched.
   maxConcurrentChildren: null | number
   maxSpawnDepth: null | number
@@ -13,6 +14,7 @@ export interface DelegationState {
 }
 
 const buildState = (): DelegationState => ({
+  lifecycle: null,
   maxConcurrentChildren: null,
   maxSpawnDepth: null,
   paused: false,
@@ -60,6 +62,10 @@ export const applyDelegationStatus = (r: DelegationStatusResponse | null | undef
   }
 
   const patch: Partial<DelegationState> = { updatedAt: Date.now() }
+
+  if (r.lifecycle) {
+    patch.lifecycle = r.lifecycle
+  }
 
   if (typeof r.max_spawn_depth === 'number') {
     patch.maxSpawnDepth = r.max_spawn_depth
