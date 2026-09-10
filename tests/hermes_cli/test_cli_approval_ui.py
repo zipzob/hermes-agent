@@ -67,6 +67,22 @@ def _make_background_cli_stub():
 
 
 class TestCliApprovalUi:
+    def test_approval_display_shows_expiry_and_fail_closed_default(self):
+        cli = _make_cli_stub()
+        cli._approval_state = {
+            "command": "git add applications/example.yml",
+            "description": "stage an application record",
+            "choices": ["once", "session", "always", "deny"],
+            "selected": 0,
+            "response_queue": queue.Queue(),
+        }
+        cli._approval_deadline = time.monotonic() + 15 * 60
+
+        rendered = "".join(text for _style, text in cli._get_approval_display_fragments())
+
+        assert "Expires in: 14m" in rendered
+        assert "(no response: deny)" in rendered
+
     def test_smart_denied_callback_offers_only_once_and_deny(self):
         cli = _make_cli_stub()
         result = {}
