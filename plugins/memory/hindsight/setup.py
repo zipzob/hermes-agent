@@ -108,7 +108,12 @@ def run_setup(provider, hermes_home: str, config: dict) -> None:
     # Environment-aware install: sealed hosted venvs redirect to the durable data volume.
     from tools.lazy_deps import install_specs
 
-    deps = ["hindsight-all"] if mode == "local_embedded" else [f"hindsight-client>={_MIN_CLIENT_VERSION}"]
+    # FastMCP 4 is the server line compatible with Hermes' mcp==2.0 runtime.
+    deps = (
+        ["hindsight-all", "fastmcp==4.0.0b3"]
+        if mode == "local_embedded"
+        else [f"hindsight-client>={_MIN_CLIENT_VERSION}"]
+    )
     outcome = install_specs(deps, timeout=120)
     if outcome.ok:
         print("  ✓ Dependencies up to date")
