@@ -14,6 +14,7 @@ its ``_session_db.db_path`` and passes it explicitly.
 
 import re
 import threading
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -90,6 +91,16 @@ def test_agent_home_none_without_session_db():
 
     assert system_prompt._agent_home(_Agent()) is None
     assert system_prompt._agent_skills_dir(_Agent()) is None
+
+
+def test_agent_home_rejects_mock_generated_db_paths():
+    """A permissive ``__fspath__`` mock must not become a relative runtime home."""
+    from agent import system_prompt
+
+    agent = MagicMock()
+
+    assert system_prompt._agent_home(agent) is None
+    assert system_prompt._agent_skills_dir(agent) is None
 
 
 def test_profile_name_correct_on_bound_profile_session(tmp_path, monkeypatch):

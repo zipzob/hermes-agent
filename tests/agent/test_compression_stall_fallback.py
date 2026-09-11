@@ -115,7 +115,8 @@ def test_stalled_summary_attempts_configured_fallback_chain():
 
     try:
         msgs, prompt = _run(
-            worker, chain=[CHAIN_ENTRY], timeouts=timeouts, messages=original
+            worker, chain=[CHAIN_ENTRY], timeouts=timeouts, messages=original,
+            ceiling=1.0,
         )
     finally:
         worker.release.set()

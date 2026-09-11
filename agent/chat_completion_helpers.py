@@ -49,6 +49,9 @@ from tools.terminal_tool_lifecycle import is_persistent_env
 from utils import base_url_host_matches, base_url_hostname, env_float, env_int
 
 logger = logging.getLogger(__name__)
+_PROVIDER_REQUEST_CONTEXT: contextvars.ContextVar[Optional[Dict[str, Any]]] = (
+    contextvars.ContextVar("provider_request_context", default=None)
+)
 _OPENROUTER_PROVIDER_SORT_VALUES = {"throughput", "latency", "price"}
 _PROVIDER_STREAM_ERROR_FINISH_REASONS = {"error", "error_finish"}
 _PROVIDER_STREAM_SSE_FIELDS = {"event", "data", "id", "retry"}
@@ -537,6 +540,63 @@ def _codex_wait_notice_recovery(*, stale_timeout: float, ttfb_enabled: bool, ttf
     if not deadlines or min(deadlines) <= elapsed:
         return ""
     return f"; auto-reconnect at {int(min(deadlines))}s"
+
+
+def _provider_wait_identity(
+    *, request_class: str, session_id: str, attempt: int
+) -> str:
+    request_label = str(request_class or "foreground").strip().replace("_", " ")
+    session = str(session_id or "process-unknown")
+    suffix = session[-6:] if len(session) > 6 else session
+    return (
+        f"{request_label} request in session …{suffix} — "
+        f"attempt {max(1, int(attempt))}"
+    )
+
+
+@contextlib.contextmanager
+def provider_request_context(
+    *, request_class: str, session_id: str, attempt: int
+):
+    token = _PROVIDER_REQUEST_CONTEXT.set(
+        {
+            "request_class": request_class,
+            "session_id": session_id,
+            "attempt": attempt,
+        }
+    )
+    try:
+        yield
+    finally:
+        _PROVIDER_REQUEST_CONTEXT.reset(token)
+
+
+def _current_provider_request_context(agent: Any) -> Dict[str, Any]:
+    context = _PROVIDER_REQUEST_CONTEXT.get() or {}
+    request_class = str(context.get("request_class") or "")
+    if not request_class:
+        request_class = (
+            "delegation"
+            if getattr(agent, "is_subagent", False)
+            or getattr(agent, "platform", "") == "subagent"
+            else "foreground"
+        )
+    return {
+        "request_class": request_class,
+        "session_id": str(
+            context.get("session_id") or getattr(agent, "session_id", "")
+        ),
+        "attempt": max(1, int(context.get("attempt") or 1)),
+    }
+
+
+def _current_provider_wait_identity(agent: Any) -> str:
+    context = _current_provider_request_context(agent)
+    return _provider_wait_identity(
+        request_class=str(context["request_class"]),
+        session_id=str(context["session_id"]),
+        attempt=int(context["attempt"]),
+    )
 
 
 # ── Cross-turn stale-call circuit breaker (#58962) ─────────────────────
@@ -2591,6 +2651,7 @@ class _StreamingCall(StreamingWaitMonitor):
         self.agent = agent
         self.api_kwargs = api_kwargs
         self.on_first_delta = on_first_delta
+        self.request_identity = _current_provider_wait_identity(agent)
         self.worker = None  # request thread; None in inline mode
         self.result = {"response": None, "error": None, "partial_tool_names": []}
         self.clients = _RequestClientRegistry(agent)

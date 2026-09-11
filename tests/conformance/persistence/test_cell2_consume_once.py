@@ -29,6 +29,7 @@ db_path = Path({db_path!r})
 barrier = Path({barrier!r})
 ready = Path({ready!r})
 
+db = SessionDB(db_path=db_path)
 ready.touch()
 deadline = time.monotonic() + 55
 while not barrier.exists():
@@ -36,7 +37,6 @@ while not barrier.exists():
         sys.exit(3)
     time.sleep(0.005)
 
-db = SessionDB(db_path=db_path)
 won = db.claim_handoff("cell2")
 # Disjoint codes: 0=won, 10=lost. An unhandled exception exits 1, which must
 # NEVER be confusable with a clean "lost the claim" — a run where one
@@ -58,23 +58,22 @@ def test_exactly_one_claimant_wins(tmp_path):
     assert db.request_handoff("cell2", "telegram") is not False
 
     children = []
-    ready_files = []
     for i in range(N_CLAIMANTS):
         ready = tmp_path / f"ready-{i}"
-        ready_files.append(ready)
-        children.append(
-            spawn_child(
-                CLAIMANT.format(
-                    db_path=str(db_path), barrier=str(barrier), ready=str(ready)
-                )
+        child = spawn_child(
+            CLAIMANT.format(
+                db_path=str(db_path), barrier=str(barrier), ready=str(ready)
             )
         )
+        children.append(child)
+        # Keep schema-open concurrency out of this cell: it tests claim
+        # serialization, so each claimant reaches the barrier fully opened.
+        wait_for(
+            lambda ready=ready: ready.exists(),
+            what=f"claimant {i} at the barrier",
+            child=child,
+        )
 
-    # Barrier: release only when every process is up and polling.
-    wait_for(
-        lambda: all(r.exists() for r in ready_files),
-        what="all claimants at the barrier",
-    )
     barrier.touch()
 
     results = [reap(c) for c in children]

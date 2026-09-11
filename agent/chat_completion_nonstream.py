@@ -40,7 +40,39 @@ class _NonStreamRequest:
         )
         self.call_start = h.time.time()
         self.wait_notice_started_ts = None
+        self.request_context = h._current_provider_request_context(agent)
+        self.request_identity = h._provider_wait_identity(**self.request_context)
         self.thread = None
+        self.provider_admission_lease = None
+
+    def _acquire_provider_admission(self):
+        from hermes_cli.provider_admission import (
+            ProviderAdmissionRequest,
+            acquire_provider_admission,
+            provider_admission_lane,
+        )
+
+        access_token = getattr(self.agent, "api_key", "")
+        lane = provider_admission_lane(
+            getattr(self.agent, "provider", ""),
+            access_token=access_token if isinstance(access_token, str) else "",
+        )
+        if lane is None:
+            return None
+        request = ProviderAdmissionRequest(
+            lane=lane,
+            request_class=str(self.request_context["request_class"]),
+            session_id=str(
+                self.request_context["session_id"] or f"process-{h.os.getpid()}"
+            ),
+            provider="openai-codex",
+            model=str(self.api_kwargs.get("model") or getattr(self.agent, "model", "unknown")),
+            attempt=int(self.request_context["attempt"]),
+        )
+        return acquire_provider_admission(
+            request,
+            cancelled=lambda: bool(getattr(self.agent, "_interrupt_requested", False)),
+        )
 
     def _install_codex_request_token(self) -> None:
         if self.codex_token is not None and not self.codex_retired:  # retired before start: don't re-publish
@@ -96,8 +128,13 @@ class _NonStreamRequest:
             self._retire_codex_request_token()
             # Reuse reason only on a clean response; error or cancel-swallow
             # really closes so the next attempt builds a fresh pool.
-            self.clients.close_once(
-                "request_complete" if self.result["response"] is not None else "request_error_cleanup")
+            try:
+                self.clients.close_once(
+                    "request_complete" if self.result["response"] is not None else "request_error_cleanup")
+            finally:
+                if self.provider_admission_lease is not None:
+                    self.provider_admission_lease.release()
+                    self.provider_admission_lease = None
 
     def _abort_request(self, reason: str) -> None:
         """Watchdog/interrupt kill: abort the request client (kind-aware, #67142)
@@ -157,8 +194,10 @@ class _NonStreamRequest:
                 elapsed=elapsed)
             if recovery and activity_ts is not None:
                 recovery += " total elapsed"
+            identity = str(getattr(self, "request_identity", "") or "")
+            wait_label = f"{identity} waiting" if identity else "waiting"
             self.agent._emit_wait_notice(
-                f"⏳ waiting on {self.api_kwargs.get('model', 'the provider')} — "
+                f"⏳ {wait_label} on {self.api_kwargs.get('model', 'the provider')} — "
                 f"{int(silence)}s with {status} (provider may be slow or overloaded{recovery})")
             self.wait_notice_started_ts = self.call_start + elapsed
         except Exception:
@@ -246,8 +285,16 @@ class _NonStreamRequest:
                 self.codex_watchdog_state.retry_started_ts = None
         agent._touch_activity("waiting for non-streaming API response")
 
+        self.provider_admission_lease = self._acquire_provider_admission()
+        self.call_start = h.time.time()  # Provider watchdogs exclude admission queue time.
         self.thread = t = h.threading.Thread(target=h._context_thread_target(self._call), daemon=True)
-        t.start()
+        try:
+            t.start()
+        except BaseException:
+            if self.provider_admission_lease is not None:
+                self.provider_admission_lease.release()
+                self.provider_admission_lease = None
+            raise
         poll_count = 0
         while t.is_alive():
             t.join(timeout=0.3)
