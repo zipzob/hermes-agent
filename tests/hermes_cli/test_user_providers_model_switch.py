@@ -81,9 +81,10 @@ def test_list_authenticated_providers_enumerates_dict_format_models(monkeypatch)
     monkeypatch.setattr("hermes_cli.providers.HERMES_OVERLAYS", {})
 
     user_providers = {
-        "local-ollama": {
-            "name": "Local Ollama",
+        "dict-provider-test": {
+            "name": "Dictionary Provider Test",
             "api": "http://localhost:11434/v1",
+            "discover_models": False,
             "default_model": "minimax-m2.7:cloud",
             "models": {
                 "minimax-m2.7:cloud": {"context_length": 196608},
@@ -94,14 +95,14 @@ def test_list_authenticated_providers_enumerates_dict_format_models(monkeypatch)
     }
 
     providers = list_authenticated_providers(
-        current_provider="local-ollama",
+        current_provider="dict-provider-test",
         user_providers=user_providers,
         custom_providers=[],
         max_models=50,
     )
 
     user_prov = next(
-        (p for p in providers if p.get("is_user_defined") and p["slug"] == "local-ollama"),
+        (p for p in providers if p.get("is_user_defined") and p["slug"] == "dict-provider-test"),
         None,
     )
 
@@ -532,16 +533,16 @@ def test_section3_probes_no_key_endpoint_with_singular_default_model(monkeypatch
     monkeypatch.setattr("hermes_cli.models.fetch_api_models", _fake_fetch)
 
     user_providers = {
-        "local-ollama": {
-            "name": "Local Ollama",
-            "api": "http://localhost:11434/v1",
+        "no-key-probe-test": {
+            "name": "No-Key Probe Test",
+            "api": "http://127.0.0.1:39001/v1",
             "default_model": "llama3",
             # No api_key, no models: list — singular default only.
         }
     }
 
     providers = list_authenticated_providers(
-        current_provider="local-ollama",
+        current_provider="no-key-probe-test",
         user_providers=user_providers,
         custom_providers=[],
         max_models=50,
@@ -551,7 +552,7 @@ def test_section3_probes_no_key_endpoint_with_singular_default_model(monkeypatch
         "singular default_model must not suppress live discovery"
     )
     assert probed["api_key"] == ""
-    row = next(p for p in providers if p["slug"] == "local-ollama")
+    row = next(p for p in providers if p["slug"] == "no-key-probe-test")
     assert row["models"] == ["live-model-1", "live-model-2", "live-model-3"]
     assert row["total_models"] == 3
 

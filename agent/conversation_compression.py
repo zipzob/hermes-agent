@@ -2675,8 +2675,14 @@ def _run_summary_dispatch(
     # Publish progress to the commit fence so hosts extend deadlines while tokens
     # flow. Any active hook (even no-op) selects the streamed path: the timeout is
     # inactivity-based and a byte-trickling provider hits the stream total ceiling.
-    from agent.auxiliary_client import aux_interrupt_protection, aux_progress_hook, aux_stream_deadline
+    from agent.auxiliary_client import (
+        aux_interrupt_protection,
+        aux_progress_hook,
+        aux_stream_deadline,
+        aux_wait_status_hook,
+    )
     _progress_hook = commit_fence.touch_progress if commit_fence is not None else (lambda: None)
+    _wait_status_hook = getattr(agent, "_emit_wait_notice", None)
     # Return leg: cancel frees the owner but the provider daemon streams on to its
     # own larger ceiling; share the host deadline so orphan streams stop with it.
     _host_stream_deadline = commit_fence.deadline_monotonic if commit_fence is not None else None
@@ -2708,6 +2714,7 @@ def _run_summary_dispatch(
         else:
             with (
                 aux_progress_hook(_progress_hook), aux_stream_deadline(_host_stream_deadline),
+                aux_wait_status_hook(_wait_status_hook),
                 aux_interrupt_protection(cancel_check=_compression_cancel_requested),
             ):
                 compressed = compress_fn(messages, **compress_kwargs)

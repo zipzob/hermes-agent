@@ -381,6 +381,22 @@ def _mark(enabled) -> str:
     return "enabled ✓" if enabled else "disabled ✗"
 
 
+def _status_required_fields(provider, effective_config) -> list:
+    """Environment-backed fields required by the provider's active mode."""
+    config = effective_config if isinstance(effective_config, dict) else {}
+    required = []
+    for field in _schema_of(provider):
+        if not field.get("env_var") or field.get("required", True) is False:
+            continue
+        condition = field.get("when")
+        if isinstance(condition, dict) and any(
+            config.get(key) != expected for key, expected in condition.items()
+        ):
+            continue
+        required.append(field)
+    return required
+
+
 def cmd_status(args) -> None:
     """Show current memory provider config."""
     from hermes_cli.config import load_config
@@ -428,8 +444,15 @@ def cmd_status(args) -> None:
                 print("  Status:    available ✓")
             else:
                 print("  Status:    not available ✗")
-                # All fields with env_var (secret and non-secret)
-                required_fields = [f for f in _schema_of(provider) if f.get("env_var")]
+                reason = ""
+                if hasattr(provider, "unavailable_reason"):
+                    try:
+                        reason = str(provider.unavailable_reason() or "").strip()
+                    except Exception:
+                        reason = ""
+                if reason:
+                    print(f"  Reason:    {reason}")
+                required_fields = _status_required_fields(provider, display_config)
                 if required_fields:
                     print("  Missing:")
                     for f in required_fields:
@@ -440,8 +463,8 @@ def cmd_status(args) -> None:
                         if url and not is_set:
                             line += f"  → {url}"
                         print(line)
-                print("  Note: systemd/gateway services do not inherit ~/.hermes/.env —")
-                print("        set any variables above in the service environment.")
+                    print("  Note: systemd/gateway services do not inherit ~/.hermes/.env —")
+                    print("        set any variables above in the service environment.")
         else:
             print("\n  Plugin:    NOT installed ✗")
             print(f"  Install the '{provider_name}' memory plugin to ~/.hermes/plugins/")

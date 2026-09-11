@@ -37,13 +37,22 @@ class StreamingWaitMonitor:
     def _heartbeat(self, waiting_secs: int) -> None:
         """Gateway inactivity heartbeat: the start-to-first-chunk gap (thinking,
         local prefill) can exceed the gateway timeout."""
+        agent = getattr(self, "agent")
+        if getattr(agent, "api_mode", "") == "codex_responses":
+            # Codex streaming delegates to an inner _NonStreamRequest whose
+            # request-local TTFB/event-idle state owns the accurate notice.
+            agent._touch_activity(f"waiting for Codex provider response ({waiting_secs}s)")
+            return
         if waiting_secs >= 60.0:
             # No chunks for 60s+: say WHAT the wait is and WHEN recovery kicks in.
             stale = self._stream_stale_timeout
             _recovery = f"; auto-reconnect at {int(stale)}s" if stale is not None and stale != float("inf") else ""
             self._mon.wait_notice_started_ts = self._mon.last_heartbeat
+            identity = str(getattr(self, "request_identity", "") or "")
+            wait_label = f"{identity} waiting" if identity else "waiting"
+            api_kwargs = getattr(self, "api_kwargs", {})
             self.agent._emit_wait_notice(
-                f"⏳ waiting on {self.api_kwargs.get('model', 'the provider')} — no stream output for {waiting_secs}s "
+                f"⏳ {wait_label} on {api_kwargs.get('model', 'the provider')} — no stream output for {waiting_secs}s "
                 f"(provider may be slow or overloaded, or the model is thinking{_recovery})")
         else:
             # Chunks are flowing — keep the tracker fresh, leave the display alone.

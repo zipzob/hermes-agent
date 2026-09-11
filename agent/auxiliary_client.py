@@ -402,6 +402,84 @@ def aux_progress_hook(hook):
         yield
 
 
+_AUX_WAIT_STATUS_HOOK: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "auxiliary_wait_status_hook", default=None
+)
+_AUX_PROVIDER_WAIT_NOTICE_SECONDS = 60.0
+
+
+@contextlib.contextmanager
+def aux_wait_status_hook(hook):
+    """Bind a task-local textual queue-status sink for auxiliary work."""
+    token = _AUX_WAIT_STATUS_HOOK.set(hook if callable(hook) else None)
+    try:
+        yield
+    finally:
+        _AUX_WAIT_STATUS_HOOK.reset(token)
+
+
+def _emit_aux_wait_status(message: str) -> bool:
+    hook = _AUX_WAIT_STATUS_HOOK.get()
+    if not callable(hook):
+        return False
+    try:
+        hook(message)
+        return True
+    except Exception:
+        logger.debug("auxiliary wait-status hook failed", exc_info=True)
+        return False
+
+
+def _aux_session_id() -> str:
+    from gateway.session_context import get_session_env
+
+    return str(
+        _runtime_main_value("session_id")
+        or get_session_env("HERMES_SESSION_ID", "")
+        or f"process-{os.getpid()}"
+    )
+
+
+@contextlib.contextmanager
+def _aux_provider_silence_notice(
+    *, request_class: str, model: str, attempt: int, timeout: Any
+):
+    hook_context = contextvars.copy_context()
+    session_id = _aux_session_id()
+    notice_sent = threading.Event()
+    try:
+        recovery_seconds = float(timeout)
+    except (TypeError, ValueError):
+        recovery_seconds = 0.0
+
+    def _emit() -> None:
+        from agent.chat_completion_helpers import _provider_wait_identity
+
+        recovery = (
+            f"; auto-recovery at {int(recovery_seconds)}s"
+            if recovery_seconds > 0
+            else ""
+        )
+        message = (
+            f"⏳ {_provider_wait_identity(request_class=request_class, session_id=session_id, attempt=attempt)} "
+            f"waiting on {model} — {int(_AUX_PROVIDER_WAIT_NOTICE_SECONDS)}s provider silence"
+            f"{recovery}"
+        )
+        if hook_context.run(_emit_aux_wait_status, message):
+            notice_sent.set()
+
+    timer = threading.Timer(_AUX_PROVIDER_WAIT_NOTICE_SECONDS, _emit)
+    timer.daemon = True
+    timer.start()
+    try:
+        yield
+    finally:
+        timer.cancel()
+        timer.join()
+        if notice_sent.is_set():
+            hook_context.run(_emit_aux_wait_status, "")
+
+
 def _current_aux_stream_deadline() -> Optional[float]:
     """The waiting host's absolute monotonic deadline, if one is installed."""
     return getattr(_aux_stream_deadline, "value", None)
@@ -2475,6 +2553,164 @@ def _relay_auxiliary_metadata(
     }
 
 
+def _raise_if_aux_model_incompatible(client: Any, *, provider: str, model: str) -> None:
+    if provider != "openai-codex":
+        return
+    from agent.auxiliary_model_compatibility import probe_codex_model_compatibility
+
+    verdict = probe_codex_model_compatibility(
+        model,
+        access_token=str(getattr(client, "api_key", "") or ""),
+    )
+    if verdict == "incompatible":
+        raise RuntimeError(
+            f"Auxiliary model is not supported for this OpenAI Codex account: {model}"
+        )
+
+
+def _aux_provider_admission_request(
+    client: Any, *, provider: str, model: str, request_class: str, attempt: int
+) -> Any:
+    from hermes_cli.provider_admission import (
+        ProviderAdmissionRequest,
+        provider_admission_lane,
+    )
+
+    raw_token = getattr(client, "api_key", "") or _runtime_main_value("api_key")
+    access_token = raw_token if isinstance(raw_token, str) else ""
+    lane = provider_admission_lane(provider, access_token=access_token)
+    if lane is None:
+        return None
+    session_id = _aux_session_id()
+    return ProviderAdmissionRequest(
+        lane=lane,
+        request_class=request_class,
+        session_id=session_id,
+        provider=provider,
+        model=model,
+        attempt=attempt,
+    )
+
+
+@contextlib.contextmanager
+def _aux_provider_admission_scope(
+    client: Any, *, provider: str, model: str, request_class: str, attempt: int
+):
+    from hermes_cli.provider_admission import format_provider_queue_wait, provider_admission
+
+    request = _aux_provider_admission_request(
+        client,
+        provider=provider,
+        model=model,
+        request_class=request_class,
+        attempt=attempt,
+    )
+    if request is None:
+        yield None
+        return
+    queue_started = time.monotonic()
+    notice_sent = False
+
+    def _on_wait(blocker):
+        nonlocal notice_sent
+        if notice_sent:
+            return
+        notice_sent = _emit_aux_wait_status(
+            format_provider_queue_wait(
+                request_class=request_class,
+                blocker=blocker,
+                attempt=attempt,
+                queued_seconds=time.monotonic() - queue_started,
+            )
+        )
+
+    with provider_admission(request, on_wait=_on_wait) as lease:
+        if notice_sent:
+            _emit_aux_wait_status("")
+        yield lease
+
+
+@contextlib.asynccontextmanager
+async def _aux_provider_admission_scope_async(
+    client: Any, *, provider: str, model: str, request_class: str, attempt: int
+):
+    import asyncio
+    from hermes_cli.provider_admission import (
+        acquire_provider_admission,
+        format_provider_queue_wait,
+    )
+
+    request = _aux_provider_admission_request(
+        client,
+        provider=provider,
+        model=model,
+        request_class=request_class,
+        attempt=attempt,
+    )
+    if request is None:
+        yield None
+        return
+    queue_started = time.monotonic()
+    notice_sent = False
+
+    def _on_wait(blocker):
+        nonlocal notice_sent
+        if notice_sent:
+            return
+        notice_sent = _emit_aux_wait_status(
+            format_provider_queue_wait(
+                request_class=request_class,
+                blocker=blocker,
+                attempt=attempt,
+                queued_seconds=time.monotonic() - queue_started,
+            )
+        )
+
+    lease = await asyncio.to_thread(
+        acquire_provider_admission, request, on_wait=_on_wait
+    )
+    try:
+        if notice_sent:
+            _emit_aux_wait_status("")
+        yield lease
+    finally:
+        await asyncio.to_thread(lease.release)
+
+
+class _AdmissionBoundStream:
+    def __init__(self, stream: Any, admission: Any) -> None:
+        self._stream = stream
+        self._iterator = iter(stream)
+        self._admission = admission
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            return next(self._iterator)
+        except BaseException:
+            self._release()
+            raise
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+    def close(self) -> None:
+        try:
+            close = getattr(self._stream, "close", None)
+            if callable(close):
+                close()
+        finally:
+            self._release()
+
+    def _release(self) -> None:
+        admission, self._admission = self._admission, None
+        if admission is None:
+            return
+        admission.__exit__(None, None, None)
+
+
 def _relay_sync_completion(
     client: Any, kwargs: dict[str, Any], *, provider: str | None = None,
     api_mode: str | None = None, create: Callable[[dict[str, Any]], Any] | None = None,
@@ -2492,11 +2728,28 @@ def _relay_sync_completion(
         return _run_protected_sync_provider_call(callback, kwargs)
     provider_name, fallback_model, metadata = route
     from agent import relay_llm
-    return relay_llm.execute_current(
-        kwargs, lambda request: _run_protected_sync_provider_call(callback, request),
-        name=provider_name, model_name=str(kwargs.get("model") or fallback_model),
-        metadata=metadata, defer_logical_completion=True,
-    )
+    model_name = str(kwargs.get("model") or fallback_model)
+    _raise_if_aux_model_incompatible(client, provider=provider_name, model=model_name)
+    request_class = str(metadata.get("auxiliary_task") or "background_review")
+    attempt = int(metadata.get("retry_count") or 0) + 1
+    with _aux_provider_admission_scope(
+        client,
+        provider=provider_name,
+        model=model_name,
+        request_class=request_class,
+        attempt=attempt,
+    ):
+        with _aux_provider_silence_notice(
+            request_class=request_class,
+            model=model_name,
+            attempt=attempt,
+            timeout=kwargs.get("timeout"),
+        ):
+            return relay_llm.execute_current(
+                kwargs, lambda request: _run_protected_sync_provider_call(callback, request),
+                name=provider_name, model_name=model_name,
+                metadata=metadata, defer_logical_completion=True,
+            )
 
 
 async def _relay_async_completion(
@@ -2513,10 +2766,27 @@ async def _relay_async_completion(
         return await callback(kwargs)
     provider_name, fallback_model, metadata = route
     from agent import relay_llm
-    return await relay_llm.execute_current_async(
-        kwargs, callback, name=provider_name, model_name=str(kwargs.get("model") or fallback_model),
-        metadata=metadata, defer_logical_completion=True,
-    )
+    model_name = str(kwargs.get("model") or fallback_model)
+    _raise_if_aux_model_incompatible(client, provider=provider_name, model=model_name)
+    request_class = str(metadata.get("auxiliary_task") or "background_review")
+    attempt = int(metadata.get("retry_count") or 0) + 1
+    async with _aux_provider_admission_scope_async(
+        client,
+        provider=provider_name,
+        model=model_name,
+        request_class=request_class,
+        attempt=attempt,
+    ):
+        with _aux_provider_silence_notice(
+            request_class=request_class,
+            model=model_name,
+            attempt=attempt,
+            timeout=kwargs.get("timeout"),
+        ):
+            return await relay_llm.execute_current_async(
+                kwargs, callback, name=provider_name, model_name=model_name,
+                metadata=metadata, defer_logical_completion=True,
+            )
 
 
 def _relay_sync_stream(
@@ -2530,11 +2800,41 @@ def _relay_sync_stream(
         return client.chat.completions.create(**kwargs)
     provider_name, fallback_model, metadata = route
     from agent import relay_llm
-    return relay_llm.stream_current(
-        kwargs, lambda request: client.chat.completions.create(**request), name=provider_name,
-        model_name=str(kwargs.get("model") or fallback_model), finalizer=dict, metadata=metadata,
-        completed_response_predicate=lambda value: hasattr(value, "choices"),
+    model_name = str(kwargs.get("model") or fallback_model)
+    _raise_if_aux_model_incompatible(client, provider=provider_name, model=model_name)
+    request_class = str(metadata.get("auxiliary_task") or "background_review")
+    attempt = int(metadata.get("retry_count") or 0) + 1
+    lifetime = contextlib.ExitStack()
+    lifetime.enter_context(
+        _aux_provider_admission_scope(
+            client,
+            provider=provider_name,
+            model=model_name,
+            request_class=request_class,
+            attempt=attempt,
+        )
     )
+    lifetime.enter_context(
+        _aux_provider_silence_notice(
+            request_class=request_class,
+            model=model_name,
+            attempt=attempt,
+            timeout=kwargs.get("timeout"),
+        )
+    )
+    try:
+        stream = relay_llm.stream_current(
+            kwargs, lambda request: client.chat.completions.create(**request), name=provider_name,
+            model_name=model_name, finalizer=dict, metadata=metadata,
+            completed_response_predicate=lambda value: hasattr(value, "choices"),
+        )
+    except BaseException:
+        lifetime.close()
+        raise
+    if hasattr(stream, "choices"):
+        lifetime.close()
+        return stream
+    return _AdmissionBoundStream(stream, lifetime)
 
 
 _RUNTIME_MAIN_COMPAT_SNAPSHOT: Tuple[Any, ...] = ("", "", "", "", "", "")
@@ -7054,6 +7354,25 @@ def _ladder_provider_fallback(first_err: Exception, route: _LadderRoute):
         predicate(first_err) for predicate, label in _FALLBACK_REASONS if label != "auth error")
     if reason is None or not (is_auto or is_capacity_error):
         return None
+    failed_provider = _effective_provider_for_client(route.client, resolved_provider)
+    if (
+        reason == "model incompatible with route"
+        and _normalize_aux_provider(failed_provider) == "openai-codex"
+        and route.final_model
+    ):
+        from agent.auxiliary_model_compatibility import (
+            record_codex_model_incompatibility,
+        )
+
+        raw_token = getattr(route.client, "api_key", "")
+        access_token = (
+            raw_token
+            if isinstance(raw_token, str)
+            else str(route.resolved_api_key or "")
+        )
+        record_codex_model_incompatibility(
+            route.final_model, access_token=access_token
+        )
     if reason == "payment error":
         # Mark the concrete backend (not the "auto" label) unhealthy so later aux calls skip
         # it instead of paying another doomed RTT.
@@ -7083,7 +7402,12 @@ def _ladder_provider_fallback(first_err: Exception, route: _LadderRoute):
             fb_client, fb_model, fb_label = _try_payment_fallback(
                 resolved_provider, task, reason=reason, failed_base_url=route.base_info,
                 failure_scope=_chain_failure_scope, main_runtime=route.main_runtime)
-    elif fb_client is None:
+    elif fb_client is None and not (
+        task == "compression" and reason == "model incompatible with route"
+    ):
+        # Compression is a maintenance task: a rejected economical model must not
+        # silently consume the main frontier model. Operators can still opt in to
+        # an explicit economical route through auxiliary.compression.fallback_chain.
         fb_client, fb_model, fb_label = _try_main_agent_model_fallback(
             resolved_provider, task, reason=reason, failed_model=_chain_failed_model,
             failed_base_url=route.base_info, failure_scope=_chain_failure_scope)

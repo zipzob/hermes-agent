@@ -273,6 +273,55 @@ def test_normalize_observation_scopes_list_of_lists():
     ]
 
 
+def test_status_config_projects_external_config_without_secrets(monkeypatch):
+    monkeypatch.setattr(
+        hindsight_module,
+        "_load_config",
+        lambda: {
+            "mode": "local_embedded",
+            "llm_provider": "ollama",
+            "llm_model": "local-model",
+            "bank_id": "hermes",
+            "recall_budget": "mid",
+            "api_key": "do-not-display",
+            "llm_api_key": "do-not-display",
+        },
+    )
+
+    status = HindsightMemoryProvider().get_status_config({})
+
+    assert status == {
+        "mode": "local_embedded",
+        "llm_provider": "ollama",
+        "llm_model": "local-model",
+        "bank_id": "hermes",
+        "recall_budget": "mid",
+    }
+    assert not any("key" in name for name in status)
+    llm_key = next(
+        field
+        for field in HindsightMemoryProvider().get_config_schema()
+        if field["key"] == "llm_api_key"
+    )
+    assert llm_key["required"] is False
+
+
+def test_embedded_remote_llm_key_remains_required(monkeypatch):
+    monkeypatch.setattr(
+        hindsight_module,
+        "_load_config",
+        lambda: {"mode": "local_embedded", "llm_provider": "openai"},
+    )
+
+    llm_key = next(
+        field
+        for field in HindsightMemoryProvider().get_config_schema()
+        if field["key"] == "llm_api_key"
+    )
+
+    assert llm_key["required"] is True
+
+
 def test_check_local_runtime_requires_sentence_transformers(monkeypatch):
     """Missing local embedding deps must fail before daemon startup waits."""
     monkeypatch.setattr(

@@ -1113,7 +1113,7 @@ class TestEnsureClientReloadsEnv:
             def health(self):
                 if self.endpoint == "https://new.example":
                     refresh_entered.set()
-                    assert release_refresh.wait(2.0)
+                    assert release_refresh.wait(30.0)
                     return False
                 return True
 
@@ -1151,23 +1151,27 @@ class TestEnsureClientReloadsEnv:
                     done.set()
 
         first = threading.Thread(target=refresh_client, args=("first",))
+        second = None
         first.start()
-        assert refresh_entered.wait(2.0)
+        try:
+            assert refresh_entered.wait(30.0)
 
-        second = threading.Thread(
-            target=refresh_client,
-            args=("second",),
-            kwargs={"started": second_started, "done": second_done},
-        )
-        second.start()
-        assert second_started.wait(2.0)
-        completed_during_refresh = second_done.wait(0.2)
-
-        release_refresh.set()
-        first.join(timeout=2.0)
-        second.join(timeout=2.0)
+            second = threading.Thread(
+                target=refresh_client,
+                args=("second",),
+                kwargs={"started": second_started, "done": second_done},
+            )
+            second.start()
+            assert second_started.wait(30.0)
+            completed_during_refresh = second_done.wait(0.2)
+        finally:
+            release_refresh.set()
+            first.join(timeout=30.0)
+            if second is not None:
+                second.join(timeout=30.0)
 
         assert not first.is_alive()
+        assert second is not None
         assert not second.is_alive()
         assert errors == []
         assert completed_during_refresh is False

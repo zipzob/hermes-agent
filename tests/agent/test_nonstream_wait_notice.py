@@ -33,6 +33,82 @@ def _request():
     return request, notices, touches
 
 
+def test_provider_wait_identity_includes_request_class_session_and_attempt():
+    assert h._provider_wait_identity(
+        request_class="delegation",
+        session_id="20260908_162215_70dd49",
+        attempt=2,
+    ) == "delegation request in session …70dd49 — attempt 2"
+
+
+def test_provider_request_context_is_scoped_and_restored():
+    agent = SimpleNamespace(session_id="fallback-session", platform="cli")
+    assert h._current_provider_wait_identity(agent) == (
+        "foreground request in session …ession — attempt 1"
+    )
+
+    with h.provider_request_context(
+        request_class="compression",
+        session_id="20260908_162215_70dd49",
+        attempt=4,
+    ):
+        assert h._current_provider_wait_identity(agent) == (
+            "compression request in session …70dd49 — attempt 4"
+        )
+
+    assert h._current_provider_wait_identity(agent) == (
+        "foreground request in session …ession — attempt 1"
+    )
+
+
+def test_nonstream_request_captures_scoped_identity(monkeypatch):
+    watchdogs = SimpleNamespace(
+        codex=False,
+        stale_timeout=600.0,
+        ttfb_enabled=False,
+        ttfb_timeout=120.0,
+        idle_enabled=False,
+        idle_timeout=180.0,
+        idle_requires_progress=False,
+    )
+    monkeypatch.setattr(h, "_resolve_nonstream_watchdogs", lambda *_args: watchdogs)
+    agent = SimpleNamespace(
+        api_mode="chat_completions",
+        session_id="fallback-session",
+        platform="cli",
+    )
+
+    with h.provider_request_context(
+        request_class="delegation",
+        session_id="20260908_162215_70dd49",
+        attempt=5,
+    ):
+        request = _NonStreamRequest(agent, {"model": "test-model"})
+
+    assert getattr(request, "request_identity", None) == (
+        "delegation request in session …70dd49 — attempt 5"
+    )
+
+
+def test_nonstream_wait_notice_includes_scoped_request_identity():
+    request, notices, _ = _request()
+    setattr(
+        request,
+        "request_identity",
+        h._provider_wait_identity(
+            request_class="compression",
+            session_id="20260908_162215_70dd49",
+            attempt=3,
+        ),
+    )
+
+    request._emit_wait_notice(60.0)
+
+    assert "compression request in session …70dd49 — attempt 3" in notices[0]
+    assert "60s with no response yet" in notices[0]
+    assert "auto-reconnect at 120s" in notices[0]
+
+
 @pytest.mark.parametrize(
     "event,progress,retry,expected",
     [

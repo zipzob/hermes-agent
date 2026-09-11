@@ -25,6 +25,7 @@ import tempfile
 import threading
 import types
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -179,6 +180,7 @@ class _FakeAgent:
         self._cached_system_prompt = "SYSTEM"
         self._memory_store = None
         self._memory_manager = None
+        self._session_db: Any = None
         self._memory_nudge_interval = 0
         self._turns_since_memory = 0
         self._user_turn_count = 0
@@ -582,14 +584,16 @@ class TestPrologueMoaAndInPlaceBackfill:
             ctx = _build(agent, moa_active=True)
         assert "api_content" not in ctx.messages[ctx.current_turn_user_idx]
 
-    def test_inplace_compaction_backfills_sidecar_into_db(self):
+    def test_inplace_compaction_backfills_sidecar_into_db(self, tmp_path):
         """In-place preflight compaction inserts the current-turn user row
         BEFORE the stamp (archive_and_compact), and the crash persist
         identity-skips every compacted dict — the stamp must be pushed into
         the existing row directly."""
         agent = _FakeAgent()
         agent.compression_enabled = True
-        agent._session_db = MagicMock()
+        session_db = MagicMock()
+        session_db.db_path = tmp_path / "state.db"
+        agent._session_db = session_db
 
         calls = {"n": 0}
 
@@ -637,7 +641,7 @@ class TestPrologueMoaAndInPlaceBackfill:
         msg = ctx.messages[ctx.current_turn_user_idx]
         assert msg["content"] == "hello"
         assert msg["api_content"] == "hello\n\nPLUGIN-CTX"
-        agent._session_db.set_latest_user_api_content.assert_called_once_with(
+        session_db.set_latest_user_api_content.assert_called_once_with(
             "sess-1", "hello", "hello\n\nPLUGIN-CTX"
         )
 

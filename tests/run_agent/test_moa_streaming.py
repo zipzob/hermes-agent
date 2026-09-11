@@ -185,11 +185,11 @@ def test_create_forwards_stream_read_timeout(monkeypatch, tmp_path):
 
 
 # --------------------------------------------------------------------------
-# call_llm-level: stream branch returns the raw SDK stream
+# call_llm-level: stream branch preserves SDK stream behavior
 # --------------------------------------------------------------------------
 
-def test_call_llm_stream_returns_raw_stream_and_skips_validation(monkeypatch):
-    """call_llm(stream=True) returns the client's raw stream object directly,
+def test_call_llm_stream_preserves_stream_and_skips_validation(monkeypatch):
+    """call_llm(stream=True) preserves streaming while holding admission,
     attaches stream/stream_options to the request, and does NOT run response
     validation (which assumes a complete response)."""
     from agent import auxiliary_client as ac
@@ -199,7 +199,7 @@ def test_call_llm_stream_returns_raw_stream_and_skips_validation(monkeypatch):
     class _Completions:
         def create(self, **kwargs):
             captured.update(kwargs)
-            return "RAW_STREAM"
+            return iter(["RAW_STREAM"])
 
     fake_client = SimpleNamespace(
         chat=SimpleNamespace(completions=_Completions()),
@@ -225,7 +225,7 @@ def test_call_llm_stream_returns_raw_stream_and_skips_validation(monkeypatch):
         stream_options={"include_usage": True},
     )
 
-    assert out == "RAW_STREAM"
+    assert list(out) == ["RAW_STREAM"]
     assert captured.get("stream") is True
     assert captured.get("stream_options") == {"include_usage": True}
 

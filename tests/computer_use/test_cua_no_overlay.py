@@ -50,6 +50,8 @@ class TestNoOverlayFlag:
         ``/proc/version``, neither of which exists to be probed elsewhere.
         """
         monkeypatch.delenv("DISPLAY", raising=False)
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        monkeypatch.delenv("XDG_SESSION_TYPE", raising=False)
         with patch("hermes_cli.config.load_config",
                    side_effect=RuntimeError("boom")):
             assert cua_backend._cua_no_overlay() is True
@@ -86,7 +88,8 @@ class TestNoOverlayFlag:
         monkeypatch.setenv("DISPLAY", ":0")
         monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
         monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
-        with patch("hermes_cli.config.load_config", return_value={}):
+        with patch("builtins.open", mock_open(read_data="Linux version generic")), \
+             patch("hermes_cli.config.load_config", return_value={}):
             assert cua_backend._cua_no_overlay() is False
 
     @pytest.mark.linux_only

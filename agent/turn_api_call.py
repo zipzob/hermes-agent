@@ -11,6 +11,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 from dataclasses import dataclass
 import logging
+import os
 import time
 from typing import Any, Dict, Optional
 
@@ -86,9 +87,64 @@ def perform_api_call(
                 sanitize_harmony_tokens=agent._is_codex_backend(),
             )
         if _use_streaming:
-            return agent._interruptible_streaming_api_call(
-                next_api_kwargs, on_first_delta=_stop_spinner
+            from hermes_cli.provider_admission import (
+                ProviderAdmissionRequest,
+                provider_admission,
+                provider_admission_lane,
             )
+
+            raw_token = getattr(agent, "api_key", "")
+            lane = provider_admission_lane(
+                agent.provider,
+                access_token=raw_token if isinstance(raw_token, str) else "",
+            )
+            admission = nullcontext()
+            queue_notice_sent = False
+            if lane is not None:
+                from hermes_cli.provider_admission import format_provider_queue_wait
+
+                queue_started = time.monotonic()
+                request_class = (
+                    "delegation"
+                    if getattr(agent, "is_subagent", False)
+                    or getattr(agent, "platform", "") == "subagent"
+                    else "foreground"
+                )
+
+                def _on_admission_wait(blocker):
+                    nonlocal queue_notice_sent
+                    if queue_notice_sent:
+                        return
+                    emit = getattr(agent, "_emit_wait_notice", None)
+                    if callable(emit):
+                        emit(
+                            format_provider_queue_wait(
+                                request_class=request_class,
+                                blocker=blocker,
+                                attempt=int(retry_count) + 1,
+                                queued_seconds=time.monotonic() - queue_started,
+                            )
+                        )
+                        queue_notice_sent = True
+
+                admission = provider_admission(
+                    ProviderAdmissionRequest(
+                        lane=lane,
+                        request_class=request_class,
+                        session_id=str(agent.session_id or f"process-{os.getpid()}"),
+                        provider="openai-codex",
+                        model=str(next_api_kwargs.get("model") or agent.model or "unknown"),
+                        attempt=int(retry_count) + 1,
+                    ),
+                    cancelled=lambda: bool(getattr(agent, "_interrupt_requested", False)),
+                    on_wait=_on_admission_wait,
+                )
+            with admission:
+                if queue_notice_sent:
+                    agent._emit_wait_notice("")
+                return agent._interruptible_streaming_api_call(
+                    next_api_kwargs, on_first_delta=_stop_spinner
+                )
         from agent import relay_llm
 
         return relay_llm.execute(
@@ -123,13 +179,26 @@ def perform_api_call(
         if _model_request_active is not None:
             _model_request_active.set()
     try:
-        response = run_llm_execution_middleware(
-            api_kwargs, _perform_api_call, original_request=_original_api_kwargs,
-            task_id=effective_task_id, turn_id=turn_id, api_request_id=api_request_id,
-            session_id=agent.session_id or "", platform=agent.platform or "", model=agent.model,
-            provider=agent.provider, base_url=agent.base_url, api_mode=agent.api_mode,
-            api_call_count=api_call_count, middleware_trace=list(_llm_middleware_trace),
+        from agent.chat_completion_helpers import provider_request_context
+
+        request_class = (
+            "delegation"
+            if getattr(agent, "is_subagent", False)
+            or getattr(agent, "platform", "") == "subagent"
+            else "foreground"
         )
+        with provider_request_context(
+            request_class=request_class,
+            session_id=str(agent.session_id or f"process-{os.getpid()}"),
+            attempt=int(retry_count) + 1,
+        ):
+            response = run_llm_execution_middleware(
+                api_kwargs, _perform_api_call, original_request=_original_api_kwargs,
+                task_id=effective_task_id, turn_id=turn_id, api_request_id=api_request_id,
+                session_id=agent.session_id or "", platform=agent.platform or "", model=agent.model,
+                provider=agent.provider, base_url=agent.base_url, api_mode=agent.api_mode,
+                api_call_count=api_call_count, middleware_trace=list(_llm_middleware_trace),
+            )
     finally:
         with _bracket:
             if _model_request_active is not None:

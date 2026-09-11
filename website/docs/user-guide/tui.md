@@ -57,7 +57,8 @@ The classic CLI remains the shipped default. Anything documented in [CLI Interfa
 - **Non-blocking input** — type and queue messages before the session is ready. Your first prompt sends the moment the agent comes online.
 - **Rich overlays** — model picker, session picker, approval and clarification prompts all render as modal panels rather than inline flows.
 - **Live session panel** — tools and skills fill in progressively as they initialize.
-- **Mouse-friendly selection** — drag to highlight with a uniform background instead of SGR inverse. Copy with your terminal's normal copy gesture.
+- **Mouse-friendly selection** — drag to highlight with a uniform background instead of SGR inverse. Right-click the selection to copy it, or use the copy shortcut shown by `/help`. If the terminal itself captures mouse input, hold its selection-bypass modifier (commonly Shift) while dragging.
+- **Clickable links** — single-click links in native terminal hosts. Embedded xterm.js hosts such as VS Code, Cursor, Windsurf, and the web dashboard own OSC 8 activation to prevent duplicate browser tabs; use Ctrl+click on Windows/Linux or Cmd+click on macOS there.
 - **Alternate-screen rendering** — differential updates mean no flicker when streaming, no scrollback clutter after you quit.
 - **Composer affordances** — inline paste-collapse for long snippets, `Cmd+V` / `Ctrl+V` text paste with clipboard-image fallback, bracketed-paste safety, and image/file-path attachment normalization.
 

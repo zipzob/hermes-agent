@@ -245,7 +245,13 @@ def _agent_home(agent: Any) -> Optional[Path]:
         pass
     try:
         db_path = getattr(getattr(agent, "_session_db", None), "db_path", None)
-        return Path(db_path).parent if db_path else None
+        # ``MagicMock`` and other permissive doubles synthesize ``__fspath__``
+        # attributes on demand. Treat only the concrete path shapes SessionDB
+        # actually exposes as authority; otherwise a mock can create a relative
+        # ``MagicMock/mock._session_db.db_path`` runtime tree in the repository.
+        if not isinstance(db_path, (str, Path)) or not db_path:
+            return None
+        return Path(db_path).parent
     except Exception:
         return None
 
