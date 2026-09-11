@@ -699,8 +699,16 @@ DEFAULT_CONFIG = {
         # OpenAI-compatible request fields. Vision: download_timeout = image HTTP download (s).
         "vision": _aux(120, download_timeout=30),
         # web_extract and session_search no longer use an aux LLM; leftover blocks in user config
-        # are ignored. Compression: raise timeout for local models.
-        "compression": _aux(120),
+        # are ignored. Compression: raise timeout for local models. With an explicit
+        # context_length and inherit_main_when_incompatible=true, the main route becomes the
+        # local-summary fallback only when this static route cannot hold the main model's resolved
+        # compression trigger. Native provider compaction still gets the first attempt when supported.
+        "compression": _aux(
+            120,
+            context_length=0,
+            api_mode="",
+            inherit_main_when_incompatible=False,
+        ),
         "skills_hub": _aux(30),
         "approval": _aux(30),   # classifier — a fast/cheap model is recommended
         # /review reviewer: a full subagent on the async delegation rail, credentials resolved like

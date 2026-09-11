@@ -3227,7 +3227,8 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             "task": "compression",
             "main_runtime": {
                 "model": self.model, "provider": self.provider, "base_url": self.base_url, "api_key": self.api_key,
-                "api_mode": self.api_mode,
+                "api_mode": self.api_mode, "context_length": self.context_length,
+                "compression_threshold_tokens": self.threshold_tokens,
             },
             "messages": [{"role": "user", "content": prompt}], "route_info": _aux_route,
             # NO max_tokens: Anthropic/NIM wires forward it and a hard cap truncates summaries

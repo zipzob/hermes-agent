@@ -39,6 +39,7 @@ def _provider_pip_dependencies(provider_name: str, declared: list) -> list:
             # "local" is a legacy alias for "local_embedded"
             if cfg.get("mode", "") in {"local", "local_embedded"}:
                 deps.append("hindsight-all")
+                deps.append("fastmcp==4.0.0b3")
         except Exception:
             pass
     return deps

@@ -29,6 +29,7 @@ def _compression_route() -> auxiliary._LadderRoute:
             "base_url": "https://chatgpt.com/backend-api/codex",
         },
         route_info={},
+        pinned_main_route=False,
     )
 
 

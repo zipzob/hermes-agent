@@ -68,7 +68,11 @@ def test_hindsight_local_embedded_dependencies_include_full_runtime(tmp_path, mo
         "hindsight", ["hindsight-client==0.6.1"]
     )
 
-    assert dependencies == ["hindsight-client==0.6.1", "hindsight-all"]
+    assert dependencies == [
+        "hindsight-client==0.6.1",
+        "hindsight-all",
+        "fastmcp==4.0.0b3",
+    ]
 
 
 def test_hindsight_cloud_dependencies_do_not_install_embedded_runtime(tmp_path, monkeypatch):

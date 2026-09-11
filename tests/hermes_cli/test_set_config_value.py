@@ -118,6 +118,27 @@ class TestConfigYamlRouting:
         assert "not a recognized config key" not in capsys.readouterr().out
         assert "nudge_interval: 0" in _read_config(_isolated_hermes_home)
 
+    def test_compression_compatibility_route_keys_are_recognized(
+        self, _isolated_hermes_home, capsys
+    ):
+        """Every documented compression-routing activation key is public config."""
+        set_config_value("auxiliary.compression.context_length", "272000")
+        set_config_value(
+            "auxiliary.compression.inherit_main_when_incompatible", "true"
+        )
+        set_config_value("auxiliary.compression.api_mode", "codex_responses")
+
+        assert "not a recognized config key" not in capsys.readouterr().out
+
+        import yaml
+
+        compression = yaml.safe_load(_read_config(_isolated_hermes_home))["auxiliary"][
+            "compression"
+        ]
+        assert compression["context_length"] == 272000
+        assert compression["inherit_main_when_incompatible"] is True
+        assert compression["api_mode"] == "codex_responses"
+
     def test_terminal_docker_cwd_mount_flag_goes_to_config_and_env(self, _isolated_hermes_home):
         set_config_value("terminal.docker_mount_cwd_to_workspace", "true")
         config = _read_config(_isolated_hermes_home)
