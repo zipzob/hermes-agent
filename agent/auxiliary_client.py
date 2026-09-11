@@ -3318,7 +3318,7 @@ def _try_anthropic(explicit_api_key: Optional[Union[str, Callable[[], str]]] = N
 
 _MAIN_RUNTIME_FIELDS = ("provider", "model", "base_url", "api_key", "api_mode", "auth_mode")
 _MAIN_RUNTIME_CONTEXT_FIELDS = _MAIN_RUNTIME_FIELDS + (
-    "requested_provider", "session_id", "cache_scope",
+    "requested_provider", "session_id", "cache_scope", "context_length", "compression_threshold_tokens",
 )
 
 
@@ -3338,7 +3338,10 @@ def _normalize_main_runtime(main_runtime: Optional[Dict[str, Any]]) -> Dict[str,
     normalized: Dict[str, Any] = {}
     for field in _MAIN_RUNTIME_CONTEXT_FIELDS:
         value = main_runtime.get(field)
-        if field == "api_key" and callable(value) and not isinstance(value, str):
+        if field in {"context_length", "compression_threshold_tokens"}:
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                normalized[field] = value
+        elif field == "api_key" and callable(value) and not isinstance(value, str):
             normalized[field] = value
         elif isinstance(value, str) and value.strip():
             normalized[field] = value.strip()
@@ -5698,9 +5701,81 @@ def resolve_provider_client(
 
 # ── Public API ──────────────────────────────────────────────────────────────
 
-def get_text_auxiliary_client(task: str = "", *, main_runtime: Optional[Dict[str, Any]] = None) -> Tuple[Optional[OpenAI], Optional[str]]:
+_CompressionRoute = Tuple[str, Optional[str], Optional[str], Optional[str], Optional[str]]
+
+
+class _CompressionRouteDecision(NamedTuple):
+    route: _CompressionRoute
+    inherited_main: bool
+
+
+def _compression_route_decision(
+    route: _CompressionRoute,
+    *,
+    main_runtime: Optional[Dict[str, Any]],
+) -> _CompressionRouteDecision:
+    """Resolve compression compatibility with explicit inheritance provenance."""
+    keep_configured = _CompressionRouteDecision(route, False)
+    config = _get_auxiliary_task_config("compression")
+    if config.get("inherit_main_when_incompatible") is not True:
+        return keep_configured
+    runtime = _normalize_main_runtime(main_runtime)
+
+    def _positive_int(value: Any) -> Optional[int]:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value if value > 0 else None
+        if isinstance(value, str):
+            try:
+                parsed = int(value.strip())
+            except ValueError:
+                return None
+            return parsed if parsed > 0 else None
+        return None
+
+    aux_context = _positive_int(config.get("context_length"))
+    required_context = _positive_int(runtime.get("compression_threshold_tokens"))
+    if required_context is None:
+        return keep_configured
+    if aux_context is not None and required_context < aux_context:
+        return keep_configured
+    if not runtime.get("provider") or not runtime.get("model"):
+        return keep_configured
+    inherited_route: _CompressionRoute = (
+        runtime["provider"],
+        runtime["model"],
+        runtime.get("base_url"),
+        runtime.get("api_key"),
+        runtime.get("api_mode"),
+    )
+    return _CompressionRouteDecision(inherited_route, True)
+
+
+def _route_compression_for_main_context(
+    route: Tuple[str, Optional[str], Optional[str], Optional[str], Optional[str]],
+    *,
+    main_runtime: Optional[Dict[str, Any]],
+) -> Tuple[str, Optional[str], Optional[str], Optional[str], Optional[str]]:
+    """Use the explicit main route when the static compressor cannot hold the local trigger."""
+    return _compression_route_decision(route, main_runtime=main_runtime).route
+
+
+def get_text_auxiliary_client(
+    task: str = "",
+    *,
+    main_runtime: Optional[Dict[str, Any]] = None,
+    route_info: Optional[Dict[str, Any]] = None,
+) -> Tuple[Optional[OpenAI], Optional[str]]:
     """Return (client, default_model_slug) for text-only aux tasks; ``task`` selects auxiliary.<task> overrides."""
-    provider, model, base_url, api_key, api_mode = _resolve_task_provider_model(task or None)
+    configured_route = _resolve_task_provider_model(task or "")
+    route = configured_route
+    if task == "compression":
+        decision = _compression_route_decision(route, main_runtime=main_runtime)
+        route = decision.route
+        if route_info is not None:
+            route_info["compression_inherited_main_for_context"] = decision.inherited_main
+    provider, model, base_url, api_key, api_mode = route
     return resolve_provider_client(
         provider, model=model, explicit_base_url=base_url, explicit_api_key=api_key,
         api_mode=api_mode, main_runtime=main_runtime,
@@ -7436,6 +7511,7 @@ def _resolve_call_client(
     api_key: Optional[str], resolved_provider: str, resolved_model: Optional[str],
     resolved_base_url: Optional[str], resolved_api_key: Optional[str],
     resolved_api_mode: Optional[str], main_runtime: Optional[Dict[str, Any]], async_mode: bool,
+    pinned_main_route: bool = False,
 ) -> _ResolvedAuxRoute:
     """Resolve the client for one aux call: vision chain, or cached text client with the
     explicit-provider fallback_chain / auto-chain rescue; RuntimeError when nothing is configured."""
@@ -7461,6 +7537,11 @@ def _resolve_call_client(
             task=task)
         effective_provider = _effective_provider_for_client(client, resolved_provider)
         if client is None:
+            if pinned_main_route:
+                raise RuntimeError(
+                    "Compression pinned main route is unavailable: "
+                    f"provider={resolved_provider} model={resolved_model}"
+                )
             # Explicit provider with no credentials: honor the task fallback_chain before
             # raising (fallback entries may use OAuth / credential-pool auth).
             _explicit = (resolved_provider or "").strip().lower()
@@ -7496,7 +7577,8 @@ _PreparedAuxRequest = NamedTuple("_PreparedAuxRequest", [
     ("resolved_provider", str), ("request_provider", str), ("resolved_model", Optional[str]),
     ("resolved_base_url", Optional[str]), ("resolved_api_key", Optional[str]),
     ("resolved_api_mode", Optional[str]), ("effective_timeout", float),
-    ("effective_extra_body", Dict[str, Any]), ("base_info", str)])
+    ("effective_extra_body", Dict[str, Any]), ("base_info", str),
+    ("pinned_main_route", bool)])
 
 
 def _prepare_aux_request(
@@ -7510,8 +7592,14 @@ def _prepare_aux_request(
     """Shared head of call_llm/async_call_llm: resolve route + client, publish it, build request kwargs.
     Sync-only: compression fast lane, per-request ``extra_headers``, and ``base_info`` falling
     back to the resolved base_url when the client exposes none."""
-    resolved_provider, resolved_model, resolved_base_url, resolved_api_key, resolved_api_mode = _resolve_task_provider_model(
-        task, provider, model, base_url, api_key)
+    configured_route = _resolve_task_provider_model(task or "", provider or "", model or "", base_url, api_key)
+    route = configured_route
+    pinned_main_route = False
+    if task == "compression" and not any((provider, model, base_url, api_key)):
+        decision = _compression_route_decision(route, main_runtime=main_runtime)
+        route = decision.route
+        pinned_main_route = decision.inherited_main
+    resolved_provider, resolved_model, resolved_base_url, resolved_api_key, resolved_api_mode = route
     if api_mode:
         resolved_api_mode = api_mode
     effective_extra_body = _get_task_extra_body(task)
@@ -7521,6 +7609,7 @@ def _prepare_aux_request(
         resolved_provider=resolved_provider, resolved_model=resolved_model,
         resolved_base_url=resolved_base_url, resolved_api_key=resolved_api_key,
         resolved_api_mode=resolved_api_mode, main_runtime=main_runtime, async_mode=async_mode,
+        pinned_main_route=pinned_main_route,
     )
     effective_timeout = _effective_aux_timeout(task, timeout)
     # Codex-Responses-only: real SDK clients reject an unrecognized ``no_progress_timeout``
@@ -7564,7 +7653,7 @@ def _prepare_aux_request(
     return _PreparedAuxRequest(
         client, final_model, kwargs, resolved_provider, request_provider, resolved_model,
         resolved_base_url, resolved_api_key, resolved_api_mode, effective_timeout,
-        effective_extra_body, base_info)
+        effective_extra_body, base_info, pinned_main_route)
 
 
 class _LadderStep(NamedTuple):
@@ -7626,6 +7715,7 @@ _LadderRoute = NamedTuple("_LadderRoute", [
     ("resolved_api_key", Optional[str]), ("resolved_api_mode", Optional[str]),
     ("final_model", Optional[str]), ("main_runtime", Optional[Dict[str, Any]]),
     ("route_info", Optional[Dict[str, str]]), ("timeout", Optional[float]),
+    ("pinned_main_route", bool),
 ])
 
 
@@ -7983,6 +8073,7 @@ def _aux_recovery_ladder(
     resolved_base_url: Optional[str], resolved_api_key: Optional[str],
     resolved_api_mode: Optional[str], final_model: Optional[str], max_tokens: Optional[int],
     main_runtime: Optional[Dict[str, Any]], route_info: Optional[Dict[str, str]],
+    pinned_main_route: bool = False,
 ):
     """Ordered recovery rungs after the primary request failed (generator): parameter
     strips → Nous heal/refresh → credential refresh/pool rotation → provider fallback.
@@ -7992,19 +8083,25 @@ def _aux_recovery_ladder(
     route = _LadderRoute(
         client, task, tag, async_mode, base_info, resolved_provider, resolved_model,
         resolved_base_url, resolved_api_key, resolved_api_mode, final_model, main_runtime, route_info,
-        kwargs.get("timeout"))
+        kwargs.get("timeout"), pinned_main_route)
     resp, first_err, kwargs = yield from _ladder_parameter_rungs(first_err, route, kwargs, max_tokens)
     if first_err is None:
         return resp
     client_is_nous = (resolved_provider == "nous"
                       or base_url_host_matches(base_info, "inference-api.nousresearch.com"))
-    resp, first_err = yield from _ladder_nous_rungs(first_err, route, kwargs, client_is_nous)
-    if first_err is None:
-        return resp
-    resp, first_err = yield from _ladder_credential_rungs(first_err, route, kwargs, client_is_nous)
-    if first_err is None:
-        return resp
-    resp = yield from _ladder_provider_fallback(first_err, route)
+    if not route.pinned_main_route:
+        resp, nous_err = yield from _ladder_nous_rungs(first_err, route, kwargs, client_is_nous)
+        if nous_err is None:
+            return resp
+        first_err = nous_err
+    if not route.pinned_main_route:
+        resp, credential_err = yield from _ladder_credential_rungs(first_err, route, kwargs, client_is_nous)
+        if credential_err is None:
+            return resp
+        first_err = credential_err
+    resp = None
+    if not route.pinned_main_route:
+        resp = yield from _ladder_provider_fallback(first_err, route)
     if resp is not None:
         return resp
     # Connection/timeout errors poison the cached client (closed transport, half-read
@@ -8199,7 +8296,8 @@ def _start_recovery_ladder(
         resolved_model=req.resolved_model, resolved_base_url=req.resolved_base_url,
         resolved_api_key=req.resolved_api_key, resolved_api_mode=req.resolved_api_mode,
         final_model=req.final_model, max_tokens=retry_kwargs["max_tokens"],
-        main_runtime=retry_kwargs["main_runtime"], route_info=route_info)
+        main_runtime=retry_kwargs["main_runtime"], route_info=route_info,
+        pinned_main_route=req.pinned_main_route)
 
 
 def _call_llm_impl(
@@ -8460,7 +8558,12 @@ def get_async_text_auxiliary_client(task: str = "", *, main_runtime: Optional[Di
     (AsyncCodexAuxiliaryClient, model) which wraps the Responses API.
     Returns (None, None) when no provider is available.
     """
-    provider, model, base_url, api_key, api_mode = _resolve_task_provider_model(task or None)
+    route = _resolve_task_provider_model(task or "")
+    if task == "compression":
+        route = _compression_route_decision(
+            route, main_runtime=main_runtime
+        ).route
+    provider, model, base_url, api_key, api_mode = route
     return resolve_provider_client(
         provider,
         model=model,

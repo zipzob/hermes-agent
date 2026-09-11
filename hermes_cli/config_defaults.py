@@ -727,7 +727,18 @@ DEFAULT_CONFIG = {
         # (Codex/Responses streams only): seconds without a substantive event before the stream
         # fails fast; None = built-in 60s default. Independent of "timeout" (the overall request
         # budget) — raising "timeout" alone does not widen this window. See #108104.
-        "compression": _aux(120, no_progress_timeout=None),
+        # are ignored. Compression: raise timeout for local models. With an explicit
+        # context_length and inherit_main_when_incompatible=true, the main route becomes the
+        # local-summary fallback only when this static route cannot hold the main model's resolved
+        # compression trigger. Native provider compaction still gets the first attempt when supported.
+        # no_progress_timeout (Codex/Responses streams only) is independent of the total request budget.
+        "compression": _aux(
+            120,
+            context_length=0,
+            api_mode="",
+            inherit_main_when_incompatible=False,
+            no_progress_timeout=None,
+        ),
         "skills_hub": _aux(30),
         "approval": _aux(30),   # classifier — a fast/cheap model is recommended
         # /review reviewer: a full subagent on the async delegation rail, credentials resolved like

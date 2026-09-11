@@ -294,12 +294,12 @@ def test_feasibility_check_passes_live_main_runtime():
     agent.model = "gpt-5.4"
     agent.provider = "openai-codex"
     agent.base_url = "https://chatgpt.com/backend-api/codex"
-    agent.api_key = "codex-token"
+    agent.api_key = None
     agent.api_mode = "codex_responses"
 
     mock_client = MagicMock()
     mock_client.base_url = "https://chatgpt.com/backend-api/codex"
-    mock_client.api_key = "codex-token"
+    mock_client.api_key = None
 
     with patch("agent.auxiliary_client.get_text_auxiliary_client", return_value=(mock_client, "gpt-5.4")) as mock_get_client, \
          patch("agent.model_metadata.get_model_context_length", return_value=200_000):
@@ -312,12 +312,105 @@ def test_feasibility_check_passes_live_main_runtime():
             "model": "gpt-5.4",
             "provider": "openai-codex",
             "base_url": "https://chatgpt.com/backend-api/codex",
-            "api_key": "codex-token",
+            "api_key": "",
             "api_mode": "codex_responses",
             "auth_mode": "",
             "session_id": "",
+            "context_length": 200_000,
+            "compression_threshold_tokens": 100_000,
         },
+        route_info={},
     )
+
+
+def test_compatibility_routed_main_ignores_static_aux_context_override():
+    """The Mini window selects the route; it must not be applied to inherited Sol."""
+    agent = _make_agent(main_context=900_000, threshold_percent=0.85)
+    agent.model = "gpt-5.6-sol-900k"
+    agent.provider = "openai-codex"
+    agent.base_url = "https://chatgpt.com/backend-api/codex"
+    agent.api_key = None
+    agent.api_mode = "codex_responses"
+    agent._aux_compression_context_length_config = 272_000
+    client = MagicMock(
+        base_url="https://chatgpt.com/backend-api/codex",
+        api_key=None,
+    )
+    static_route = (
+        "openai-codex",
+        "gpt-5.4-mini",
+        "https://chatgpt.com/backend-api/codex",
+        None,
+        "codex_responses",
+    )
+    messages = []
+    agent._emit_status = messages.append
+
+    def resolve_routed_client(_task, *, main_runtime, route_info):
+        assert main_runtime["compression_threshold_tokens"] == 765_000
+        route_info["compression_inherited_main_for_context"] = True
+        return client, agent.model
+
+    with (
+        patch(
+            "agent.auxiliary_client._resolve_task_provider_model",
+            return_value=static_route,
+        ),
+        patch(
+            "agent.auxiliary_client._get_auxiliary_task_config",
+            return_value={
+                "inherit_main_when_incompatible": True,
+                "context_length": 272_000,
+            },
+        ),
+        patch(
+            "agent.auxiliary_client.get_text_auxiliary_client",
+            side_effect=resolve_routed_client,
+        ),
+        patch(
+            "agent.model_metadata.get_model_context_length",
+            return_value=272_000,
+        ) as context_lookup,
+    ):
+        agent._check_compression_model_feasibility()
+
+    assert agent.context_compressor.threshold_tokens == 765_000
+    assert messages == []
+    context_lookup.assert_not_called()
+
+
+def test_unavailable_inherited_main_does_not_use_configured_fallback():
+    agent = _make_agent(main_context=900_000, threshold_percent=0.85)
+    agent.model = "gpt-5.6-sol-900k"
+    agent.provider = "openai-codex"
+    agent._aux_compression_context_length_config = 272_000
+    def unavailable_main(_task, *, main_runtime, route_info):
+        route_info["compression_inherited_main_for_context"] = True
+        return None, None
+
+    messages = []
+    with (
+        patch(
+            "agent.auxiliary_client.get_text_auxiliary_client",
+            side_effect=unavailable_main,
+        ),
+        patch(
+            "agent.auxiliary_client._try_configured_fallback_for_unavailable_client",
+        ) as configured_fallback,
+        patch(
+            "agent.model_metadata.get_model_context_length",
+            return_value=272_000,
+        ) as context_lookup,
+    ):
+        agent._emit_status = messages.append
+        agent._check_compression_model_feasibility()
+
+    assert agent.context_compressor.threshold_tokens == 765_000
+    assert len(messages) == 1
+    assert "No auxiliary LLM provider" in messages[0]
+    assert agent._compression_warning is not None
+    configured_fallback.assert_not_called()
+    context_lookup.assert_not_called()
 
 
 @patch("agent.model_metadata.get_model_context_length", return_value=1_000_000)

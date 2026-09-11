@@ -1993,13 +1993,22 @@ def check_compression_model_feasibility(agent: Any) -> None:
             _aux_cfg_provider, _, _, _, _ = _resolve_task_provider_model("compression")
         except Exception:
             _aux_cfg_provider = ""
-        client, aux_model = get_text_auxiliary_client("compression", main_runtime=agent._current_main_runtime())
-        if client is None or not aux_model:
+        route_info: Dict[str, Any] = {}
+        client, aux_model = get_text_auxiliary_client(
+            "compression",
+            main_runtime=agent._current_main_runtime(),
+            route_info=route_info,
+        )
+        if (
+            (client is None or not aux_model)
+            and not route_info.get("compression_inherited_main_for_context")
+        ):
             fb_client, fb_model, fb_label = _try_configured_fallback_for_unavailable_client(
                 "compression", _aux_cfg_provider
             )
             if fb_client is not None and fb_model:
                 client, aux_model = fb_client, fb_model
+                route_info["compression_inherited_main_for_context"] = False
                 if "(" in fb_label and fb_label.endswith(")"):
                     _aux_cfg_provider = fb_label.rsplit("(", 1)[1][:-1]
         if client is None or not aux_model:
@@ -2028,7 +2037,9 @@ def check_compression_model_feasibility(agent: Any) -> None:
             _aux_cfg_provider if _aux_cfg_provider and _aux_cfg_provider != "auto" else getattr(agent, "provider", "")
         )
         _aux_cfg_ctx = getattr(agent, "_aux_compression_context_length_config", None)
-        if _aux_cfg_ctx is None and _aux_inherits_main_route(agent, aux_model, aux_base_url):
+        if route_info.get("compression_inherited_main_for_context") or (
+            _aux_cfg_ctx is None and _aux_inherits_main_route(agent, aux_model, aux_base_url)
+        ):
             # Same model on the same route: reuse the main model's already-resolved window (which honours
             # model.context_length / provider pins). Re-resolving from scratch lost the pin and auto-lowered
             # the session threshold to a catch-all catalog value (#89500, #45519).
