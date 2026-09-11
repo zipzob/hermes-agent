@@ -124,11 +124,7 @@ class TestToolProgressScrollback:
 
 
     def test_verbose_mode_commits_every_call(self):
-        """In 'verbose' mode, consecutive same-tool calls each commit a line.
-
-        Mirrors 'all' (no consecutive-repeat suppression — that is 'new'-only),
-        so a multi-step turn builds a full scrollable tool history.
-        """
+        """Verbose mode commits full input and completion for every call."""
         cli = _make_cli(tool_progress="verbose")
         with patch.object(_cli_mod, "_cprint") as mock_print:
             cli._on_tool_progress("tool.started", "terminal", "echo one", {"command": "echo one"})
@@ -136,7 +132,11 @@ class TestToolProgressScrollback:
             cli._on_tool_progress("tool.started", "terminal", "echo two", {"command": "echo two"})
             cli._on_tool_progress("tool.completed", "terminal", None, None, duration=0.1, is_error=False)
 
-        assert mock_print.call_count == 2
+        assert mock_print.call_count == 4
+        printed = "\n".join(str(call.args[0]) for call in mock_print.call_args_list)
+        assert printed.count("terminal command:") == 2
+        assert "echo one" in printed
+        assert "echo two" in printed
 
     def test_verbose_mode_prints_full_multiline_terminal_command(self):
         cli = _make_cli(tool_progress="verbose")

@@ -91,7 +91,8 @@ class TestContinuousLoopStopPhrase:
         with patch.object(v, "_continuous_active", True), \
              patch.object(v, "_continuous_recorder", _FakeRecorder()), \
              patch.object(v, "_continuous_callbacks",
-                          (delivered.append, None, lambda: silent_limit_fired.append(True), None)), \
+                          (delivered.append, None, lambda: silent_limit_fired.append(True), None,
+                           None, None, None, None)), \
              patch.object(v, "_continuous_no_speech_count", 0), \
              patch.object(v, "transcribe_recording", return_value=fake_result), \
              patch.object(v, "_play_beep", lambda **kw: None), \
@@ -139,7 +140,8 @@ class TestContinuousLoopStopPhraseSignal:
         with patch.object(v, "_continuous_active", True), \
              patch.object(v, "_continuous_recorder", self._FakeRecorder()), \
              patch.object(v, "_continuous_callbacks",
-                          (delivered.append, None, lambda: silent_limit_fired.append(True), on_stop_phrase)), \
+                          (delivered.append, None, lambda: silent_limit_fired.append(True), on_stop_phrase,
+                           None, None, None, None)), \
              patch.object(v, "_continuous_no_speech_count", 0), \
              patch.object(v, "transcribe_recording", return_value=fake_result), \
              patch.object(v, "_play_beep", lambda **kw: None), \

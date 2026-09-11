@@ -440,24 +440,45 @@ class HindsightMemoryProvider(MemoryProvider):
         config_path = Path(hermes_home) / "hindsight" / "config.json"
         atomic_json_write(config_path, {**read_json_or_empty(config_path), **values}, mode=0o600)
 
+    def get_status_config(self, _config):
+        """Return the effective external config without credentials or user identifiers."""
+        cfg = _load_config()
+        visible = (
+            "mode",
+            "llm_provider",
+            "llm_model",
+            "bank_id",
+            "bank_id_template",
+            "recall_budget",
+            "memory_mode",
+            "auto_retain",
+            "auto_recall",
+            "idle_timeout",
+            "shared_local_inference",
+        )
+        return {key: cfg[key] for key in visible if key in cfg}
+
     def post_setup(self, hermes_home: str, config: dict) -> None:
         """Custom setup wizard — installs only the deps needed for the selected mode."""
         from .setup import run_setup
         run_setup(self, hermes_home, config)
 
     def get_config_schema(self):
+        cfg = _load_config()
+        llm_provider = str(cfg.get("llm_provider", "openai") or "openai").strip().lower()
+        llm_api_key_required = llm_provider not in {"ollama", "lmstudio", "openai_compatible"}
         return [
             {"key": "mode", "description": "Connection mode", "default": "cloud", "choices": ["cloud", "local_embedded", "local_external"]},
             # Cloud mode
             {"key": "api_url", "description": "Hindsight Cloud API URL", "default": _DEFAULT_API_URL, "when": {"mode": "cloud"}},
-            {"key": "api_key", "description": "Hindsight Cloud API key", "secret": True, "env_var": "HINDSIGHT_API_KEY", "url": "https://ui.hindsight.vectorize.io", "when": {"mode": "cloud"}},
+            {"key": "api_key", "description": "Hindsight Cloud API key", "secret": True, "required": True, "env_var": "HINDSIGHT_API_KEY", "url": "https://ui.hindsight.vectorize.io", "when": {"mode": "cloud"}},
             # Local external mode
             {"key": "api_url", "description": "Hindsight API URL", "default": _DEFAULT_LOCAL_URL, "when": {"mode": "local_external"}},
-            {"key": "api_key", "description": "API key (optional)", "secret": True, "env_var": "HINDSIGHT_API_KEY", "when": {"mode": "local_external"}},
+            {"key": "api_key", "description": "API key (optional)", "secret": True, "required": False, "env_var": "HINDSIGHT_API_KEY", "when": {"mode": "local_external"}},
             # Local embedded mode
             {"key": "llm_provider", "description": "LLM provider", "default": "openai", "choices": ["openai", "anthropic", "gemini", "groq", "openrouter", "minimax", "ollama", "lmstudio", "openai_compatible"], "when": {"mode": "local_embedded"}},
             {"key": "llm_base_url", "description": "Endpoint URL (e.g. http://192.168.1.10:8080/v1)", "default": "", "when": {"mode": "local_embedded", "llm_provider": "openai_compatible"}},
-            {"key": "llm_api_key", "description": "LLM API key (optional for openai_compatible)", "secret": True, "env_var": "HINDSIGHT_LLM_API_KEY", "when": {"mode": "local_embedded"}},
+            {"key": "llm_api_key", "description": "LLM API key (optional for keyless local endpoints)", "secret": True, "required": llm_api_key_required, "env_var": "HINDSIGHT_LLM_API_KEY", "when": {"mode": "local_embedded"}},
             {"key": "llm_model", "description": "LLM model", "default": "gpt-4o-mini", "default_from": {"field": "llm_provider", "map": _PROVIDER_DEFAULT_MODELS}, "when": {"mode": "local_embedded"}},
             {"key": "llm_provider", "description": "LLM provider used by the external Hindsight service (required only for local inference coordination)", "default": "", "choices": ["", "ollama", "openai", "anthropic", "gemini", "groq", "openrouter", "minimax", "lmstudio", "openai_compatible"], "when": {"mode": "local_external"}},
             {"key": "bank_id", "description": "Memory bank name (static fallback when bank_id_template is unset)", "default": "hermes"},

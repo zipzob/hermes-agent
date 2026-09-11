@@ -513,6 +513,9 @@ def test_refresh_error_body_bounded_and_readable_with_real_client():
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
+            request_length = int(self.headers.get("Content-Length", "0"))
+            if request_length:
+                self.rfile.read(request_length)
             self.send_response(400)
             self.send_header("Content-Length", str(len(big_body)))
             self.end_headers()

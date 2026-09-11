@@ -57,6 +57,81 @@ def test_cmd_setup_generic_choice_cancel_writes_nothing(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def test_hindsight_local_embedded_dependencies_include_full_runtime(tmp_path, monkeypatch):
+    (tmp_path / "hindsight").mkdir()
+    (tmp_path / "hindsight" / "config.json").write_text(
+        '{"mode": "local_embedded"}', encoding="utf-8"
+    )
+    monkeypatch.setattr(memory_setup, "get_hermes_home", lambda: tmp_path)
+
+    dependencies = memory_setup._provider_pip_dependencies(
+        "hindsight", ["hindsight-client==0.6.1"]
+    )
+
+    assert dependencies == ["hindsight-client==0.6.1", "hindsight-all"]
+
+
+def test_hindsight_cloud_dependencies_do_not_install_embedded_runtime(tmp_path, monkeypatch):
+    (tmp_path / "hindsight").mkdir()
+    (tmp_path / "hindsight" / "config.json").write_text(
+        '{"mode": "cloud"}', encoding="utf-8"
+    )
+    monkeypatch.setattr(memory_setup, "get_hermes_home", lambda: tmp_path)
+
+    dependencies = memory_setup._provider_pip_dependencies(
+        "hindsight", ["hindsight-client==0.6.1"]
+    )
+
+    assert dependencies == ["hindsight-client==0.6.1"]
+
+
+def test_cmd_status_filters_requirements_by_effective_mode(capsys, monkeypatch):
+    class Provider:
+        def get_status_config(self, _config):
+            return {"mode": "local_embedded", "llm_provider": "ollama"}
+
+        def get_config_schema(self):
+            return [
+                {
+                    "key": "api_key",
+                    "env_var": "HINDSIGHT_API_KEY",
+                    "when": {"mode": "cloud"},
+                },
+                {
+                    "key": "llm_api_key",
+                    "env_var": "HINDSIGHT_LLM_API_KEY",
+                    "required": False,
+                    "when": {"mode": "local_embedded"},
+                },
+            ]
+
+        def is_available(self):
+            return False
+
+        def unavailable_reason(self):
+            return "Install hindsight-all to restore local embedded memory."
+
+    monkeypatch.setattr(
+        "hermes_cli.config.load_config",
+        lambda: {"memory": {"provider": "hindsight"}},
+    )
+    monkeypatch.setattr(memory_setup, "_get_available_providers", lambda: [
+        ("hindsight", "local", Provider())
+    ])
+    monkeypatch.setattr(
+        "hermes_cli.tools_config._get_platform_tools",
+        lambda *_args, **_kwargs: ["memory"],
+    )
+    monkeypatch.setattr("tools.memory_tool.check_memory_requirements", lambda: True)
+
+    memory_setup.cmd_status(SimpleNamespace())
+
+    output = capsys.readouterr().out
+    assert "Install hindsight-all" in output
+    assert "HINDSIGHT_API_KEY" not in output
+    assert "HINDSIGHT_LLM_API_KEY" not in output
+
+
 
 
 

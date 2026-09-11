@@ -286,8 +286,31 @@ def _render_sessions(ctx):
     except Exception:
         gateway_rows = []
 
-    if gateway_rows:
-        _kv("Active:", f"{len(gateway_rows)} session(s)")
+    try:
+        from hermes_cli.active_sessions import (
+            active_session_registry_snapshot,
+            format_age,
+            resolve_max_concurrent_sessions,
+        )
+
+        held = active_session_registry_snapshot()
+        cap = resolve_max_concurrent_sessions(ctx.config)
+    except Exception:
+        held = []
+        cap = None
+
+    session_ids: set[str] = set()
+    anonymous_count = 0
+    for entry in [*gateway_rows, *held]:
+        session_id = entry.get("session_id") or entry.get("id") or entry.get("session_key")
+        if session_id:
+            session_ids.add(str(session_id))
+        else:
+            anonymous_count += 1
+    active_count = len(session_ids) + anonymous_count
+
+    if active_count:
+        _kv("Active:", f"{active_count} session(s)")
         freshest = max((float(r.get("last_active") or 0) for r in gateway_rows), default=0.0)
         if freshest > 0:
             from hermes_cli.timefmt import relative_time
@@ -306,22 +329,48 @@ def _render_sessions(ctx):
     # desktop/TUI and the messaging gateway, so the surface that gets rejected is rarely the one
     # holding the slots — without this the only way to find out is reading
     # runtime/active_sessions.json by hand.
-    try:
-        from hermes_cli.active_sessions import (
-            active_session_registry_snapshot, format_age, resolve_max_concurrent_sessions)
-        cap = resolve_max_concurrent_sessions(ctx.config)
-    except Exception:
-        cap = None
     if cap:
-        try:
-            held = active_session_registry_snapshot()
-        except Exception:
-            held = []
         _kv("Slots:", color(f"{len(held)}/{cap} in use", Colors.YELLOW if len(held) >= cap else Colors.GREEN))
         now = time.time()
         for entry in sorted(held, key=lambda e: e.get("started_at") or 0):
             age = format_age(now - float(entry.get("started_at") or now))
             print(f"                {entry.get('surface') or 'unknown':<17} {entry.get('session_id') or '?':<24} {age}")
+
+
+def _render_provider_admission(ctx):
+    del ctx
+    _section("Provider Admission")
+    try:
+        from hermes_cli.provider_admission import provider_admission_snapshot
+
+        entries = provider_admission_snapshot()
+    except Exception:
+        entries = []
+
+    active = [entry for entry in entries if entry.get("state") == "active"]
+    queued = [entry for entry in entries if entry.get("state") == "queued"]
+    _kv("Active:", f"{len(active)} request(s)")
+    _kv("Queued:", f"{len(queued)} request(s)")
+
+    now = time.time()
+    for entry in sorted(
+        [*active, *queued],
+        key=lambda item: (item.get("state") != "active", item.get("created_at") or 0),
+    ):
+        state = str(entry.get("state") or "unknown")
+        request_class = str(entry.get("request_class") or "background").replace("_", " ")
+        provider = str(entry.get("provider") or "provider")
+        model = str(entry.get("model") or "unknown-model")
+        session_id = str(entry.get("session_id") or "")
+        suffix = f"…{session_id[-6:]}" if len(session_id) > 6 else session_id or "?"
+        raw_metadata = entry.get("metadata")
+        metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+        attempt = max(1, int(metadata.get("attempt") or 1))
+        elapsed = max(0, int(now - float(entry.get("created_at") or now)))
+        print(
+            f"  {state:<6}  {request_class} request — {provider}/{model}; "
+            f"session {suffix} — attempt {attempt}, {elapsed}s"
+        )
 
 
 def _render_deep(ctx):
@@ -357,7 +406,7 @@ def _render_footer(ctx):
 _SECTIONS = (
     _render_header, _render_environment, _render_api_keys, _render_auth_providers, _render_nous_gateway,
     _render_apikey_providers, _render_terminal, _render_platforms, _render_gateway, _render_cron,
-    _render_sessions, _render_deep, _render_footer)
+    _render_sessions, _render_provider_admission, _render_deep, _render_footer)
 
 
 def show_status(args):

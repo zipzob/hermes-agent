@@ -32,6 +32,13 @@ describe('constants', () => {
     expect(hotkey?.[1]).toBe('redraw / repaint')
   })
 
+  it('documents terminal-dependent link activation', () => {
+    const hotkey = HOTKEYS.find(([, description]) => description.includes('open link'))
+
+    expect(hotkey?.[0]).toContain('click')
+    expect(hotkey?.[0]).toContain('Ctrl/Cmd')
+  })
+
   it('TOOL_VERBS maps known tools (verb-only, no emoji)', () => {
     expect(TOOL_VERBS.terminal).toBe('terminal')
     expect(TOOL_VERBS.read_file).toBe('reading')

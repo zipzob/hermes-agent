@@ -81,12 +81,14 @@ class TestSetMessageApiContent:
 class TestPrologueRowAddressedBackfill:
     """The prologue gate: backfill iff a durable row exists for this dict."""
 
-    def test_no_row_id_and_no_compaction_writes_nothing(self):
+    def test_no_row_id_and_no_compaction_writes_nothing(self, tmp_path):
         """The normal path: the row does not exist yet and the crash persist
         writes it WITH the sidecar. A backfill here has no row to address and
         would have to guess — so it must not run at all."""
         agent = _FakeAgent()
-        agent._session_db = MagicMock()
+        session_db = MagicMock()
+        session_db.db_path = tmp_path / "state.db"
+        agent._session_db = session_db
         with patch(
             "hermes_cli.plugins.invoke_hook",
             return_value=[{"context": "PLUGIN-CTX"}],
@@ -97,8 +99,8 @@ class TestPrologueRowAddressedBackfill:
             ctx.messages[ctx.current_turn_user_idx]["api_content"]
             == "hello\n\nPLUGIN-CTX"
         )
-        agent._session_db.set_message_api_content.assert_not_called()
-        agent._session_db.set_latest_user_api_content.assert_not_called()
+        session_db.set_message_api_content.assert_not_called()
+        session_db.set_latest_user_api_content.assert_not_called()
 
 class _RealPersistenceAgent(SessionPersistenceMixin, _FakeAgent):
     """Stand-in agent with the real SessionPersistenceMixin flush implementation."""

@@ -49,7 +49,9 @@ def _kernel_config(**overrides):
     """Pin code_execution config; strict mode keeps the test hermetic."""
     config = {"mode": "strict", "kernel_mode": "session", "timeout": 30}
     config.update(overrides)
-    with patch("tools.code_execution_tool._load_config", return_value=config):
+    with patch("tools.code_execution_tool._load_config", return_value=config), patch(
+        "tools.approval._get_delegated_child_auto_approve", return_value=True
+    ):
         yield
 
 

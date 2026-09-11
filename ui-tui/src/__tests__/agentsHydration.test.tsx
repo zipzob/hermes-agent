@@ -37,9 +37,7 @@ it('does not undo an acknowledged pause when opening status resolves late', asyn
   )
 
   try {
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith('delegation.status', { session_id: 'session-a' })
-    )
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith('delegation.status', { session_id: 'session-a' }))
     stdin.write('p')
     await vi.waitFor(() => expect($delegationState.get().paused).toBe(true))
     resolveStatus({ paused: false, max_spawn_depth: 4 })

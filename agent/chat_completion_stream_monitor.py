@@ -39,6 +39,12 @@ class StreamingWaitMonitor:
     def _heartbeat(self, waiting_secs: int) -> None:
         """Gateway inactivity heartbeat: the start-to-first-chunk gap (thinking,
         local prefill) can exceed the gateway timeout."""
+        agent = getattr(self, "agent")
+        if getattr(agent, "api_mode", "") == "codex_responses":
+            # Codex streaming delegates to an inner _NonStreamRequest whose
+            # request-local TTFB/event-idle state owns the accurate notice.
+            agent._touch_activity(f"waiting for Codex provider response ({waiting_secs}s)")
+            return
         if waiting_secs >= 60.0:
             # No chunks for 60s+: say WHAT the wait is and WHEN recovery kicks in —
             # once per silence, not every heartbeat (#92550).

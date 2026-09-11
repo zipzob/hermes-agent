@@ -253,3 +253,78 @@ def test_show_status_reports_gateway_session_last_activity(monkeypatch, capsys, 
     assert "Active:       2 session(s)" in output
     assert "Last activity:" in output
     assert "1m ago" in output
+
+
+def test_render_sessions_counts_live_tui_process_leases(monkeypatch, capsys, tmp_path):
+    from hermes_cli import active_sessions, status as status_mod
+    import hermes_state
+
+    class _EmptyDB:
+        def list_gateway_sessions(self, active_only=True):
+            return []
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(status_mod, "get_hermes_home", lambda: tmp_path)
+    monkeypatch.setattr(hermes_state, "SessionDB", _EmptyDB)
+    monkeypatch.setattr(
+        active_sessions,
+        "active_session_registry_snapshot",
+        lambda: [
+            {"surface": "tui", "session_id": "disposable-a"},
+            {"surface": "tui", "session_id": "disposable-b"},
+        ],
+    )
+
+    status_mod._render_sessions(SimpleNamespace(config={}))
+
+    assert "Active:       2 session(s)" in capsys.readouterr().out
+
+
+def test_render_provider_admission_is_a_distinct_owned_activity_section(
+    monkeypatch, capsys
+):
+    from hermes_cli import provider_admission, status as status_mod
+
+    now = 2_000.0
+    monkeypatch.setattr(status_mod.time, "time", lambda: now)
+    monkeypatch.setattr(
+        provider_admission,
+        "provider_admission_snapshot",
+        lambda: [
+            {
+                "state": "active",
+                "provider": "openai-codex",
+                "model": "gpt-5.6-sol",
+                "request_class": "foreground",
+                "session_id": "20260908_162215_70dd49",
+                "metadata": {"attempt": 2},
+                "created_at": now - 12,
+                "lane": "must-not-render-account-lane",
+            },
+            {
+                "state": "queued",
+                "provider": "openai-codex",
+                "model": "gpt-5.4-mini",
+                "request_class": "compression",
+                "session_id": "20260908_162027_386ece",
+                "metadata": {"attempt": 1},
+                "created_at": now - 7,
+                "lane": "must-not-render-account-lane",
+            },
+        ],
+    )
+
+    status_mod._render_provider_admission(SimpleNamespace(config={}))
+
+    output = capsys.readouterr().out
+    assert "◆ Provider Admission" in output
+    assert "Active:       1 request(s)" in output
+    assert "Queued:       1 request(s)" in output
+    assert "active  foreground request" in output
+    assert "openai-codex/gpt-5.6-sol" in output
+    assert "session …70dd49 — attempt 2, 12s" in output
+    assert "queued  compression request" in output
+    assert "session …386ece — attempt 1, 7s" in output
+    assert "must-not-render-account-lane" not in output

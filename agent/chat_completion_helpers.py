@@ -50,6 +50,9 @@ from tools.terminal_tool_lifecycle import is_persistent_env
 from utils import base_url_host_matches, base_url_hostname, env_float, env_int
 
 logger = logging.getLogger(__name__)
+_PROVIDER_REQUEST_CONTEXT: contextvars.ContextVar[Optional[Dict[str, Any]]] = (
+    contextvars.ContextVar("provider_request_context", default=None)
+)
 _OPENROUTER_PROVIDER_SORT_VALUES = {"throughput", "latency", "price"}
 _PROVIDER_STREAM_ERROR_FINISH_REASONS = {"error", "error_finish"}
 _PROVIDER_STREAM_SSE_FIELDS = {"event", "data", "id", "retry"}
@@ -517,6 +520,85 @@ def _estimate_chunk_bytes(chunk: Any) -> int:
         else:
             _add(getattr(chunk, "delta", None), "text", "partial_json")
     return size
+
+
+def _codex_wait_notice_recovery(*, stale_timeout: float, ttfb_enabled: bool, ttfb_timeout: float,
+    last_event_ts: Optional[float], last_progress_ts: Optional[float],
+    retry_started_ts: Optional[float], call_start: float, idle_enabled: bool,
+    idle_timeout: float, idle_requires_progress: bool, elapsed: float) -> str:
+    """Describe the earliest enabled Codex watchdog on the call timeline."""
+    deadlines: list[float] = []
+    if math.isfinite(stale_timeout):
+        deadlines.append(stale_timeout)
+    if retry_started_ts is not None:
+        if ttfb_enabled and math.isfinite(ttfb_timeout):
+            deadlines.append(max(0.0, retry_started_ts - call_start) + ttfb_timeout)
+    elif last_event_ts is None:
+        if ttfb_enabled and math.isfinite(ttfb_timeout):
+            deadlines.append(ttfb_timeout)
+    elif (not idle_requires_progress or last_progress_ts is not None) and idle_enabled and math.isfinite(idle_timeout):
+        deadlines.append(max(0.0, last_event_ts - call_start) + idle_timeout)
+    if not deadlines or min(deadlines) <= elapsed:
+        return ""
+    return f"; auto-reconnect at {int(min(deadlines))}s"
+
+
+def _provider_wait_identity(
+    *, request_class: str, session_id: str, attempt: int
+) -> str:
+    request_label = str(request_class or "foreground").strip().replace("_", " ")
+    session = str(session_id or "process-unknown")
+    suffix = session[-6:] if len(session) > 6 else session
+    return (
+        f"{request_label} request in session …{suffix} — "
+        f"attempt {max(1, int(attempt))}"
+    )
+
+
+@contextlib.contextmanager
+def provider_request_context(
+    *, request_class: str, session_id: str, attempt: int
+):
+    token = _PROVIDER_REQUEST_CONTEXT.set(
+        {
+            "request_class": request_class,
+            "session_id": session_id,
+            "attempt": attempt,
+        }
+    )
+    try:
+        yield
+    finally:
+        _PROVIDER_REQUEST_CONTEXT.reset(token)
+
+
+def _current_provider_request_context(agent: Any) -> Dict[str, Any]:
+    context = _PROVIDER_REQUEST_CONTEXT.get() or {}
+    request_class = str(context.get("request_class") or "")
+    if not request_class:
+        request_class = (
+            "delegation"
+            if getattr(agent, "is_subagent", False)
+            or getattr(agent, "platform", "") == "subagent"
+            else "foreground"
+        )
+    return {
+        "request_class": request_class,
+        "session_id": str(
+            context.get("session_id") or getattr(agent, "session_id", "")
+        ),
+        "attempt": max(1, int(context.get("attempt") or 1)),
+    }
+
+
+def _current_provider_wait_identity(agent: Any) -> str:
+    context = _current_provider_request_context(agent)
+    return _provider_wait_identity(
+        request_class=str(context["request_class"]),
+        session_id=str(context["session_id"]),
+        attempt=int(context["attempt"]),
+    )
+
 
 
 # ── Cross-turn stale-call circuit breaker (#58962) ─────────────────────
@@ -2683,6 +2765,7 @@ class _StreamingCall(StreamingWaitMonitor):
         self.agent = agent
         self.api_kwargs = api_kwargs
         self.on_first_delta = on_first_delta
+        self.request_identity = _current_provider_wait_identity(agent)
         self.worker = None  # request thread; None in inline mode
         self.result = {"response": None, "error": None, "partial_tool_names": []}
         self.clients = _RequestClientRegistry(agent)
