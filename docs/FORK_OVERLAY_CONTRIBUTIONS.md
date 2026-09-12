@@ -77,3 +77,108 @@ The candidate is not installed or published by creating these refs. Promoting th
 checked-out live `main`, publishing `origin/main`, and gracefully restarting old
 sessions are distinct operations. Never delete live admission-registry entries or
 force-kill sessions merely to make a handoff appear complete.
+
+## Goal continuity and interactive UI repairs — 2026-09-12
+
+Each repair remains on a focused topic branch. Commit bodies carry the local
+problem/root-cause/fix/verification record; this ledger provides the cross-topic
+map. `.git/machete` records stack topology only and is not the rationale store.
+
+### Per-run goal-budget continuation
+
+- **Branch / commit:** `fix/goal-budget-continuation-20260912` —
+  `750f519f46c02cfc22ada06bcbe97b23b02c33b9`.
+- **Symptom:** hitting `agent.max_turns` looked like a voluntary final response and
+  `/goal` remained idle until another user message arrived.
+- **Root cause:** per-run iteration exhaustion was finalized as ordinary output;
+  post-turn goal logic could therefore judge it as a completed turn rather than an
+  incomplete lifecycle outcome.
+- **Contract:** propagate bounded budget-exhaustion metadata; give failure and
+  interruption precedence; continue directly without judging or spending a goal
+  turn; drain queued user input first; never forward transcript or credential data.
+- **Verification:** 38 focused lifecycle tests and 138 related goal tests passed;
+  the exact integrated candidate passed the canonical repository runner with
+  retries disabled. The accompanying TUI compaction-status change passed 111 tests,
+  typecheck, and build.
+
+### Desktop topmost Escape ownership
+
+- **Branch / commits:** `contrib/desktop-input-layer-ownership` —
+  `c7d79d060a9f664ad9ca3a15851f2ca9f7b9347b` and
+  `a2bdaac163f62c717ad46cac8e22a37a2aca373d`.
+- **Symptom:** Escape in a foreground subgoal/dialog could deny a background
+  approval.
+- **Root cause:** approval used a capture-phase window listener and had no shared
+  notion of which mounted interaction layer owned Escape.
+- **Contract:** mounted modal content outranks approval; shared Dialog, Sheet,
+  session picker, and command palette register ownership for their mounted portal
+  lifetime; topmost approval still maps Escape to deny.
+- **Mode scope:** this is a Desktop-renderer repair. Gateway/API/web transports do
+  not share this local keyboard listener, and classic CLI serializes its prompt.
+  The independently identified TUI equivalent is handled by the next contribution.
+- **Verification:** focused modal/approval regressions, changed-file ESLint, Desktop
+  typecheck and build passed; the full Desktop UI suite passed 7,584 tests across
+  798 files; independent exact-byte reviews reported no blockers.
+
+### TUI topmost input ownership
+
+- **Topic / integrated commit:** `contrib/tui-input-layer-ownership` —
+  `c1a0c70272116dff97a25790a17394de88e9ab15` (fast-forwarded unchanged).
+- **Symptom:** a modal widget and approval could coexist while background approval,
+  voice, double-Escape, or composer handlers consumed foreground keys.
+- **Root cause:** overlay state had no single input owner and global shortcuts ran
+  before widget dispatch.
+- **Contract:** a foreground modal widget owns every key before voice/composer/prompt
+  logic; prompt handlers unmount while hidden; pending approval state is preserved
+  and regains ownership after the widget closes.
+- **Verification:** focused ownership tests passed 43 tests; full TUI passed 1,829
+  tests across 175 files; ESLint, typecheck, build, diff check, and independent
+  exact-byte review passed.
+
+### TUI live-tail shrink repaint
+
+- **Topic / integrated commit:** `contrib/tui-live-tail-repaint` —
+  `6daee75ae5bcc213325bd4b55e3eabe038906478`; integrated as
+  `0a5df5e4825552aa3b02e3718c60fa0c926eb635`.
+- **Symptom:** shorter live thinking text could leave a physical suffix such as
+  `sion`, shift rows by a cell, or appear to overwrite the composer until refresh.
+- **Root cause:** the frame boundary detected structural changes but treated
+  non-empty same-line thinking values as equivalent, leaving Ink unable to repair
+  cells after display-width contraction.
+- **Contract:** compare newline-delimited display widths (including wide Unicode),
+  invalidate exactly once on shrink, never repaint for ordinary token growth, and
+  preserve structural-transition and unmount recovery.
+- **Verification:** three focused repaint tests, including exact-delta and CJK
+  coverage, passed; full TUI passed 1,828 tests across 175 files; ESLint, typecheck,
+  build, diff check, and independent exact-byte review passed.
+
+### TUI empty-thinking activity
+
+- **Topic / integrated commit:** `contrib/tui-thinking-activity` —
+  `f0cdd6e5de0de230f339c56efd121768f7b5407c`; integrated as
+  `7c5b8f72be780c0cfc41ca991817a64a56d4d69f`.
+- **Symptom:** active thinking displayed an empty dangling tree branch before the
+  provider emitted its first reasoning text.
+- **Root cause:** the empty-preview branch used a stream cursor that is blank before
+  reasoning streaming starts.
+- **Contract:** render the existing single-display-cell Braille spinner only while
+  active and empty; keep inactive empty state absent; preserve the tree lead and
+  non-empty reasoning rendering; clean up the spinner timer on unmount.
+- **Verification:** three focused activity tests passed; full TUI passed 1,830 tests
+  across 176 files; all configured spinner frames were audited as one-code-point
+  Braille glyphs; ESLint, typecheck, build, diff check, and independent review passed.
+
+### TUI primary status ordering
+
+- **Topic / integrated commit:** `contrib/tui-status-order` —
+  `090c6066389482c68fefed15d200525da3816a2a`; integrated as
+  `4dcfd0d8caa8eee08fc404afef9c69493de1dc21`.
+- **Symptom:** the multi-agent count appeared first and displaced the standard
+  Hermes status/activity indicator.
+- **Root cause:** secondary subagent and battery segments rendered before the
+  primary idle status or busy `FaceTicker`.
+- **Contract:** Hermes state is first; subagent and battery indicators follow;
+  narrow-width priorities, stalled warnings, separators, and model/context
+  essentials remain intact.
+- **Verification:** 35 focused status tests and the full 1,829-test TUI suite passed;
+  ESLint, typecheck, build, diff check, and independent exact-byte review passed.
