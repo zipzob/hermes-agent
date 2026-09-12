@@ -10,8 +10,18 @@ import threading
 import time
 from typing import Any
 
+import pytest
+
 from hermes_cli import provider_admission as admission_module
 from hermes_cli.provider_admission import ProviderAdmissionRequest, provider_admission
+
+
+@pytest.fixture(autouse=True)
+def enable_admission(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(
+        "provider_admission:\n  max_in_flight: 1\n", encoding="utf-8"
+    )
 
 
 _CHILD = r"""

@@ -7,13 +7,19 @@ while the provider request is in flight. Different lanes never block each other.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+import asyncio
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
+import errno
 import hashlib
+import logging
+import math
 import os
 from pathlib import Path
 import time
-from typing import Any, Callable, Iterator
+import threading
+from typing import Any
 import uuid
 
 from hermes_cli.active_sessions import (
@@ -24,6 +30,48 @@ from hermes_cli.active_sessions import (
     _write_entries,
 )
 from hermes_constants import get_hermes_home
+
+
+logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _registry_lock(
+    path: Path, *, deadline: float | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> Iterator[None]:
+    # Reuse the cross-platform lock, but never block a cancellation-aware waiter
+    # inside flock/msvcrt. Cleanup/status get their own bounded two-second budget.
+    if deadline is None:
+        deadline = time.monotonic() + 2.0
+    lock = _FileLock(path, blocking=False)
+    while True:
+        if cancelled is not None and cancelled():
+            raise InterruptedError("provider admission cancelled waiting for registry lock")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("provider admission registry lock timed out")
+        try:
+            lock.__enter__()
+            break
+        except RuntimeError as exc:
+            cause = exc.__cause__
+            if not isinstance(cause, OSError) or cause.errno not in {errno.EACCES, errno.EAGAIN}:
+                raise
+            time.sleep(min(0.01, remaining))
+    try:
+        yield
+    finally:
+        lock.__exit__(None, None, None)
+
+
+def _live_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Queue deadlines share the host's monotonic clock. Process identity pruning
+    # handles reboot/PID reuse. Never time-evict an active physical worker.
+    now = time.monotonic()
+    return [entry for entry in _prune_dead(entries, strict=True)
+            if entry.get("state") != "queued"
+            or entry.get("queue_deadline_monotonic", float("inf")) > now]
 
 
 _PRIORITY = {
@@ -93,8 +141,8 @@ class ProviderAdmissionLease:
     def release(self) -> None:
         if self.released:
             return
-        with _FileLock(self.lock_path):
-            entries = _prune_dead(_read_entries(self.state_path, strict=True), strict=True)
+        with _registry_lock(self.lock_path):
+            entries = _live_entries(_read_entries(self.state_path, strict=True))
             kept = [entry for entry in entries if entry.get("lease_id") != self.request_id]
             _write_entries(self.state_path, kept)
         self.released = True
@@ -111,9 +159,9 @@ def provider_admission_snapshot(
 ) -> list[dict[str, Any]]:
     """Return live admission requests and prune dead process owners."""
     state_path, lock_path = _paths(registry_home)
-    with _FileLock(lock_path):
+    with _registry_lock(lock_path):
         entries = _read_entries(state_path, strict=True)
-        live = _prune_dead(entries, strict=True)
+        live = _live_entries(entries)
         if live != entries:
             _write_entries(state_path, live)
         return [dict(entry) for entry in live]
@@ -139,8 +187,8 @@ def _entry(request_id: str, request: ProviderAdmissionRequest) -> dict[str, Any]
 
 
 def _drop_request(state_path: Path, lock_path: Path, request_id: str) -> None:
-    with _FileLock(lock_path):
-        entries = _prune_dead(_read_entries(state_path, strict=True), strict=True)
+    with _registry_lock(lock_path):
+        entries = _live_entries(_read_entries(state_path, strict=True))
         _write_entries(
             state_path,
             [entry for entry in entries if entry.get("lease_id") != request_id],
@@ -155,7 +203,24 @@ def acquire_provider_admission(
     timeout: float | None = None,
     cancelled: Callable[[], bool] | None = None,
     on_wait: Callable[[dict[str, Any]], None] | None = None,
-) -> ProviderAdmissionLease:
+) -> ProviderAdmissionLease | None:
+    from hermes_cli.config import load_config_readonly
+
+    config = load_config_readonly().get("provider_admission", {})
+    if not isinstance(config, dict):
+        raise ValueError("provider_admission must be a mapping")
+    capacity = config.get("max_in_flight", 0)
+    if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 0:
+        raise ValueError("provider_admission.max_in_flight must be a nonnegative integer")
+    if cancelled is not None and cancelled():
+        raise InterruptedError("provider admission cancelled before dispatch")
+    if capacity == 0:
+        return None  # ponytail: no proven universal account limit; opt in after measurement.
+    if timeout is None:
+        timeout = config.get("queue_timeout", 120.0)
+    if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout) or timeout <= 0):
+        raise ValueError("provider_admission.queue_timeout must be a positive finite number")
     if not request.lane.strip():
         raise ValueError("provider admission lane must not be blank")
     if not request.session_id.strip():
@@ -165,14 +230,26 @@ def acquire_provider_admission(
     request_id = uuid.uuid4().hex
     own_entry = _entry(request_id, request)
     started = time.monotonic()
+    deadline = started + timeout
+    own_entry["queue_deadline_monotonic"] = deadline
+    registered = False
 
     try:
         while True:
+            if cancelled is not None and cancelled():
+                raise InterruptedError("provider admission cancelled while queued")
+            if time.monotonic() - started >= timeout:
+                raise TimeoutError("provider admission timed out while queued")
             blocker: dict[str, Any] | None = None
-            with _FileLock(lock_path):
-                entries = _prune_dead(
-                    _read_entries(state_path, strict=True), strict=True
-                )
+            with _registry_lock(lock_path, deadline=deadline, cancelled=cancelled):
+                # Check again after lock acquisition: cancellation must not become dispatch.
+                if cancelled is not None and cancelled():
+                    raise InterruptedError("provider admission cancelled while queued")
+                if time.monotonic() - started >= timeout:
+                    raise TimeoutError("provider admission timed out while queued")
+                stored = _read_entries(state_path, strict=True)
+                entries = _live_entries(stored)
+                changed = entries != stored
                 current = next(
                     (entry for entry in entries if entry.get("lease_id") == request_id),
                     None,
@@ -180,14 +257,12 @@ def acquire_provider_admission(
                 if current is None:
                     entries.append(dict(own_entry))
                     current = entries[-1]
+                    changed = True
 
                 lane_entries = [
                     entry for entry in entries if entry.get("lane") == request.lane
                 ]
-                active = next(
-                    (entry for entry in lane_entries if entry.get("state") == "active"),
-                    None,
-                )
+                active = [entry for entry in lane_entries if entry.get("state") == "active"]
                 queued = sorted(
                     (entry for entry in lane_entries if entry.get("state") == "queued"),
                     key=lambda entry: (
@@ -196,13 +271,16 @@ def acquire_provider_admission(
                         str(entry.get("lease_id", "")),
                     ),
                 )
-                if active is None and queued and queued[0].get("lease_id") == request_id:
+                if len(active) < capacity and queued and queued[0].get("lease_id") == request_id:
                     current["state"] = "active"
+                    registered = True
                     _write_entries(state_path, entries)
                     return ProviderAdmissionLease(request_id, state_path, lock_path)
 
-                blocker = active or (queued[0] if queued else None)
-                _write_entries(state_path, entries)
+                blocker = active[0] if active else (queued[0] if queued else None)
+                if changed:
+                    registered = True
+                    _write_entries(state_path, entries)
 
             if cancelled is not None and cancelled():
                 raise InterruptedError("provider admission cancelled while queued")
@@ -210,9 +288,15 @@ def acquire_provider_admission(
                 raise TimeoutError("provider admission timed out while queued")
             if on_wait is not None and blocker is not None:
                 on_wait(dict(blocker))
-            time.sleep(max(0.001, poll_interval))
+            time.sleep(min(max(0.001, poll_interval), max(0.0, timeout - (time.monotonic() - started))))
     except BaseException:
-        _drop_request(state_path, lock_path, request_id)
+        if registered:
+            try:
+                _drop_request(state_path, lock_path, request_id)
+            except Exception:
+                # Preserve cancellation/timeout. An unavailable registry cannot be
+                # mutated safely; the queued deadline lets the next reader prune it.
+                logger.warning("Provider admission cleanup failed; queued request will expire", exc_info=True)
         raise
 
 
@@ -220,9 +304,51 @@ def acquire_provider_admission(
 def provider_admission(
     request: ProviderAdmissionRequest,
     **kwargs: Any,
-) -> Iterator[ProviderAdmissionLease]:
+) -> Iterator[ProviderAdmissionLease | None]:
     lease = acquire_provider_admission(request, **kwargs)
     try:
         yield lease
     finally:
-        lease.release()
+        if lease is not None:
+            lease.release()
+
+
+@asynccontextmanager
+async def provider_admission_async(
+    request: ProviderAdmissionRequest, **kwargs: Any,
+) -> AsyncIterator[ProviderAdmissionLease | None]:
+    """Keep blocking registry I/O off-loop; drain ownership even on repeated cancel.
+
+    Cancelling to_thread's awaiter cannot stop its thread. Shield acquisition,
+    signal the queue loop explicitly, then join and release before propagating.
+    """
+    stop = threading.Event()
+    cancelled = kwargs.pop("cancelled", None)
+    pending = asyncio.create_task(asyncio.to_thread(
+        acquire_provider_admission, request,
+        cancelled=lambda: stop.is_set() or (cancelled is not None and cancelled()),
+        **kwargs,
+    ))
+    try:
+        yield await asyncio.shield(pending)
+    finally:
+        stop.set()
+
+        async def release() -> None:
+            try:
+                lease = await pending
+            except InterruptedError:
+                return  # The stopped waiter removed its own queue entry.
+            if lease is not None:
+                await asyncio.to_thread(lease.release)
+
+        cleanup = asyncio.create_task(release())
+        cancellation = None
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError as exc:
+                cancellation = exc
+        cleanup.result()
+        if cancellation is not None:
+            raise cancellation

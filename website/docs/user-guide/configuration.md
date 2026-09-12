@@ -1630,6 +1630,40 @@ Each entry supports the same three knobs as any auxiliary task config:
 
 Separate from `auxiliary.vision` (which picks the describer model): when the *main* model is vision-capable, `vision_analyze` and browser screenshots embed real pixels into tool results that are re-sent every later turn. `vision.embed_target_bytes` (default `262144`, clamped 64 KiB..4 MiB) sizes one embed; `vision.max_calls_per_image` caps how often the same image may be embedded per session (unset = 3 inside delegated subagents, unlimited for the main agent; `0` = unlimited). See [Vision → Native embeds ride the session](./features/vision.md#native-embeds-ride-the-session-visionembed_target_bytes-and-visionmax_calls_per_image).
 
+### Cross-process Codex admission
+
+The optional `provider_admission` limiter coordinates Codex requests sharing an account
+**within the same Hermes profile**. It covers foreground, delegation, and auxiliary
+requests across processes, independently of model. Different accounts use separate lanes;
+profiles with different `HERMES_HOME` directories do not coordinate. If an account identity
+cannot be resolved, requests share a fallback lane within that profile.
+
+```yaml
+provider_admission:
+  max_in_flight: 0     # Default: no local concurrency limit or admission-registry writes
+  queue_timeout: 120  # Seconds waiting for a slot when the limit is enabled
+```
+
+Use a positive integer for `max_in_flight` only when measured account pressure warrants
+it; `1` serializes requests. No fixed concurrency is universally safe or optimal for
+subscription accounts. `queue_timeout` must be positive and finite. Queue time is separate
+from foreground provider-silence watchdogs. Existing retry/backoff and `Retry-After`
+handling are unchanged.
+
+Foreground waiters precede delegation, then background work; equal priorities are FIFO.
+Sustained foreground load can time out background waiters. Cancellation removes queued
+requests; active leases follow physical workers, not callers that stop waiting. Dead
+processes are pruned, but a live stuck worker is not evicted merely because its caller
+has timed out. Lock acquisition observes queue cancellation/deadlines; cleanup and status
+lock waits have a separate two-second bound. If queued cleanup cannot acquire the lock,
+the entry expires at its original queue deadline. Active-release failures are surfaced,
+not handled by unsafe active-lease eviction. Filesystem operations still depend on a
+responsive local disk.
+
+All participating processes must run the repaired implementation with the same settings.
+Changing config does not repair already-stalled workers in older running processes.
+
+
 ### Limiting auxiliary concurrency
 
 `max_concurrency` caps in-flight LLM calls for auxiliary tasks such as `compression` and `title_generation` across the whole process. `auxiliary.vision.max_concurrency` is excluded: it already controls only vision's CPU-bound image encode/resize workers, not LLM requests. This is most useful when:

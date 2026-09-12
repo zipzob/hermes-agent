@@ -3,6 +3,8 @@ import threading
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from agent import auxiliary_client
 from agent import chat_completion_helpers as helpers
 from agent.chat_completion_nonstream import _NonStreamRequest
@@ -13,6 +15,14 @@ from hermes_cli.provider_admission import (
     provider_admission,
     provider_admission_snapshot,
 )
+
+
+@pytest.fixture(autouse=True)
+def enable_admission(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(
+        "provider_admission:\n  max_in_flight: 1\n", encoding="utf-8"
+    )
 
 
 def test_foreground_codex_dispatch_holds_cross_process_admission(tmp_path, monkeypatch):
@@ -205,8 +215,8 @@ def test_streaming_foreground_codex_dispatch_holds_shared_admission(
 ):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
-    def stream_call(_kwargs, on_first_delta=None):
-        del on_first_delta
+    def stream_call(_agent, _kwargs, *, make_client):
+        del make_client
         assert helpers._current_provider_wait_identity(agent) == (
             "foreground request in session …eaming — attempt 3"
         )
@@ -235,11 +245,65 @@ def test_streaming_foreground_codex_dispatch_holds_shared_admission(
         _get_transport=lambda: transport,
         _is_copilot_url=lambda: False,
         _is_codex_backend=lambda: True,
-        _interruptible_streaming_api_call=stream_call,
         _has_pending_redirect=lambda: False,
+        _interrupt_requested=False,
+        _touch_activity=lambda *_: None,
+        _emit_wait_notice=lambda *_: None,
+        _client_log_context=lambda: "test",
+    )
+    _wire_real_codex_dispatch(agent, monkeypatch, stream_call)
+    # Bound the regression: a broken composition must fail, not hang the runner.
+    timer = threading.Timer(2, lambda: setattr(agent, "_interrupt_requested", True))
+    timer.start()
+    try:
+        verdict = _perform(agent)
+    finally:
+        timer.cancel()
+        timer.join()
+    assert verdict.response is not None
+    assert provider_admission_snapshot(registry_home=tmp_path) == []
+
+
+def _wire_real_codex_dispatch(agent, monkeypatch, dispatch):
+    monkeypatch.setattr(helpers, "_resolve_nonstream_watchdogs", lambda *_: SimpleNamespace(
+        codex=False, stale_timeout=60, ttfb_enabled=False, ttfb_timeout=60,
+        idle_enabled=False, idle_timeout=60, idle_requires_progress=False, est_tokens=0,
+    ))
+    monkeypatch.setattr(helpers, "_dispatch_nonstreaming_api_request", dispatch)
+    agent._interruptible_api_call = lambda kwargs: helpers.interruptible_api_call(agent, kwargs)
+    agent._interruptible_streaming_api_call = lambda kwargs, on_first_delta=None: (
+        helpers.interruptible_streaming_api_call(agent, kwargs, on_first_delta=on_first_delta)
     )
 
-    verdict = perform_api_call(
+
+@pytest.mark.parametrize("phase", ["construct", "release"])
+def test_worker_lifecycle_cannot_silently_leak_admission(monkeypatch, phase):
+    agent = SimpleNamespace(
+        api_mode="codex_responses", provider="openai-codex", model="model",
+        session_id="session", platform="cli", _interrupt_requested=False,
+        _touch_activity=lambda *_: None, _emit_wait_notice=lambda *_: None,
+        _client_log_context=lambda: "test",
+    )
+    _wire_real_codex_dispatch(agent, monkeypatch, lambda *_a, **_k: object())
+    released = []
+
+    def release():
+        released.append(True)
+        if phase == "release":
+            raise RuntimeError("synthetic release failure")
+
+    monkeypatch.setattr(_NonStreamRequest, "_acquire_provider_admission", lambda _: SimpleNamespace(release=release))
+    if phase == "construct":
+        def fail_construct(*_a, **_k):
+            raise RuntimeError("synthetic construct failure")
+        monkeypatch.setattr(helpers.threading, "Thread", fail_construct)
+    with pytest.raises(RuntimeError, match=f"synthetic {phase} failure"):
+        _NonStreamRequest(agent, {"model": "model"}).run()
+    assert released == [True]
+
+
+def _perform(agent):
+    return perform_api_call(
         agent,
         api_kwargs={"model": "gpt-5.6-sol"},
         _original_api_kwargs={},
@@ -255,8 +319,6 @@ def test_streaming_foreground_codex_dispatch_holds_shared_admission(
         interrupted=False,
     )
 
-    assert verdict.response is not None
-    assert provider_admission_snapshot(registry_home=tmp_path) == []
 
 
 def test_streaming_queue_notice_identifies_blocker_once_and_clears(
@@ -294,7 +356,10 @@ def test_streaming_queue_notice_identifies_blocker_once_and_clears(
         _interruptible_streaming_api_call=lambda *_args, **_kwargs: object(),
         _has_pending_redirect=lambda: False,
         _emit_wait_notice=emit_notice,
+        _touch_activity=lambda *_: None,
+        _client_log_context=lambda: "test",
     )
+    _wire_real_codex_dispatch(agent, monkeypatch, lambda *_a, **_k: object())
     blocker = ProviderAdmissionRequest(
         lane="openai-codex:profile",
         request_class="compression",

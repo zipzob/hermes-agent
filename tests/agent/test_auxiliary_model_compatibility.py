@@ -1,3 +1,14 @@
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def enable_admission(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(
+        "provider_admission:\n  max_in_flight: 1\n", encoding="utf-8"
+    )
+
+
 def test_account_catalog_marks_missing_auxiliary_model_incompatible():
     from agent.auxiliary_model_compatibility import probe_codex_model_compatibility
 
