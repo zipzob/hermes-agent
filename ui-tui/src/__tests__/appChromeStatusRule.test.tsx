@@ -26,6 +26,32 @@ const textContent = (node: ReactNodeLike): string => {
   return ''
 }
 
+const structuralContent = (node: ReactNodeLike): string => {
+  if (node === null || node === undefined || typeof node === 'boolean') {
+    return ''
+  }
+
+  if (typeof node === 'string' || typeof node === 'number') {
+    return String(node)
+  }
+
+  if (Array.isArray(node)) {
+    return node.map(structuralContent).join('')
+  }
+
+  if (React.isValidElement(node)) {
+    const element = node as React.ReactElement<{ children?: React.ReactNode }>
+
+    if (typeof node.type === 'function' && node.type.name === 'FaceTicker') {
+      return '<FaceTicker>'
+    }
+
+    return structuralContent(element.props.children)
+  }
+
+  return ''
+}
+
 const findClickableWithText = (node: ReactNodeLike, needle: string): React.ReactElement | null => {
   if (node === null || node === undefined || typeof node === 'boolean') {
     return null
@@ -194,6 +220,30 @@ describe('StatusRule resource governor indicator', () => {
 })
 
 describe('StatusRule background-subagent indicator', () => {
+  it('keeps the standard Hermes status before the subagent indicator', () => {
+    const rendered = textContent(
+      StatusRule({
+        ...baseProps,
+        usage: { ...baseProps.usage, active_subagents: 3 }
+      })
+    )
+
+    expect(rendered.indexOf('ready')).toBeLessThan(rendered.indexOf('⛓ 3'))
+  })
+
+  it('keeps the animated Hermes ticker before the subagent indicator while busy', () => {
+    const structure = structuralContent(
+      StatusRule({
+        ...baseProps,
+        busy: true,
+        turnStartedAt: Date.now(),
+        usage: { ...baseProps.usage, active_subagents: 3 }
+      })
+    )
+
+    expect(structure.indexOf('<FaceTicker>')).toBeLessThan(structure.indexOf('⛓ 3'))
+  })
+
   it('renders ⛓ N on a wide terminal when subagents are running', () => {
     const element = StatusRule({
       ...baseProps,
