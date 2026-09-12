@@ -27,6 +27,30 @@ const buildOverlayState = (): OverlayState => ({
 
 export const $overlayState = atom<OverlayState>(buildOverlayState())
 
+export type InputLayerOwner = 'other' | 'prompt' | 'widget'
+
+/** The visually topmost blocking surface exclusively owns keyboard input. */
+export const inputLayerOwner = (overlay: OverlayState): InputLayerOwner => {
+  if (overlay.widget) {
+    return 'widget'
+  }
+
+  if (
+    overlay.approval ||
+    overlay.billing ||
+    overlay.clarify ||
+    overlay.confirm ||
+    overlay.secret ||
+    overlay.subscription ||
+    overlay.sudo ||
+    overlay.vaultUnlock
+  ) {
+    return 'prompt'
+  }
+
+  return 'other'
+}
+
 export const $isBlocked = computed(
   $overlayState,
   ({
