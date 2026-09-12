@@ -2688,20 +2688,30 @@ def _aux_provider_admission_scope(
             )
         )
 
-    with provider_admission(request, on_wait=_on_wait) as lease:
+    try:
+        with provider_admission(
+            request, on_wait=_on_wait, cancelled=_aux_interrupt_cancel_requested,
+        ) as lease:
+            if notice_sent:
+                _emit_aux_wait_status("")
+                notice_sent = False
+            yield lease
+    except InterruptedError:
+        if not _aux_interrupt_cancel_requested():
+            raise
+        raise AuxiliaryExplicitCancellation() from None
+    finally:
         if notice_sent:
             _emit_aux_wait_status("")
-        yield lease
 
 
 @contextlib.asynccontextmanager
 async def _aux_provider_admission_scope_async(
     client: Any, *, provider: str, model: str, request_class: str, attempt: int
 ):
-    import asyncio
     from hermes_cli.provider_admission import (
-        acquire_provider_admission,
         format_provider_queue_wait,
+        provider_admission_async,
     )
 
     request = _aux_provider_admission_request(
@@ -2730,15 +2740,23 @@ async def _aux_provider_admission_scope_async(
             )
         )
 
-    lease = await asyncio.to_thread(
-        acquire_provider_admission, request, on_wait=_on_wait
-    )
+    # Thread-local cancellation sources must be captured before entering to_thread.
+    cancel_check = _capture_aux_cancel_check()
     try:
+        async with provider_admission_async(
+            request, on_wait=_on_wait, cancelled=cancel_check,
+        ) as lease:
+            if notice_sent:
+                _emit_aux_wait_status("")
+                notice_sent = False
+            yield lease
+    except InterruptedError:
+        if cancel_check is None or not _captured_aux_cancel_requested(cancel_check):
+            raise
+        raise AuxiliaryExplicitCancellation() from None
+    finally:
         if notice_sent:
             _emit_aux_wait_status("")
-        yield lease
-    finally:
-        await asyncio.to_thread(lease.release)
 
 
 class _AdmissionBoundStream:
@@ -2786,8 +2804,8 @@ def _relay_sync_completion(
     # must stream through _create_with_progress or the compression watchdog sees silence (#98466).
     callback = create or (lambda request: _create_with_progress(client, request))
     route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
-    # Isolate only the provider callback so the owning thread can unwind its lease/DB
-    # transaction on hard cancel without touching the shared client.
+    # Relay's logical transaction stays on the caller; physical admission must
+    # follow the provider daemon, which can outlive that caller on cancellation.
     if route is None:
         return _run_protected_sync_provider_call(callback, kwargs)
     provider_name, fallback_model, metadata = route
@@ -2796,24 +2814,22 @@ def _relay_sync_completion(
     _raise_if_aux_model_incompatible(client, provider=provider_name, model=model_name)
     request_class = str(metadata.get("auxiliary_task") or "background_review")
     attempt = int(metadata.get("retry_count") or 0) + 1
-    with _aux_provider_admission_scope(
-        client,
-        provider=provider_name,
-        model=model_name,
-        request_class=request_class,
-        attempt=attempt,
-    ):
-        with _aux_provider_silence_notice(
-            request_class=request_class,
-            model=model_name,
-            attempt=attempt,
-            timeout=kwargs.get("timeout"),
+    def admitted_callback(request):
+        with _aux_provider_admission_scope(
+            client, provider=provider_name, model=model_name,
+            request_class=request_class, attempt=attempt,
         ):
-            return relay_llm.execute_current(
-                kwargs, lambda request: _run_protected_sync_provider_call(callback, request),
-                name=provider_name, model_name=model_name,
-                metadata=metadata, defer_logical_completion=True,
-            )
+            with _aux_provider_silence_notice(
+                request_class=request_class, model=model_name,
+                attempt=attempt, timeout=kwargs.get("timeout"),
+            ):
+                return callback(request)
+
+    return relay_llm.execute_current(
+        kwargs, lambda request: _run_protected_sync_provider_call(admitted_callback, request),
+        name=provider_name, model_name=model_name,
+        metadata=metadata, defer_logical_completion=True,
+    )
 
 
 async def _relay_async_completion(
