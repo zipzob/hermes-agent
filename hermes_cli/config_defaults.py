@@ -521,6 +521,13 @@ DEFAULT_CONFIG = {
         },
     },
 
+    "provider_admission": {
+        # Per-profile, cross-process Codex account limit; 0 leaves concurrency unrestricted.
+        # Subscription capacity varies, so enable only against measured account pressure.
+        "max_in_flight": 0,
+        "queue_timeout": 120.0,  # Seconds waiting for admission, not provider silence.
+    },
+
     "compression": {
         "enabled": True,
         # checkpoint_required: fail closed before lossy compaction unless an active memory provider

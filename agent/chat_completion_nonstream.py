@@ -1,5 +1,7 @@
 """Request-local worker lifecycle, watchdog polling, and wait status."""
 
+from typing import Any
+
 from agent import chat_completion_helpers as h
 
 
@@ -13,7 +15,7 @@ class _NonStreamRequest:
     def __init__(self, agent, api_kwargs: dict):
         self.agent = agent
         self.api_kwargs = api_kwargs
-        self.result = {"response": None, "error": None}
+        self.result: dict[str, Any] = {"response": None, "error": None}
         self.clients = h._RequestClientRegistry(agent)
         # Request-local cancel flag: agent._interrupt_requested is cleared at turn
         # boundaries but this daemon worker can outlive the turn, so it must know THIS
@@ -49,6 +51,7 @@ class _NonStreamRequest:
         from hermes_cli.provider_admission import (
             ProviderAdmissionRequest,
             acquire_provider_admission,
+            format_provider_queue_wait,
             provider_admission_lane,
         )
 
@@ -69,10 +72,32 @@ class _NonStreamRequest:
             model=str(self.api_kwargs.get("model") or getattr(self.agent, "model", "unknown")),
             attempt=int(self.request_context["attempt"]),
         )
-        return acquire_provider_admission(
-            request,
-            cancelled=lambda: bool(getattr(self.agent, "_interrupt_requested", False)),
-        )
+        queued_at = h.time.monotonic()
+        notice_sent = False
+
+        def on_wait(blocker):
+            nonlocal notice_sent
+            self.agent._touch_activity("waiting for provider admission")
+            if not notice_sent:
+                self.agent._emit_wait_notice(format_provider_queue_wait(
+                    request_class=request.request_class, blocker=blocker,
+                    attempt=request.attempt, queued_seconds=h.time.monotonic() - queued_at,
+                ))
+                notice_sent = True
+
+        try:
+            return acquire_provider_admission(
+                request,
+                cancelled=lambda: bool(getattr(self.agent, "_interrupt_requested", False)),
+                on_wait=on_wait,
+            )
+        finally:
+            if notice_sent:
+                try:
+                    self.agent._emit_wait_notice("")
+                except Exception:
+                    # A UI callback must not discard an already-acquired lease.
+                    h.logger.debug("queue-notice cleanup failed", exc_info=True)
 
     def _install_codex_request_token(self) -> None:
         if self.codex_token is not None and not self.codex_retired:  # retired before start: don't re-publish
@@ -133,8 +158,16 @@ class _NonStreamRequest:
                     "request_complete" if self.result["response"] is not None else "request_error_cleanup")
             finally:
                 if self.provider_admission_lease is not None:
-                    self.provider_admission_lease.release()
-                    self.provider_admission_lease = None
+                    try:
+                        self.provider_admission_lease.release()
+                    except Exception as exc:
+                        # Publish cleanup failure to the caller, not just an
+                        # unhandled daemon-thread warning after apparent success.
+                        h.logger.warning("Provider admission release failed", exc_info=True)
+                        if self.result["error"] is None:
+                            self.result["error"] = exc
+                    finally:
+                        self.provider_admission_lease = None
 
     def _abort_request(self, reason: str) -> None:
         """Watchdog/interrupt kill: abort the request client (kind-aware, #67142)
@@ -287,8 +320,8 @@ class _NonStreamRequest:
 
         self.provider_admission_lease = self._acquire_provider_admission()
         self.call_start = h.time.time()  # Provider watchdogs exclude admission queue time.
-        self.thread = t = h.threading.Thread(target=h._context_thread_target(self._call), daemon=True)
         try:
+            self.thread = t = h.threading.Thread(target=h._context_thread_target(self._call), daemon=True)
             t.start()
         except BaseException:
             if self.provider_admission_lease is not None:
