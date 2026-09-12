@@ -20,11 +20,21 @@ vi.mock('@hermes/ink', async importOriginal => {
   }
 })
 
-import { LiveTailFrameBoundary, liveTailStructuralSignature } from '../components/streamingAssistant.js'
+import {
+  hasDisplayLineShrink,
+  LiveTailFrameBoundary,
+  liveTailStructuralSignature
+} from '../components/streamingAssistant.js'
 
 const tick = () => new Promise<void>(resolve => setImmediate(resolve))
 
 describe('LiveTailFrameBoundary', () => {
+  it('detects per-line display-width shrink without confusing ordinary growth', () => {
+    expect(hasDisplayLineShrink('compacting session', 'ready')).toBe(true)
+    expect(hasDisplayLineShrink('界', 'a')).toBe(true)
+    expect(hasDisplayLineShrink('ready', 'ready to continue')).toBe(false)
+  })
+
   it('ignores token growth but detects live tree structure changes', () => {
     const signature = (text: string, context = '') =>
       liveTailStructuralSignature({
@@ -95,8 +105,8 @@ describe('LiveTailFrameBoundary', () => {
     Object.assign(stderr, { isTTY: false })
     harness.invalidations = 0
 
-    const view = (signature: string, text: string) => (
-      <LiveTailFrameBoundary signature={signature}>
+    const view = (signature: string, text: string, thinkingFootprint = '') => (
+      <LiveTailFrameBoundary signature={signature} thinkingFootprint={thinkingFootprint}>
         <Text>{text}</Text>
       </LiveTailFrameBoundary>
     )
@@ -115,6 +125,19 @@ describe('LiveTailFrameBoundary', () => {
     instance.rerender(view('active-tools:1|streaming', 'ordinary token growth'))
     await tick()
     expect(harness.invalidations).toBe(mounted)
+
+    instance.rerender(view('active-tools:1|streaming', 'compacting session', 'compacting session'))
+    await tick()
+    const longThinking = harness.invalidations
+
+    instance.rerender(view('active-tools:1|streaming', 'ready', 'ready'))
+    await tick()
+    expect(harness.invalidations).toBe(longThinking + 1)
+
+    const shrunk = harness.invalidations
+    instance.rerender(view('active-tools:1|streaming', 'ready to continue', 'ready to continue'))
+    await tick()
+    expect(harness.invalidations).toBe(shrunk)
 
     instance.rerender(view('pending-tools:1', 'tool tree collapsed'))
     await tick()
