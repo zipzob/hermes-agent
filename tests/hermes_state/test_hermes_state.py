@@ -1043,43 +1043,41 @@ class TestFTS5Search:
         db.append_message("s1", role="user", content="after")
 
         statements = []
-        traced_connections = []
-        read_ctx = db._read_ctx
+        original_read_ctx = db._read_ctx
 
         @contextlib.contextmanager
-        def trace_read_context():
-            with read_ctx() as conn:
+        def traced_read_ctx():
+            with original_read_ctx() as conn:
                 conn.set_trace_callback(statements.append)
-                traced_connections.append(conn)
-                yield conn
+                try:
+                    yield conn
+                finally:
+                    conn.set_trace_callback(None)
 
-        monkeypatch.setattr(db, "_read_ctx", trace_read_context)
+        monkeypatch.setattr(db, "_read_ctx", traced_read_ctx)
 
         def context_query_count():
             normalized = (" ".join(sql.upper().split()) for sql in statements)
             return sum("WITH TARGET AS (" in sql for sql in normalized)
 
-        try:
-            projected = db.search_messages(
-                "projectionneedle", fields=("session_id", "snippet")
-            )
-            assert len(projected) == 1
-            assert context_query_count() == 0
+        projected = db.search_messages(
+            "projectionneedle", fields=("session_id", "snippet")
+        )
+        assert len(projected) == 1
+        assert context_query_count() == 0
 
-            full = db.search_messages(
-                "projectionneedle", fields=("session_id", "context")
-            )
-            assert len(full) == 1
-            assert full[0]["context"]
-            assert context_query_count() == 1
+        full = db.search_messages(
+            "projectionneedle", fields=("session_id", "context")
+        )
+        assert len(full) == 1
+        assert full[0]["context"]
+        assert context_query_count() == 1
 
-            default = db.search_messages("projectionneedle")
-            assert len(default) == 1
-            assert default[0]["context"]
-            assert context_query_count() == 2
-        finally:
-            for conn in {id(conn): conn for conn in traced_connections}.values():
-                conn.set_trace_callback(None)
+        default = db.search_messages("projectionneedle")
+        assert len(default) == 1
+        assert default[0]["context"]
+        assert context_query_count() == 2
+
 
     def test_sanitize_fts5_query_strips_dangerous_chars(self):
         """Unit test for _sanitize_fts5_query static method."""
