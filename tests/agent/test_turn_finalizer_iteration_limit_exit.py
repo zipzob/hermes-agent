@@ -114,18 +114,32 @@ def _finalize(
     )
 
 
+def test_iteration_exhaustion_has_structured_incomplete_outcome(monkeypatch):
+    monkeypatch.setattr("hermes_cli.plugins.invoke_hook", lambda *_a, **_kw: [])
+    result = _finalize(
+        _LimitAgent(), final_response=None, exit_reason="budget_exhausted"
+    )
+
+    assert result["completed"] is False
+    assert result["failed"] is False
+    assert result["budget_exhausted"] is True
+    assert result["budget_used"] == 60
+    assert result["budget_max"] == 60
+    assert result["turn_exit_reason"] == "max_iterations_reached(60/60)"
 
 
+def test_final_response_at_budget_boundary_is_not_exhausted_outcome(monkeypatch):
+    monkeypatch.setattr("hermes_cli.plugins.invoke_hook", lambda *_a, **_kw: [])
+    result = _finalize(
+        _LimitAgent(),
+        final_response="Completed on the final allowed call.",
+        exit_reason="text_response(stop)",
+    )
 
-
-
-
-
-
-
-
-
-
+    assert result["completed"] is True
+    assert result["budget_exhausted"] is False
+    assert result["budget_used"] is None
+    assert result["budget_max"] is None
 
 
 @pytest.mark.parametrize(

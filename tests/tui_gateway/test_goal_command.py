@@ -170,6 +170,18 @@ def _compression_failure():
     }
 
 
+def _iteration_budget_exhaustion():
+    return {
+        "final_response": "Progress summary from the exhausted run.",
+        "completed": False,
+        "failed": False,
+        "budget_exhausted": True,
+        "budget_used": 60,
+        "budget_max": 60,
+        "turn_exit_reason": "max_iterations_reached(60/60)",
+    }
+
+
 # ── command.dispatch /goal ────────────────────────────────────────────
 
 
@@ -282,6 +294,93 @@ def test_pending_input_commands_includes_goal(server):
 
 
 # ── active-goal recovery after compression exhaustion ───────────────
+
+
+def test_active_goal_continues_after_iteration_budget_exhaustion_without_judging(
+    server, turn_env, monkeypatch
+):
+    """A forced per-run stop is incomplete runtime control, not a goal verdict.
+
+    It must immediately start a fresh continuation without spending a goal turn;
+    otherwise the active goal sits idle until unrelated user input wakes it.
+    """
+    from hermes_cli.goals import GoalManager
+
+    session_key = "goal-iteration-budget-retry"
+    mgr = GoalManager(session_key)
+    mgr.set("finish the current task")
+    continuation = mgr.next_continuation_prompt()
+    seen_prompts = []
+    results = iter([
+        _iteration_budget_exhaustion(),
+        {"final_response": "continued work"},
+    ])
+
+    def run_conversation(message, **_kwargs):
+        seen_prompts.append(message)
+        return next(results)
+
+    judged = []
+
+    def evaluate(self, response, **_kwargs):
+        judged.append(response)
+        return {"message": "", "should_continue": False}
+
+    monkeypatch.setattr(GoalManager, "evaluate_after_turn", evaluate)
+    agent = types.SimpleNamespace(
+        session_id=session_key,
+        run_conversation=run_conversation,
+        clear_interrupt=lambda: None,
+    )
+    session = _turn_session(agent, session_key)
+
+    server._run_prompt_submit("rid", "sid", session, "initial work")
+
+    assert seen_prompts == ["initial work", continuation]
+    assert judged == ["continued work"]
+    assert GoalManager(session_key).state.turns_used == 0
+    notices = [
+        p["text"]
+        for event, _sid, p in turn_env
+        if event == "status.update" and p.get("kind") == "goal"
+    ]
+    assert any("60/60 iterations" in text and "continuing" in text for text in notices)
+
+
+def test_interrupted_iteration_exhaustion_does_not_restart_goal(
+    server, turn_env, monkeypatch
+):
+    from hermes_cli.goals import GoalManager
+
+    session_key = "goal-interrupted-at-budget"
+    GoalManager(session_key).set("finish the current task")
+    seen_prompts = []
+
+    def run_conversation(message, **_kwargs):
+        seen_prompts.append(message)
+        return {**_iteration_budget_exhaustion(), "interrupted": True}
+
+    monkeypatch.setattr(
+        GoalManager,
+        "evaluate_after_turn",
+        lambda *_args, **_kwargs: pytest.fail("interrupted turn must not be judged"),
+    )
+    agent = types.SimpleNamespace(
+        session_id=session_key,
+        run_conversation=run_conversation,
+        clear_interrupt=lambda: None,
+    )
+    session = _turn_session(agent, session_key)
+
+    server._run_prompt_submit("rid", "sid", session, "initial work")
+
+    assert seen_prompts == ["initial work"]
+    notices = [
+        p["text"]
+        for event, _sid, p in turn_env
+        if event == "status.update" and p.get("kind") == "goal"
+    ]
+    assert not any("continuing" in text for text in notices)
 
 
 def test_active_goal_retries_once_without_judging_failed_turn(

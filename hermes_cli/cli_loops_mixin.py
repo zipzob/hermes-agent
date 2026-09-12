@@ -555,6 +555,28 @@ class CLILoopsMixin:
                 f"Use /goal resume to continue, or /goal clear to stop.{_RST}")
             return
 
+        turn_result = getattr(self, "_last_turn_result", None)
+        if isinstance(turn_result, dict) and (
+            turn_result.get("failed") is True or turn_result.get("interrupted") is True
+        ):
+            return
+        if isinstance(turn_result, dict) and turn_result.get("budget_exhausted") is True:
+            prompt = mgr.next_continuation_prompt()
+            if prompt:
+                used = turn_result.get("budget_used")
+                maximum = turn_result.get("budget_max")
+                budget = (
+                    f"{used}/{maximum}"
+                    if isinstance(used, int) and isinstance(maximum, int)
+                    else "its limit"
+                )
+                _cprint(
+                    f"  {_DIM}↻ Agent run reached {budget} iterations; "
+                    f"goal remains active and is continuing.{_RST}"
+                )
+                self._pending_input.put(prompt)
+            return
+
         # Empty/whitespace responses are almost always transient failures (API error,
         # empty stream): judging would say "continue" and trip the parse-failure backstop.
         last_response = self._last_assistant_response_text()

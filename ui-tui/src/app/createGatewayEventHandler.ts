@@ -878,7 +878,17 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         setStatus(p.text)
 
         if (p.kind === 'compressing' || p.kind === 'compacting') {
-          sys(p.text)
+          // Compaction begins while a turn and sticky ScrollBox are active. Appending
+          // a system transcript row here mutates virtual-history geometry mid-frame;
+          // the scrollbar fast path can then repaint against the old offsets, leaving
+          // duplicated/shifted rows and making the composer appear to jump. Keep
+          // progress in the bounded live activity panel instead. The compaction result
+          // and normal turn response remain durable transcript content.
+          if (turnController.lastStatusNote !== p.text) {
+            turnController.lastStatusNote = p.text
+            turnController.pushActivity(p.text, 'info')
+          }
+
           turnController.clearStatusTimer()
           patchUiState({ compacting: true })
 

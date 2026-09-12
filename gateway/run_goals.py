@@ -261,6 +261,7 @@ class GatewayGoalsMixin:
 
     async def _post_turn_goal_continuation(
         self, *, session_entry: Any, source: Any, final_response: str,
+        agent_result: Any = None,
     ) -> None:
         """Run the goal judge after a gateway turn (AFTER delivery) and, if still active, enqueue a
         continuation through the adapter FIFO so a simultaneous real user message takes priority."""
@@ -273,29 +274,50 @@ class GatewayGoalsMixin:
         if mgr is None or not mgr.is_active():
             return
 
-        _bg_procs, _active_deleg = None, 0
-        with suppress(Exception):
-            from hermes_cli.goals import count_active_delegations, gather_background_processes as _gather_bg
-            # Only THIS session's processes (gateway turns register under turn_ctx.session_id):
-            # subagents' pollers must not park the parent's goal.
-            _bg_procs = _gather_bg(owner_task_id=getattr(session_entry, "session_id", None) or None)
-            _active_deleg = count_active_delegations(getattr(session_entry, "session_id", None))
+        if isinstance(agent_result, dict) and (
+            agent_result.get("interrupted") or agent_result.get("failed")
+        ):
+            return
 
-        # judge_goal() is a synchronous aux-LLM HTTP call (10-40 s; would block Discord heartbeats).
-        # _run_in_executor_with_context carries the profile secret scope / aux runtime contextvars
-        # without which aux credential resolution fails under multiplexing.
-        decision = await self._run_in_executor_with_context(
-            lambda: mgr.evaluate_after_turn(
-                final_response or "", user_initiated=True, background_processes=_bg_procs,
-                active_delegations=_active_deleg,
-            ),
-        )
-        msg = decision.get("message") or ""
+        if isinstance(agent_result, dict) and agent_result.get("budget_exhausted") is True:
+            used = agent_result.get("budget_used")
+            maximum = agent_result.get("budget_max")
+            budget = (
+                f"{used}/{maximum}"
+                if isinstance(used, int) and isinstance(maximum, int)
+                else "its limit"
+            )
+            msg = (
+                f"↻ Agent run reached {budget} iterations; "
+                "goal remains active and is continuing."
+            )
+            prompt = mgr.next_continuation_prompt() or ""
+            should_continue = bool(prompt)
+        else:
+            _bg_procs, _active_deleg = None, 0
+            with suppress(Exception):
+                from hermes_cli.goals import count_active_delegations, gather_background_processes as _gather_bg
+                # Only THIS session's processes (gateway turns register under turn_ctx.session_id):
+                # subagents' pollers must not park the parent's goal.
+                _bg_procs = _gather_bg(owner_task_id=getattr(session_entry, "session_id", None) or None)
+                _active_deleg = count_active_delegations(getattr(session_entry, "session_id", None))
+
+            # judge_goal() is a synchronous aux-LLM HTTP call (10-40 s; would block Discord heartbeats).
+            # _run_in_executor_with_context carries the profile secret scope / aux runtime contextvars
+            # without which aux credential resolution fails under multiplexing.
+            decision = await self._run_in_executor_with_context(
+                lambda: mgr.evaluate_after_turn(
+                    final_response or "", user_initiated=True, background_processes=_bg_procs,
+                    active_delegations=_active_deleg,
+                ),
+            )
+            msg = decision.get("message") or ""
+            prompt = decision.get("continuation_prompt") or ""
+            should_continue = bool(decision.get("should_continue"))
         # Deferred until the visible final response is delivered, else "✓ Goal achieved" precedes it.
         if msg and source is not None:
             await self._defer_goal_status_notice_after_delivery(source, msg)
-        prompt = decision.get("continuation_prompt") or ""
-        if not decision.get("should_continue") or not prompt or source is None:
+        if not should_continue or not prompt or source is None:
             return
         # Enqueue via the adapter's FIFO so a user message already in flight preempts naturally.
         try:
@@ -311,6 +333,11 @@ class GatewayGoalsMixin:
     ) -> None:
         """Run goal and loop bookkeeping after an agent turn returns."""
         final_text = self._final_text_for_post_turn_hooks(agent_result, event)
+        turn_outcome = (
+            agent_result
+            if isinstance(agent_result, dict)
+            else getattr(event, "_agent_turn_outcome", None)
+        )
         try:
             session_entry = await self.async_session_store.get_or_create_session(
                 source, touch_activity=not is_internal,
@@ -320,12 +347,23 @@ class GatewayGoalsMixin:
             return
         # Empty interrupted/errored responses must not drive /goal, but an in-flight /loop tick
         # still needs to be released and rescheduled.
-        hooks = [("loop completion", self._post_turn_loop_completion)]
-        if final_text.strip():
-            hooks.insert(0, ("goal continuation", self._post_turn_goal_continuation))
-        for label, hook in hooks:
+        hooks = [("loop completion", self._post_turn_loop_completion, {})]
+        if final_text.strip() or (
+            isinstance(turn_outcome, dict) and turn_outcome.get("budget_exhausted") is True
+        ):
+            hooks.insert(0, (
+                "goal continuation",
+                self._post_turn_goal_continuation,
+                {"agent_result": turn_outcome},
+            ))
+        for label, hook, extra in hooks:
             try:
-                await hook(session_entry=session_entry, source=source, final_response=final_text)
+                await hook(
+                    session_entry=session_entry,
+                    source=source,
+                    final_response=final_text,
+                    **extra,
+                )
             except Exception as exc:
                 logger.debug("%s hook failed: %s", label, exc)
 

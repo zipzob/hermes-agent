@@ -1757,12 +1757,32 @@ class GatewayTurnMixin:
         # trigger a rebuild next turn (destroying prompt caching).
         await self._refresh_agent_cache_message_count(session_key, sid)
 
+    @staticmethod
+    def _hmwa_stash_post_turn_outcome(event, agent_result) -> None:
+        """Carry only bounded lifecycle metadata to post-delivery hooks."""
+        if not isinstance(agent_result, dict):
+            return
+        keys = (
+            "budget_exhausted",
+            "budget_used",
+            "budget_max",
+            "completed",
+            "failed",
+            "interrupted",
+            "turn_exit_reason",
+        )
+        event._agent_turn_outcome = {
+            key: agent_result[key] for key in keys if key in agent_result
+        }
+
     async def _hmwa_deliver_turn_response(
         self, event, source, session_entry, session_key, run_generation,
         agent_result, agent_messages, response, _footer_line, _intentional_silence,
     ):
         """Final delivery decisions: intentional silence, voice reply, streamed-turn media/footer.
         Returns the text for the adapter to send, or ``None`` when already delivered."""
+        with suppress(Exception):
+            self._hmwa_stash_post_turn_outcome(event, agent_result)
         # Intentional silence is a delivery decision: the [SILENT] turn stays persisted (alternation).
         if _intentional_silence:
             logger.info("Suppressing intentional silence marker for session %s", session_entry.session_id)

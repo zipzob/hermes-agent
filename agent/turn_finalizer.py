@@ -119,17 +119,19 @@ def _guarded_cleanup(label: str, fn: Callable[[], Any], errors: List[str], logge
 def _resolve_budget_fallback(
     agent, *, final_response, api_call_count, interrupted, failed, messages, _turn_exit_reason,
     _pending_verification_response, _pending_verification_response_previewed, logger,
-) -> Tuple[Any, Any, bool]:
+) -> Tuple[Any, Any, bool, bool]:
     """Iteration-budget exhaustion. Returns ``(final_response, _turn_exit_reason,
-    preserved_verification_fallback)``."""
-    budget_exhausted = (
+    preserved_verification_fallback, budget_exhausted)``."""
+    budget_limit_reached = (
         api_call_count >= agent.max_iterations or agent.iteration_budget.remaining <= 0
     )
+    budget_exhausted = False
     preserved_verification_fallback = False
     if (
-        final_response is None and budget_exhausted and not interrupted and not failed
+        final_response is None and budget_limit_reached and not interrupted and not failed
         and str(_turn_exit_reason) in {"unknown", "budget_exhausted"}
     ):
+        budget_exhausted = True
         _turn_exit_reason = f"max_iterations_reached({api_call_count}/{agent.max_iterations})"
         if _pending_verification_response:
             # A verification gate withheld a composed answer, then the budget ran out:
@@ -155,7 +157,7 @@ def _resolve_budget_fallback(
 
     # A kanban worker must record a terminal outcome whether or not a fallback path
     # was eligible, so the dispatcher learns the worker could not complete.
-    _kanban_task = os.environ.get("HERMES_KANBAN_TASK") if budget_exhausted else None
+    _kanban_task = os.environ.get("HERMES_KANBAN_TASK") if budget_limit_reached else None
     # If running as a kanban worker, signal the dispatcher that the worker could not complete (rather than
     # treating it as a protocol violation). This applies whether the user-facing fallback came from the
     # summary call or an explicitly pending continuation; both exhausted the task budget and must advance
@@ -169,7 +171,7 @@ def _resolve_budget_fallback(
     # closed it — the CAS invariant in ``_end_run`` (``WHERE ended_at IS NULL``) guarantees idempotence.
     if _kanban_task:
         _record_kanban_budget_exhausted(_kanban_task, api_call_count, agent.max_iterations, logger)
-    return final_response, _turn_exit_reason, preserved_verification_fallback
+    return final_response, _turn_exit_reason, preserved_verification_fallback, budget_exhausted
 
 
 def _rollback_interrupted_preflight_display(agent, interrupted) -> None:
@@ -441,7 +443,12 @@ def finalize_turn(
     """Run the post-loop finalization and return the turn ``result`` dict."""
     from agent.conversation_loop import logger
 
-    final_response, _turn_exit_reason, preserved_verification_fallback = _resolve_budget_fallback(
+    (
+        final_response,
+        _turn_exit_reason,
+        preserved_verification_fallback,
+        budget_exhausted,
+    ) = _resolve_budget_fallback(
         agent, final_response=final_response, api_call_count=api_call_count,
         interrupted=interrupted, failed=failed, messages=messages,
         _turn_exit_reason=_turn_exit_reason,
@@ -542,6 +549,9 @@ def finalize_turn(
         "api_calls": api_call_count,
         "completed": completed,
         "turn_exit_reason": _turn_exit_reason,
+        "budget_exhausted": budget_exhausted,
+        "budget_used": api_call_count if budget_exhausted else None,
+        "budget_max": agent.max_iterations if budget_exhausted else None,
         "failed": failed,
         "partial": False,  # True only when stopped due to invalid tool calls
         "interrupted": interrupted,

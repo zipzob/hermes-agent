@@ -250,7 +250,7 @@ describe('createGatewayEventHandler', () => {
     expect(getTurnState().todos).toEqual(todos)
   })
 
-  it('prints compaction progress status into the transcript', () => {
+  it('keeps compaction progress in bounded activity instead of mutating virtual history', () => {
     const appended: Msg[] = []
     const ctx = buildCtx(appended)
     const onEvent = createGatewayEventHandler(ctx)
@@ -260,7 +260,11 @@ describe('createGatewayEventHandler', () => {
       type: 'status.update'
     } as any)
 
-    expect(ctx.system.sys).toHaveBeenCalledWith('compressing 968 messages (~123,400 tok)…')
+    expect(ctx.system.sys).not.toHaveBeenCalled()
+    expect(getTurnState().activity.at(-1)).toMatchObject({
+      text: 'compressing 968 messages (~123,400 tok)…',
+      tone: 'info'
+    })
     expect(getUiState().compacting).toBe(true)
   })
 
@@ -278,7 +282,8 @@ describe('createGatewayEventHandler', () => {
         type: 'status.update'
       } as any)
 
-      expect(ctx.system.sys).toHaveBeenCalledWith(idleLine)
+      expect(ctx.system.sys).not.toHaveBeenCalled()
+      expect(getTurnState().activity.at(-1)).toMatchObject({ text: idleLine, tone: 'info' })
       expect(getUiState().compacting).toBe(true)
       expect(getUiState().status).toBe(idleLine)
 
