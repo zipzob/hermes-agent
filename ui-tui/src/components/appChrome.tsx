@@ -693,24 +693,13 @@ export function StatusRule({
   return (
     <Box height={1}>
       <Box flexDirection="row" flexShrink={1} overflow="hidden" width={leftWidth}>
-        {/* Leading pinned chrome: border + busy face / idle status. When a
+        {/* Leading pinned chrome: border + busy face / idle status, followed
+            by secondary indicators. When a
             notice occupies the slot the status text is dropped — the notice
             renders as a separate shrinkable box below so a long notice
             ellipsizes instead of crushing model │ ctx (R3-M7). */}
         <Box flexDirection="row" flexShrink={0}>
           <Text color={t.color.border}>{'─ '}</Text>
-          {subagentLabel ? (
-            <Text color={stalledCount > 0 ? t.color.warn : t.color.accent}>
-              {subagentLabel}
-              {' │ '}
-            </Text>
-          ) : null}
-          {showBattery ? (
-            <Text color={batteryColorVal}>
-              {batteryText}
-              <Text color={t.color.muted}>{' │ '}</Text>
-            </Text>
-          ) : null}
           {busy ? (
             <FaceTicker
               color={statusColor}
@@ -723,6 +712,18 @@ export function StatusRule({
               {status}
             </Text>
           )}
+          {subagentLabel ? (
+            <Text color={stalledCount > 0 ? t.color.warn : t.color.accent}>
+              {' │ '}
+              {subagentLabel}
+            </Text>
+          ) : null}
+          {showBattery ? (
+            <Text color={batteryColorVal}>
+              <Text color={t.color.muted}>{' │ '}</Text>
+              {batteryText}
+            </Text>
+          ) : null}
         </Box>
         {/* Notice slot — the only shrinkable left element (R3-M7). Sits in a
             flexShrink={1} box with truncate-end so it yields/ellipsizes
