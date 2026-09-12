@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useI18n } from '@/i18n'
+
 import { triggerHaptic } from '@/lib/haptics'
 import { ChevronDown, Loader2 } from '@/lib/icons'
 import { releaseApprovalKey } from '@/lib/keybinds/approval-keys'
@@ -273,6 +274,7 @@ const ApprovalCard: FC<ApprovalCardProps> = ({ request, total, position, stack }
   const hasMoreOptions = allowSession || allowAlways
   const hasCommand = request.command.trim().length > 0
 
+
   const respond = useCallback(
     async (choice: ApprovalChoice) => {
       const pending = sessionApprovalRequests(request.sessionId).get()
@@ -302,6 +304,7 @@ const ApprovalCard: FC<ApprovalCardProps> = ({ request, total, position, stack }
     },
     [copy.gatewayDisconnected, copy.sendFailed, gateway, request, restoreFocusOrigin, stack]
   )
+
 
   return (
     <article

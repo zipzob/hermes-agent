@@ -1,6 +1,7 @@
 import { getActiveComposer } from '@/app/chat/composer/focus'
 import { RICH_INPUT_SLOT } from '@/app/chat/composer/rich-editor'
 import { queryAllVisible } from '@/components/pane-shell/pane-visibility'
+import { ESCAPE_PRIORITY, isTopEscapeLayer } from '@/lib/escape-layers'
 
 import { isEditableTarget } from './combo'
 import { composerFocusBlockedBySurface, isActivateOnEnterTarget } from './composer-focus-keys'
@@ -29,6 +30,7 @@ function activeApprovalStack(): HTMLElement | undefined {
 export function handleApprovalKey(event: KeyboardEvent): boolean {
   if (
     event.defaultPrevented ||
+    !isTopEscapeLayer(ESCAPE_PRIORITY.approval) ||
     event.isComposing ||
     event.altKey ||
     event.shiftKey ||

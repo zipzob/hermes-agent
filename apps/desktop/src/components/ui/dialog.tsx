@@ -4,6 +4,7 @@ import * as React from 'react'
 import { Button } from '@/components/ui/button'
 import { DialogPortalContainerContext } from '@/components/ui/dialog-portal-context'
 import { useI18n } from '@/i18n'
+import { ESCAPE_PRIORITY, pushEscapeLayer } from '@/lib/escape-layers'
 import { X } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 
@@ -110,6 +111,17 @@ function DialogContent({
   // dialog-portal-context.ts. State (not just a ref) so consumers re-render once
   // the node mounts.
   const [contentNode, setContentNode] = React.useState<HTMLElement | null>(null)
+
+  // Radix owns the dialog's actual Escape behavior. Register only its visual
+  // stack position here so lower window-level handlers (approval shortcuts,
+  // pane overlays, edit modes) stand down before the key is dispatched.
+  React.useLayoutEffect(() => {
+    if (!contentNode) {
+      return
+    }
+
+    return pushEscapeLayer(ESCAPE_PRIORITY.modal)
+  }, [contentNode])
 
   // No default here — Radix's normal autofocus (first focusable element, often
   // an input) is what most dialogs want. Dialogs with no input should pass
