@@ -105,6 +105,35 @@ def _plan_goal_compression_recovery(
         "Run /compress, then /goal resume to continue.")
 
 
+def _plan_goal_iteration_budget_continuation(
+    session: dict, result: Any,
+) -> tuple[str | None, str | None]:
+    """Continue an active goal after the agent's per-run iteration ceiling.
+
+    Runtime exhaustion is not agent intent and is not evidence for the goal judge.
+    It therefore neither spends a goal turn nor parks the standing goal.
+    """
+    if not (
+        isinstance(result, dict)
+        and result.get("budget_exhausted") is True
+        and not result.get("interrupted")
+        and not result.get("failed")
+    ):
+        return None, None
+    if not str(session.get("session_key") or ""):
+        return None, None
+    if (goal_mgr := _active_goal_manager(session)) is None:
+        return None, None
+    continuation_prompt = goal_mgr.next_continuation_prompt()
+    if not continuation_prompt:
+        return None, None
+    used = result.get("budget_used")
+    maximum = result.get("budget_max")
+    budget = f"{used}/{maximum}" if isinstance(used, int) and isinstance(maximum, int) else "its limit"
+    return continuation_prompt, (
+        f"Agent run reached {budget} iterations; goal remains active and is continuing.")
+
+
 def _admit_prompt_turn(
     sid: str, session: dict, text: Any, image_paths: list[str] | None,
     queued_prompt_generation: int | None, display_kind: str | None,
@@ -341,7 +370,21 @@ def _goal_followup_after_turn(
         goal_followup = recovery_prompt or None
     except Exception as _goal_recovery_exc:
         _hook_failure("goal compression recovery", _goal_recovery_exc)
-    if compression_exhausted or not _is_successful_goal_turn(result, status, raw):
+    budget_exhausted = bool(
+        isinstance(result, dict)
+        and result.get("budget_exhausted") is True
+        and not result.get("interrupted")
+        and not result.get("failed")
+    )
+    if budget_exhausted:
+        try:
+            budget_prompt, budget_notice = _plan_goal_iteration_budget_continuation(session, result)
+            if budget_notice:
+                _emit("status.update", sid, {"kind": "goal", "text": budget_notice})
+            goal_followup = budget_prompt or goal_followup
+        except Exception as _goal_budget_exc:
+            _hook_failure("goal iteration-budget continuation", _goal_budget_exc)
+    if compression_exhausted or budget_exhausted or not _is_successful_goal_turn(result, status, raw):
         return goal_followup
     try:
         if session.get("session_key") and (goal_mgr := _active_goal_manager(session)) is not None:

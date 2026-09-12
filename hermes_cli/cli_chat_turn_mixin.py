@@ -495,6 +495,7 @@ class CLIChatTurnMixin:
         # box; the sleep lets the renderer paint before we draw.
         sys.stdout.flush()
         time.sleep(0.15)
+        self._last_turn_result = turn.result
         if turn.result:
             self.conversation_history = turn.result.get("messages", self.conversation_history)
         # Mid-turn auto-compression continues in a child session: sync so /status, /resume,

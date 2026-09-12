@@ -12,7 +12,8 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -143,6 +144,125 @@ async def test_goal_verdict_continue_enqueues_continuation(hermes_home):
     assert "Continuing toward goal" in adapter.sends[0]["content"]
     # Continuation prompt enqueued for next turn
     assert adapter._pending_messages, "continuation prompt must be enqueued in pending_messages"
+
+
+@pytest.mark.asyncio
+async def test_goal_iteration_exhaustion_continues_without_judging_or_spending_turn(hermes_home):
+    runner, adapter, session_entry, src = _make_runner_with_adapter()
+
+    from hermes_cli.goals import GoalManager
+
+    mgr = GoalManager(session_entry.session_id)
+    mgr.set("finish the current task")
+    exhausted = {
+        "final_response": "Progress summary from the exhausted run.",
+        "completed": False,
+        "failed": False,
+        "budget_exhausted": True,
+        "budget_used": 60,
+        "budget_max": 60,
+    }
+
+    with patch("hermes_cli.goals.judge_goal", side_effect=AssertionError("must not judge")):
+        await runner._post_turn_goal_continuation(
+            session_entry=session_entry,
+            source=src,
+            final_response=exhausted["final_response"],
+            agent_result=exhausted,
+        )
+        await _drain_until(lambda: adapter.sends and adapter._pending_messages)
+
+    assert len(adapter.sends) == 1
+    assert "60/60 iterations" in adapter.sends[0]["content"]
+    assert "continuing" in adapter.sends[0]["content"]
+    assert adapter._pending_messages
+    assert GoalManager(session_entry.session_id).state.turns_used == 0
+
+
+@pytest.mark.asyncio
+async def test_interrupted_iteration_exhaustion_does_not_restart_gateway_goal(hermes_home):
+    runner, adapter, session_entry, src = _make_runner_with_adapter()
+
+    from hermes_cli.goals import GoalManager
+
+    GoalManager(session_entry.session_id).set("finish the current task")
+    exhausted = {
+        "budget_exhausted": True,
+        "budget_used": 60,
+        "budget_max": 60,
+        "interrupted": True,
+    }
+
+    with patch("hermes_cli.goals.judge_goal", side_effect=AssertionError("must not judge")):
+        await runner._post_turn_goal_continuation(
+            session_entry=session_entry,
+            source=src,
+            final_response="Partial interrupted response.",
+            agent_result=exhausted,
+        )
+
+    assert not adapter.sends
+    assert not adapter._pending_messages
+
+
+@pytest.mark.asyncio
+async def test_streamed_gateway_turn_preserves_iteration_outcome_for_goal_hook(hermes_home):
+    runner, adapter, session_entry, src = _make_runner_with_adapter()
+
+    from hermes_cli.goals import GoalManager
+
+    GoalManager(session_entry.session_id).set("finish the streamed task")
+    runner._post_turn_loop_completion = AsyncMock()
+    exhausted = {
+        "budget_exhausted": True,
+        "budget_used": 60,
+        "budget_max": 60,
+    }
+    event = SimpleNamespace(
+        _streamed_final_response="Progress summary from the exhausted run.",
+        _agent_turn_outcome=exhausted,
+    )
+
+    with patch("hermes_cli.goals.judge_goal", side_effect=AssertionError("must not judge")):
+        await runner._run_post_turn_hooks(
+            agent_result=None,
+            source=src,
+            is_internal=False,
+            event=event,
+        )
+        await _drain_until(lambda: adapter.sends and adapter._pending_messages)
+
+    assert "60/60 iterations" in adapter.sends[0]["content"]
+    assert adapter._pending_messages
+    assert GoalManager(session_entry.session_id).state.turns_used == 0
+
+
+def test_gateway_stashes_only_bounded_post_turn_outcome():
+    runner, _adapter, _session_entry, _src = _make_runner_with_adapter()
+    event = SimpleNamespace()
+    result = {
+        "budget_exhausted": True,
+        "budget_used": 60,
+        "budget_max": 60,
+        "completed": False,
+        "failed": False,
+        "interrupted": False,
+        "turn_exit_reason": "max_iterations_reached(60/60)",
+        "messages": [{"role": "tool", "content": "private output"}],
+        "api_key": "must-not-survive",
+    }
+
+    runner._hmwa_stash_post_turn_outcome(event, result)
+
+    assert event._agent_turn_outcome == {
+        "budget_exhausted": True,
+        "budget_used": 60,
+        "budget_max": 60,
+        "completed": False,
+        "failed": False,
+        "interrupted": False,
+        "turn_exit_reason": "max_iterations_reached(60/60)",
+    }
 
 
 @pytest.mark.asyncio
