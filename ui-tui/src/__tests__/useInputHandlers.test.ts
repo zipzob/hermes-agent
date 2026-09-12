@@ -9,11 +9,15 @@ import {
   dismissSensitivePrompt,
   handleIdleHotkeyExit,
   resolveCtrlCComposerAction,
+  routeForegroundWidgetInput,
   shouldAllowIdleHotkeyExit,
   shouldDetachEditedHistoryInput,
   shouldFallThroughForScroll,
   shouldRouteVoiceStopWhileBlocked
 } from '../app/useInputHandlers.js'
+import { dialogTestApp } from '../sdk/apps/dialogTest.js'
+import { launchWidget } from '../sdk/host.js'
+import type { WidgetInput } from '../sdk/types.js'
 
 const baseKey = {
   downArrow: false,
@@ -62,6 +66,27 @@ describe('shouldAllowIdleHotkeyExit', () => {
 
   it('disables idle exit hotkeys in dashboard chat', () => {
     expect(shouldAllowIdleHotkeyExit(true)).toBe(false)
+  })
+})
+
+describe('routeForegroundWidgetInput', () => {
+  it('routes Escape to the foreground widget while preserving a background approval', () => {
+    resetOverlayState()
+    patchOverlayState({
+      approval: { command: 'test', description: 'test', requestId: 'approval-1' }
+    })
+    expect(dialogTestApp.id).toBe('dialog-test')
+    expect(launchWidget('dialog-test', '')).toBeNull()
+
+    expect(
+      routeForegroundWidgetInput(getOverlayState(), {
+        ch: '',
+        key: { ctrl: false, escape: true, leftArrow: false, return: false, rightArrow: false }
+      } as WidgetInput)
+    ).toBe(true)
+    expect(getOverlayState().widget).toBeNull()
+    expect(getOverlayState().approval?.requestId).toBe('approval-1')
+    resetOverlayState()
   })
 })
 

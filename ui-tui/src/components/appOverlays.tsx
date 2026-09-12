@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 
 import { useGateway } from '../app/gatewayContext.js'
 import type { AppOverlaysProps } from '../app/interfaces.js'
-import { $overlayState, hasFloatingPanel, patchOverlayState } from '../app/overlayStore.js'
+import { $overlayState, hasFloatingPanel, inputLayerOwner, patchOverlayState } from '../app/overlayStore.js'
 import { $uiSessionId, $uiTheme } from '../app/uiStore.js'
 
 import { ActiveSessionSwitcher } from './activeSessionSwitcher.js'
@@ -75,6 +75,13 @@ export function PromptZone({
 >) {
   const overlay = useStore($overlayState)
   const theme = useStore($uiTheme)
+
+  // A modal widget is rendered at viewport level above this in-flow zone.
+  // Unmount prompt handlers while it is foreground so a single keypress is
+  // observed by exactly one visual interaction layer.
+  if (inputLayerOwner(overlay) === 'widget') {
+    return null
+  }
 
   if (overlay.approval) {
     return (

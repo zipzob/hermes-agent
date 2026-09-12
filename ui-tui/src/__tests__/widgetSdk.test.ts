@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { getOverlayState, resetOverlayState } from '../app/overlayStore.js'
+import { getOverlayState, inputLayerOwner, patchOverlayState, resetOverlayState } from '../app/overlayStore.js'
 import { dialogTestApp, gridTestApp } from '../sdk/apps/index.js'
 import { closeWidget, dispatchWidgetInput, launchWidget, openWidget } from '../sdk/host.js'
 import { getWidgetApp, listWidgetApps } from '../sdk/registry.js'
@@ -55,6 +55,19 @@ describe('widget SDK host', () => {
     // Enter closes the dialog app.
     expect(dispatchWidgetInput(key({ return: true }))).toBe(true)
     expect(getOverlayState().widget).toBeNull()
+  })
+
+  it('routes a modal widget ahead of a pending approval without clearing the approval', () => {
+    patchOverlayState({
+      approval: { command: 'rm -rf /tmp/example', description: 'dangerous command', requestId: 'approval-1' }
+    })
+    expect(launchWidget('dialog-test', '')).toBeNull()
+
+    expect(inputLayerOwner(getOverlayState())).toBe('widget')
+    expect(dispatchWidgetInput(key({ escape: true }))).toBe(true)
+    expect(getOverlayState().widget).toBeNull()
+    expect(getOverlayState().approval?.requestId).toBe('approval-1')
+    expect(inputLayerOwner(getOverlayState())).toBe('prompt')
   })
 
   it('a widget that throws in render shows an error chip, not a dead TUI', async () => {
