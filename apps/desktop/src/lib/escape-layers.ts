@@ -5,12 +5,12 @@
  * reveal, layout edit mode, the zone editor, full-page overlays). Without a
  * shared order a single Escape fired all of them at once — closing a pinned
  * pane *and* exiting edit mode, or dismissing an overlay *and* the pane beneath
- * it. Radix dialogs already stop propagation / preventDefault, so this is only
- * about the app's own handlers.
+ * it. Shared Radix dialogs register their mounted portal content here too:
+ * window capture handlers otherwise run before Radix can stop propagation.
  *
  * Contract for a layer handler:
- *   1. bail if `event.defaultPrevented` (a higher, propagation-stopping layer
- *      — a Radix dialog — already handled it);
+ *   1. bail if `event.defaultPrevented` (a higher propagation-stopping layer
+ *      already handled it);
  *   2. bail unless `isTopEscapeLayer(myPriority)` (a higher app layer is open);
  *   3. otherwise act and `event.preventDefault()`.
  *
@@ -19,6 +19,9 @@
 
 // Higher number = closer to the user. Gaps leave room to slot new layers.
 export const ESCAPE_PRIORITY = {
+  // Global approval shortcuts are a fallback interaction surface. Any modal,
+  // overlay, editor, or drag visibly in front must receive Escape first.
+  approval: 0,
   narrowOverlay: 10,
   layoutEdit: 20,
   zoneEditor: 30,
@@ -26,7 +29,10 @@ export const ESCAPE_PRIORITY = {
   // An in-flight pane drag: Esc means "abort the drag", never ALSO exit edit
   // mode / close the overlay the drag started over. Registered only for the
   // drag's few-hundred-ms lifetime (drag-session.ts).
-  drag: 50
+  drag: 50,
+  // Shared Radix dialogs are portaled above the rest of the application and
+  // therefore own Escape over every window-level shortcut beneath them.
+  modal: 100
 } as const
 
 const active = new Map<symbol, number>()

@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render as renderUi, screen, waitFor, within } 
 import type { ReactNode } from 'react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import type { HermesGateway } from '@/hermes'
 import { handleApprovalKey, releaseApprovalKey } from '@/lib/keybinds/approval-keys'
 import { $gateway } from '@/store/gateway'
@@ -214,6 +215,43 @@ describe('PendingApprovalStack', () => {
     expect(hasOpenServerRequest('srq-approval')).toBe(false)
     expect(request).not.toHaveBeenCalledWith('approval.respond', expect.anything())
     expect($approvalRequest.get()).toBeNull()
+  })
+
+  it('sends choice "deny" on Escape when the approval is the front interaction layer', async () => {
+    const request = mockGateway()
+    setRequest('command', undefined, { requestId: 'apr-1' })
+    render(<PendingApprovalStack />)
+
+    act(() => handleApprovalKey(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })))
+
+    await waitFor(() => {
+      expect(request).toHaveBeenCalledWith('approval.respond', {
+        all: false, choice: 'deny', request_id: 'apr-1', session_id: 'sess-1'
+      })
+    })
+  })
+
+  it('leaves a background approval pending when Escape closes a foreground dialog', async () => {
+    const request = mockGateway()
+    const onDialogOpenChange = vi.fn()
+    setRequest()
+    render(
+      <>
+        <PendingApprovalStack />
+        <Dialog onOpenChange={onDialogOpenChange} open>
+          <DialogContent>
+            <DialogTitle>Add criterion</DialogTitle>
+            <textarea aria-label="Criterion" autoFocus />
+          </DialogContent>
+        </Dialog>
+      </>
+    )
+
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Criterion' }), { key: 'Escape' })
+
+    await waitFor(() => expect(onDialogOpenChange).toHaveBeenCalledWith(false))
+    expect(request).not.toHaveBeenCalled()
+    expect($approvalRequest.get()).not.toBeNull()
   })
 
   it('offers "Always allow" in the options menu by default', async () => {
