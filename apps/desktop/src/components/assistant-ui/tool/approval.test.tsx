@@ -4,6 +4,7 @@ import type { ReactNode } from 'react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import type { HermesGateway } from '@/hermes'
 import { handleApprovalKey, releaseApprovalKey } from '@/lib/keybinds/approval-keys'
 import { $gateway } from '@/store/gateway'
@@ -250,6 +251,28 @@ describe('PendingApprovalStack', () => {
     fireEvent.keyDown(screen.getByRole('textbox', { name: 'Criterion' }), { key: 'Escape' })
 
     await waitFor(() => expect(onDialogOpenChange).toHaveBeenCalledWith(false))
+    expect(request).not.toHaveBeenCalled()
+    expect($approvalRequest.get()).not.toBeNull()
+  })
+
+  it('leaves a background approval pending when Escape closes a foreground sheet', async () => {
+    const request = mockGateway()
+    const onSheetOpenChange = vi.fn()
+    setRequest()
+    render(
+      <>
+        <PendingToolApproval part={part('terminal')} />
+        <Sheet onOpenChange={onSheetOpenChange} open>
+          <SheetContent>
+            <SheetTitle>Foreground sheet</SheetTitle>
+          </SheetContent>
+        </Sheet>
+      </>
+    )
+
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+
+    await waitFor(() => expect(onSheetOpenChange).toHaveBeenCalledWith(false))
     expect(request).not.toHaveBeenCalled()
     expect($approvalRequest.get()).not.toBeNull()
   })

@@ -16,12 +16,14 @@ import {
 import { SESSION_IMPORT_ROUTE } from '@/app/routes'
 import { codiconIcon } from '@/components/ui/codicon'
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
+import { EscapeLayerOwner } from '@/components/ui/escape-layer-owner'
 import { HighlightMatches } from '@/components/ui/highlight-matches'
 import { KbdCombo } from '@/components/ui/kbd'
 import { getHermesConfigRecord, listAllProfileSessions } from '@/hermes'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { useI18n } from '@/i18n'
 import { sessionTitle } from '@/lib/chat-runtime'
+import { ESCAPE_PRIORITY } from '@/lib/escape-layers'
 import {
   Activity,
   AppWindow,
@@ -1540,6 +1542,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
           }
         }}
       >
+        <EscapeLayerOwner priority={ESCAPE_PRIORITY.modal} />
         <DialogPrimitive.Title className="sr-only">{t.commandCenter.paletteTitle}</DialogPrimitive.Title>
         <Command className="bg-transparent" loop shouldFilter={false}>
           <HighlightWatcher onValue={handleHighlight} />

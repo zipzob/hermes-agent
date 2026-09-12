@@ -4,7 +4,9 @@ import { Dialog as SheetPrimitive } from 'radix-ui'
 import * as React from 'react'
 
 import { Codicon } from '@/components/ui/codicon'
+import { EscapeLayerOwner } from '@/components/ui/escape-layer-owner'
 import { useI18n } from '@/i18n'
+import { ESCAPE_PRIORITY } from '@/lib/escape-layers'
 import { cn } from '@/lib/utils'
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
@@ -67,6 +69,7 @@ function SheetContent({
         data-slot="sheet-content"
         {...props}
       >
+        <EscapeLayerOwner priority={ESCAPE_PRIORITY.modal} />
         {children}
         {showCloseButton && (
           <SheetPrimitive.Close
