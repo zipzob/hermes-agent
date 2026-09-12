@@ -679,7 +679,7 @@ export const Thinking = memo(function Thinking({
           )
         ) : (
           <Text color={t.color.thinking}>
-            <StreamCursor color={t.color.thinking} streaming={streaming} visible={active} />
+            <Spinner color={t.color.thinking} />
           </Text>
         )}
       </Box>
