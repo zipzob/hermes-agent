@@ -62,6 +62,7 @@ const itemHeightForColumns = (item: Item | undefined, columns: number) =>
 function Harness({
   columns = 80,
   expose,
+  excludeKey,
   height = 10,
   generation = 0,
   initialHeights,
@@ -70,6 +71,7 @@ function Harness({
 }: {
   columns?: number
   expose: React.MutableRefObject<Exposed | null>
+  excludeKey?: string
   height?: number
   generation?: number
   initialHeights?: ReadonlyMap<string, number>
@@ -98,17 +100,20 @@ function Harness({
       Box,
       { flexDirection: 'column', width: '100%' },
       virtualHistory.topSpacer > 0 ? React.createElement(Box, { height: virtualHistory.topSpacer }) : null,
-      ...items.slice(virtualHistory.start, virtualHistory.end).map(item =>
-        React.createElement(
-          Box,
-          {
-            height: itemHeightForColumns(item, columns),
-            key: item.key,
-            ref: virtualHistory.measureRef(item.key)
-          },
-          React.createElement(Text, null, item.text ?? item.key)
-        )
-      ),
+      ...items
+        .slice(virtualHistory.start, virtualHistory.end)
+        .filter(item => item.key !== excludeKey)
+        .map(item =>
+          React.createElement(
+            Box,
+            {
+              height: itemHeightForColumns(item, columns),
+              key: item.key,
+              ref: virtualHistory.measureRef(item.key)
+            },
+            React.createElement(Text, null, item.text ?? item.key)
+          )
+        ),
       virtualHistory.bottomSpacer > 0 ? React.createElement(Box, { height: virtualHistory.bottomSpacer }) : null
     )
   )
@@ -542,7 +547,17 @@ describe('useVirtualHistory offset cache reuse', () => {
       const staleHeights = new Map(initialHeights)
 
       staleHeights.set(items[0]!.key, 1)
-      instance.rerender(React.createElement(Harness, { expose, initialHeights: staleHeights, items }))
+      // Force a real ref(null) in the same commit as the stale-cache injection.
+      // Waiting for deferred virtualization can let the layout effect repair the
+      // height first, so the test would no longer exercise unmount measurement.
+      instance.rerender(
+        React.createElement(Harness, {
+          excludeKey: items[0]!.key,
+          expose,
+          initialHeights: staleHeights,
+          items
+        })
+      )
       await vi.waitFor(() => expect(adjustScrollTop).toHaveBeenCalledOnce())
 
       expect(adjustScrollTop).toHaveBeenCalledOnce()
