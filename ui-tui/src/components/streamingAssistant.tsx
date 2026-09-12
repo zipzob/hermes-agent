@@ -1,6 +1,6 @@
-import { invalidatePrevFrame, useStdout } from '@hermes/ink'
+import { invalidatePrevFrame, stringWidth, useStdout } from '@hermes/ink'
 import { useStore } from '@nanostores/react'
-import { memo, type ReactNode, useLayoutEffect } from 'react'
+import { memo, type ReactNode, useLayoutEffect, useRef } from 'react'
 
 import type { AppLayoutProgressProps } from '../app/interfaces.js'
 import { toggleTodoCollapsed, useTurnSelector } from '../app/turnStore.js'
@@ -22,12 +22,35 @@ export interface LiveBlock {
   tools?: ActiveTool[]
 }
 
-export function LiveTailFrameBoundary({ children, signature }: { children?: ReactNode; signature: string }) {
+const displayLineWidths = (value: string): number[] => value.split('\n').map(line => stringWidth(line))
+
+export const hasDisplayLineShrink = (previous: string, next: string): boolean => {
+  const before = displayLineWidths(previous)
+  const after = displayLineWidths(next)
+
+  return before.length > after.length || before.some((width, index) => width > (after[index] ?? 0))
+}
+
+export function LiveTailFrameBoundary({
+  children,
+  signature,
+  thinkingFootprint = ''
+}: {
+  children?: ReactNode
+  signature: string
+  thinkingFootprint?: string
+}) {
   const { stdout } = useStdout()
+  const previous = useRef<null | { signature: string; thinkingFootprint: string }>(null)
 
   useLayoutEffect(() => {
-    invalidatePrevFrame(stdout)
-  }, [signature, stdout])
+    const prior = previous.current
+    previous.current = { signature, thinkingFootprint }
+
+    if (!prior || prior.signature !== signature || hasDisplayLineShrink(prior.thinkingFootprint, thinkingFootprint)) {
+      invalidatePrevFrame(stdout)
+    }
+  }, [signature, stdout, thinkingFootprint])
 
   useLayoutEffect(
     () => () => {
@@ -129,15 +152,17 @@ export const StreamingAssistant = memo(function StreamingAssistant({
     sections
   })
 
+  const thinkingFootprint = blocks.map(block => block.msg.thinking ?? '').join('\n')
+
   if (!progress.showProgressArea && !showStreamingArea && !activeTools.length) {
-    return <LiveTailFrameBoundary signature={structuralSignature} />
+    return <LiveTailFrameBoundary signature={structuralSignature} thinkingFootprint={thinkingFootprint} />
   }
 
   const detailsCtx = { commandOverride: detailsModeCommandOverride, detailsMode, sections }
   let prev = prevMsg
 
   return (
-    <LiveTailFrameBoundary signature={structuralSignature}>
+    <LiveTailFrameBoundary signature={structuralSignature} thinkingFootprint={thinkingFootprint}>
       {blocks.map(block => {
         const node = (
           <MessageLine
