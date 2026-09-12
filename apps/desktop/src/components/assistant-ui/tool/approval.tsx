@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useI18n } from '@/i18n'
+import { ESCAPE_PRIORITY, isTopEscapeLayer, pushEscapeLayer } from '@/lib/escape-layers'
 import { triggerHaptic } from '@/lib/haptics'
 import { AlertCircle, ChevronDown } from '@/lib/icons'
 import { cn } from '@/lib/utils'
@@ -126,6 +127,8 @@ const ApprovalBar: FC<{ request: ApprovalRequest; surface: 'floating' | 'inline'
   const hasMoreOptions = allowSession || allowAlways
   const hasCommand = request.command.trim().length > 0
 
+  useEffect(() => pushEscapeLayer(ESCAPE_PRIORITY.approval), [])
+
   const respond = useCallback(
     async (choice: ApprovalChoice) => {
       // Another bar (or the keyboard path) may have already resolved this
@@ -171,15 +174,19 @@ const ApprovalBar: FC<{ request: ApprovalRequest; surface: 'floating' | 'inline'
     [busy, copy.gatewayDisconnected, copy.sendFailed, gateway, request.requestId, request.sessionId]
   )
 
-  // ⌘/Ctrl+Enter → Run, Esc → Reject.
-  // While the confirm dialog is open it owns the keyboard (Esc closes it), so
-  // the strip-level shortcuts stand down to avoid denying the whole approval.
+  // ⌘/Ctrl+Enter → Run, Esc → Reject, but only while approval is the topmost
+  // interaction layer. A dialog opened elsewhere (for example Add criterion)
+  // must close without resolving the approval waiting behind it.
   useEffect(() => {
     if (confirmAlways) {
       return
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !isTopEscapeLayer(ESCAPE_PRIORITY.approval)) {
+        return
+      }
+
       if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
         event.preventDefault()
         void respond('once')

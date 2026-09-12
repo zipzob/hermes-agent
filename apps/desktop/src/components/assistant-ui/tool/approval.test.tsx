@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import type { HermesGateway } from '@/hermes'
 import { $gateway } from '@/store/gateway'
 import { $approvalRequest, clearAllPrompts, setApprovalRequest } from '@/store/prompts'
@@ -119,6 +120,41 @@ describe('PendingToolApproval', () => {
     await waitFor(() => {
       expect(request).toHaveBeenCalledWith('approval.respond', { choice: 'deny', session_id: 'sess-1' })
     })
+  })
+
+  it('sends choice "deny" on Escape when the approval is the front interaction layer', async () => {
+    const request = mockGateway()
+    setRequest()
+    render(<PendingToolApproval part={part('terminal')} />)
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    await waitFor(() => {
+      expect(request).toHaveBeenCalledWith('approval.respond', { choice: 'deny', session_id: 'sess-1' })
+    })
+  })
+
+  it('leaves a background approval pending when Escape closes a foreground dialog', async () => {
+    const request = mockGateway()
+    const onDialogOpenChange = vi.fn()
+    setRequest()
+    render(
+      <>
+        <PendingToolApproval part={part('terminal')} />
+        <Dialog onOpenChange={onDialogOpenChange} open>
+          <DialogContent>
+            <DialogTitle>Add criterion</DialogTitle>
+            <textarea aria-label="Criterion" autoFocus />
+          </DialogContent>
+        </Dialog>
+      </>
+    )
+
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Criterion' }), { key: 'Escape' })
+
+    await waitFor(() => expect(onDialogOpenChange).toHaveBeenCalledWith(false))
+    expect(request).not.toHaveBeenCalled()
+    expect($approvalRequest.get()).not.toBeNull()
   })
 
   it('offers "Always allow" in the options menu by default', async () => {
