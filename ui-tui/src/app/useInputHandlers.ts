@@ -10,6 +10,7 @@ import { isAction, isCopyShortcut, isMac, isVoiceToggleKey } from '../lib/platfo
 import { computePrecisionWheelStep, initPrecisionWheel } from '../lib/precisionWheel.js'
 import { computeWheelStep, initWheelAccelForHost } from '../lib/wheelAccel.js'
 import { closeWidget, dispatchWidgetInput } from '../sdk/host.js'
+import type { WidgetInput } from '../sdk/types.js'
 
 import { $agentDockCollapsed } from './agentRoster.js'
 import { getInputSelection } from './inputSelectionStore.js'
@@ -20,7 +21,7 @@ import {
   type InputHandlerResult,
   type OverlayState
 } from './interfaces.js'
-import { $isBlocked, $overlayState, patchOverlayState } from './overlayStore.js'
+import { $isBlocked, $overlayState, inputLayerOwner, patchOverlayState } from './overlayStore.js'
 import { respondToServerRequest } from './serverRequestStore.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
@@ -122,6 +123,17 @@ export const shouldRouteVoiceStopWhileBlocked = (
   recording: boolean,
   voiceToggleKey: boolean
 ): boolean => blocked && recording && voiceToggleKey
+
+/** Route a foreground modal widget before composer/global Escape handling. */
+export function routeForegroundWidgetInput(overlay: OverlayState, input: WidgetInput): boolean {
+  if (inputLayerOwner(overlay) !== 'widget') {
+    return false
+  }
+
+  dispatchWidgetInput(input)
+
+  return true
+}
 
 export function applyVoiceRecordRequest(
   starting: boolean,
@@ -407,8 +419,15 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
   useInput((ch, key, event) => {
     const live = getUiState()
 
+    // The painted modal owns every key. Do this before lifecycle shortcuts and
+    // composer handling so no background surface consumes the foreground event.
+    if (routeForegroundWidgetInput(overlay, { ch, key })) {
+      return
+    }
+
     // An open microphone is a lifecycle control: ordinary blocked-input
-    // state must not prevent the configured record key from stopping it.
+    // state must not prevent the configured record key from stopping it when
+    // no higher visual input layer is active.
     if (shouldRouteVoiceStopWhileBlocked(isBlocked, voice.recording, isVoiceToggleKey(key, ch, voice.recordKey))) {
       return voiceRecordToggle()
     }
@@ -513,14 +532,6 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
           })
         }
 
-        return
-      }
-
-      // Widget apps (SDK): the active app owns every key while open. This
-      // supersedes the demo-only handleStackedModalInput routing from #68999
-      // — grid-test/dialog are now widget apps, so the topmost-modal-owns-
-      // input contract is enforced structurally by the single active widget.
-      if (overlay.widget && dispatchWidgetInput({ ch, key })) {
         return
       }
 
