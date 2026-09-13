@@ -880,7 +880,9 @@ class _InlineRequest:
         # deadlock this path exists to avoid (#60203). This ticker only refreshes the clock.
         while not self._hb_stop.wait(_DIRECT_API_ACTIVITY_HEARTBEAT_SECONDS):
             with contextlib.suppress(Exception):
-                self.agent._touch_activity("waiting for non-streaming API response")
+                getattr(self.agent, "_touch_liveness", self.agent._touch_activity)(
+                    "waiting for non-streaming API response"
+                )
 
     def _on_stale(self) -> None:
         # Timer thread: aborts sockets only, never issues a request (keeps the no-worker

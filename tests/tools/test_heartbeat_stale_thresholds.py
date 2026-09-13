@@ -5,9 +5,9 @@ class TestHeartbeatStaleThresholds:
     """Verify the heartbeat stale threshold constants are correct."""
 
     def test_idle_cycles_value(self):
-        """IDLE stale cycles should be 15 (15 * 30s = 450s)."""
+        """IDLE stale cycles should be 12 (12 * 30s = 360s)."""
         from tools.delegate_tool import _HEARTBEAT_STALE_CYCLES_IDLE
-        assert _HEARTBEAT_STALE_CYCLES_IDLE == 15
+        assert _HEARTBEAT_STALE_CYCLES_IDLE == 12
 
     def test_in_tool_cycles_value(self):
         """IN_TOOL stale cycles should be 40 (40 * 30s = 1200s)."""

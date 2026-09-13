@@ -238,9 +238,11 @@ class _Heartbeat:
             child_tool = child_summary.get("current_tool")
             child_iter = child_summary.get("api_call_count", 0)
             child_max = child_summary.get("max_iterations", 0)
-            child_activity_ts = child_summary.get("last_activity_ts")
-            # A slow model wait refreshes last_activity_ts (direct_api_call
-            # heartbeat), so it never looks stale at the idle threshold.
+            child_activity_ts = child_summary.get(
+                "last_progress_ts", child_summary.get("last_activity_ts")
+            )
+            # Transport heartbeats refresh host liveness but not last_progress_ts,
+            # so a silent provider wait can be classified before the hard timeout.
             activity_advanced = child_activity_ts is not None and (
                 last_seen["ts"] is None or child_activity_ts > last_seen["ts"]
             )

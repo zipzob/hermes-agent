@@ -41,7 +41,9 @@ class StreamingWaitMonitor:
         if getattr(agent, "api_mode", "") == "codex_responses":
             # Codex streaming delegates to an inner _NonStreamRequest whose
             # request-local TTFB/event-idle state owns the accurate notice.
-            agent._touch_activity(f"waiting for Codex provider response ({waiting_secs}s)")
+            getattr(agent, "_touch_liveness", agent._touch_activity)(
+                f"waiting for Codex provider response ({waiting_secs}s)"
+            )
             return
         if waiting_secs >= 60.0:
             # No chunks for 60s+: say WHAT the wait is and WHEN recovery kicks in.
@@ -56,7 +58,9 @@ class StreamingWaitMonitor:
                 f"(provider may be slow or overloaded, or the model is thinking{_recovery})")
         else:
             # Chunks are flowing — keep the tracker fresh, leave the display alone.
-            self.agent._touch_activity(f"waiting for stream response ({waiting_secs}s, no chunks yet)")
+            getattr(self.agent, "_touch_liveness", self.agent._touch_activity)(
+                f"waiting for stream response ({waiting_secs}s, no chunks yet)"
+            )
 
     def _monitor_loop(self) -> None:
         _HEARTBEAT_INTERVAL = 30.0  # seconds between gateway activity touches

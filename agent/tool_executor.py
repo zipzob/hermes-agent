@@ -579,7 +579,7 @@ def _run_tool_activity_heartbeat(
     tool runs silently. Wedged tools stay bounded by the tool layer's own timeouts."""
     try:
         while not stop_event.wait(interval):
-            agent._touch_activity(label)
+            getattr(agent, "_touch_liveness", agent._touch_activity)(label)
     except Exception:
         pass  # a heartbeat must never break the agent loop
 
