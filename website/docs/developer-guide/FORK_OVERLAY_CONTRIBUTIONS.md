@@ -223,3 +223,21 @@ and iteration-summary safety have different owners and rollback boundaries.
   unrelated provider errors rather than misclassifying them as context overflow.
 - **Verification:** 286 owning tests passed with the Anthropic test extra enabled;
   Ruff and diff checks passed.
+
+### TUI automatic native-compaction threshold
+
+- **Topic / integrated commit:** `contrib/tui-native-compaction-threshold` —
+  `64cee398dffb82506a7304526579bea3bf1ba293` (integrated unchanged).
+- **Symptom:** Sol-900k TUI sessions compacted repeatedly near 200k tokens even
+  though the configured model-aware trigger was 85% of the 900k window.
+- **Root cause:** live TUI config synchronization converted an absent
+  `compression.codex_responses_compact_threshold` into a hard-coded 200,000,
+  overriding the native request path's automatic local-trigger derivation.
+- **Contract:** preserve `None` for absent or invalid explicit thresholds so native
+  Responses compaction follows the effective model threshold minus its 8,192-token
+  safety margin; retain positive explicit thresholds unchanged.
+- **Mode scope:** live Desktop/TUI session config synchronization; direct agent
+  construction already preserved automatic mode.
+- **Verification:** 93 focused hot-reload/native-compaction tests, Ruff, and diff
+  checks passed. A temporary explicit 756,808-token config hotfix protects old
+  running Sol-900k sessions until the integrated code is installed and restarted.
