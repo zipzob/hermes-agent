@@ -6,6 +6,7 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import patch as mock_patch
 
 import pytest
@@ -1532,7 +1533,6 @@ class TestApprovalTimeoutIsNotConsent:
             notified.append(data)
 
         setattr(_notify, "requires_delivery_ack", True)
-        started = time.monotonic()
         caplog.set_level(logging.INFO, logger="tools.approval")
         decision = mod._await_gateway_decision(
             self.SESSION_KEY,
@@ -1550,13 +1550,30 @@ class TestApprovalTimeoutIsNotConsent:
             "choice": None,
             "notify_failed": True,
         }
-        assert time.monotonic() - started < 0.5
         assert len(notified) == 1
         assert self.SESSION_KEY not in mod._gateway_queues
         assert "Gateway approval queued" in caplog.text
         assert self.SESSION_KEY in caplog.text
         assert notified[0]["request_id"] in caplog.text
         assert "redacted-command" not in caplog.text
+
+    def test_delivery_ack_deadline_uses_bounded_monotonic_waits(self, monkeypatch):
+        """Deadline behavior must not depend on scheduler wall-clock latency."""
+        from tools import approval_gateway_wait as wait_mod
+
+        monkeypatch.setattr(wait_mod, "_DELIVERY_ACK_TIMEOUT_SECONDS", 0.02)
+        monkeypatch.setattr(wait_mod, "is_interrupted", lambda: False)
+        times = iter((10.0, 10.0, 10.02))
+        monkeypatch.setattr(wait_mod.time, "monotonic", lambda: next(times))
+        waits = []
+        entry = SimpleNamespace(
+            event=SimpleNamespace(is_set=lambda: False),
+            acknowledged=False,
+            ack_event=SimpleNamespace(wait=lambda *, timeout: waits.append(timeout)),
+        )
+
+        assert wait_mod._wait_for_delivery_ack(cast(Any, entry), self.SESSION_KEY) == "timeout"
+        assert waits == [pytest.approx(0.02)]
 
     def test_ack_capable_client_disconnect_is_delivery_failure(self, monkeypatch):
         from tools import approval as mod
