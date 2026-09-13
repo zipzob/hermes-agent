@@ -574,7 +574,7 @@ def _run_tool_activity_heartbeat(
     label: str,
     interval: float = _TOOL_ACTIVITY_HEARTBEAT_INTERVAL_S,
 ) -> None:
-    """Daemon thread stamping ``agent._touch_activity`` every ``interval`` seconds until
+    """Daemon thread stamping host liveness every ``interval`` seconds until
     ``stop_event`` is set, so the gateway inactivity watchdog never abandons a turn whose
     tool runs silently. Wedged tools stay bounded by the tool layer's own timeouts."""
     try:
@@ -817,7 +817,9 @@ def _poll_sequential_future(agent, future, function_name: str, deadline: float |
             elapsed = int(time.monotonic() - started)
             if elapsed - _last_heartbeat >= 30:
                 _last_heartbeat = elapsed
-                agent._touch_activity(f"sequential tool running ({elapsed}s): {function_name}")
+                getattr(agent, "_touch_liveness", agent._touch_activity)(
+                    f"sequential tool running ({elapsed}s): {function_name}"
+                )
 
 
 def _run_sequential_tool_execution_middleware(
@@ -1346,7 +1348,7 @@ class _ConcurrentBatch:
                 # Heartbeat every ~30s (6 × 5s poll intervals)
                 if _conc_elapsed > 0 and _conc_elapsed % 30 < 6:
                     _still_running = self._running_names(not_done, future_to_index)
-                    agent._touch_activity(
+                    getattr(agent, "_touch_liveness", agent._touch_activity)(
                         f"concurrent tools running ({_conc_elapsed}s, "
                         f"{len(not_done)} remaining: {', '.join(_still_running[:3])})"
                     )

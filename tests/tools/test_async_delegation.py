@@ -406,10 +406,9 @@ def test_stalling_runner_that_honors_interrupt_keeps_its_result(monkeypatch):
 
 
 def test_streaming_child_counts_as_alive(monkeypatch):
-    """A child mid-stream (api_call_count frozen, last_activity_ts ticking)
-    must never be stalled — streamed chunks tick _touch_activity, and the
-    progress token includes that timestamp (same liveness signal as the
-    compaction inactivity budget, PR #71508)."""
+    """A child mid-stream (api_call_count frozen, last_progress_ts ticking)
+    must never be stalled: observable streamed chunks are semantic progress,
+    unlike transport/tool-poll heartbeats."""
     _fast_stale_monitor(monkeypatch)
     gate = threading.Event()
     now = {"ts": 1000.0}
