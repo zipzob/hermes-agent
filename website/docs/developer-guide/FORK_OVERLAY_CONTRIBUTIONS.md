@@ -200,6 +200,19 @@ and iteration-summary safety have different owners and rollback boundaries.
   automatically select preview Spark or scarce Astra; retain bounded provenance.
 - **Verification:** 29 focused routing/live-log tests, Ruff, and diff checks passed.
 
+#### Operator-only automatic-lane hardening
+
+- **Topic / integrated commit:** `contrib/delegation-operator-only-models` —
+  `17ccf3a97e613eea0211db763ea911298162d53e` (integrated unchanged).
+- **Symptom:** a user configuration could place Spark or Astra in an automatic
+  workload lane despite the documented explicit-operator boundary.
+- **Contract:** automatic routing rejects configured Spark/Astra candidates and
+  falls back to the stable Luna/Terra/Sol lane; an explicit model pin remains the
+  only route to operator-only models and keeps regular/900k capacity independent.
+- **Verification:** deterministic configured-lane regressions plus the complete
+  routing/staleness owning suite passed; independent review identified the original
+  bypass and requires exact-byte re-review of this correction.
+
 ### Semantic delegated-child staleness
 
 - **Topic / integrated commit:** `contrib/delegation-semantic-stale-detection` —
@@ -211,6 +224,18 @@ and iteration-summary safety have different owners and rollback boundaries.
   treating ordinary long-running physical work as dead.
 - **Verification:** 57 focused tests passed with one platform skip; earlier owning
   coverage passed 143 tests with one skip.
+
+#### Tool-poll liveness hardening
+
+- **Topic / integrated commit:** `contrib/delegation-tool-liveness` —
+  `25f3638621499be5afe7fbeacf45d35f784322e7` (integrated unchanged).
+- **Symptom:** sequential and concurrent silent-tool polling heartbeats still
+  advanced semantic progress, allowing a wedged child to look healthy indefinitely.
+- **Contract:** polling keeps the host/session alive without advancing
+  `last_progress_ts`; only observable stream content, tool transitions, and API-call
+  boundaries reset semantic staleness.
+- **Verification:** two deterministic production-path heartbeat regressions and the
+  complete owning suite passed: 89 tests, one platform skip, Ruff and diff checks.
 
 ### Iteration-limit summary capacity guard
 
