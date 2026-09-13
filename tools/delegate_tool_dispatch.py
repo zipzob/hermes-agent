@@ -291,11 +291,10 @@ def _batch_progress_token(child_agents: List[Any]) -> tuple:
     transport-only heartbeats intentionally do not hide a silent child. A frozen token past the threshold means the batch
     is wedged. ``in_tool`` is True while ANY child is inside a tool so slow tools get the higher ceiling (mirrors
     the sync heartbeat)."""
-    # Progress token for the async registry's stale monitor: the combined (api_call_count, current_tool,
-    # last_activity_ts) of every child. last_activity_ts is ticked by _touch_activity on every streamed
-    # chunk ("receiving stream response"), every tool transition, and every API-call start/completion — so a
-    # child streaming a long response is alive even though api_call_count only advances when the call
-    # completes (same liveness signal as the compaction inactivity budget, PR #71508).
+    # Semantic progress is distinct from host/transport liveness: streamed content,
+    # tool transitions, and API-call boundaries advance last_progress_ts, while
+    # polling heartbeats do not. This lets the stale monitor detect a wedged child
+    # even when its process and transport remain alive.
     parts = []
     in_tool = False
     for c in child_agents:
