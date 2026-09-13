@@ -597,7 +597,7 @@ def _run_tool_activity_heartbeat(
         while not stop_event.wait(interval):
             if is_thread_interrupted(worker_tid):
                 return
-            agent._touch_activity(label)
+            getattr(agent, "_touch_liveness", agent._touch_activity)(label)
     except Exception:
         pass  # a heartbeat must never break the agent loop
 

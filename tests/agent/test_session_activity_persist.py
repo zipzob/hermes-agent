@@ -12,6 +12,7 @@ def _agent_with_db(session_id: str = "sess-1"):
         session_id=session_id,
         _session_db=MagicMock(),
         _last_activity_ts=0.0,
+        _last_progress_ts=0.0,
         _last_activity_desc="",
         _last_activity_provenance=ActivityProvenance.UNKNOWN,
         _session_activity_last_persist_mono=0.0,
@@ -21,6 +22,7 @@ def _agent_with_db(session_id: str = "sess-1"):
         iteration_budget=SimpleNamespace(used=0, max_total=10),
     )
     agent._touch_activity = run_agent.AIAgent._touch_activity.__get__(agent, SimpleNamespace)
+    agent._touch_liveness = run_agent.AIAgent._touch_liveness.__get__(agent, SimpleNamespace)
     agent._persist_session_activity_if_due = (
         run_agent.AIAgent._persist_session_activity_if_due.__get__(agent, SimpleNamespace)
     )
@@ -171,6 +173,24 @@ def test_heartbeat_respects_cadence_constant(monkeypatch):
     mono["t"] = 1000.0 + INTERVAL + 0.5
     agent._touch_activity("past window")
     assert agent._session_db.touch_session_activity.call_count == 2
+
+
+def test_transport_liveness_does_not_claim_semantic_progress(monkeypatch):
+    """Periodic provider heartbeats keep hosts alive without hiding a silent child."""
+    agent = _agent_with_db()
+    now = {"t": 100.0}
+    monkeypatch.setattr(run_agent.time, "time", lambda: now["t"])
+    monkeypatch.setattr(run_agent.time, "monotonic", lambda: now["t"])
+    monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
+
+    agent._touch_activity("starting API call")
+    assert agent.get_activity_summary()["last_progress_ts"] == 100.0
+
+    now["t"] = 115.0
+    agent._touch_liveness("waiting for provider response")
+    summary = agent.get_activity_summary()
+    assert summary["last_activity_ts"] == 115.0
+    assert summary["last_progress_ts"] == 100.0
 
 
 def test_get_activity_summary_exposes_shared_activity_contract(monkeypatch):
