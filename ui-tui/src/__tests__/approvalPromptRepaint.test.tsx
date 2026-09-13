@@ -49,6 +49,7 @@ describe('ApprovalPrompt frame invalidation', () => {
       <ApprovalPrompt
         cols={100}
         onChoice={() => {}}
+        onExpired={() => {}}
         req={{
           allowPermanent: true,
           command: 'echo test',
@@ -87,6 +88,7 @@ describe('ApprovalPrompt frame invalidation', () => {
       <ApprovalPrompt
         cols={100}
         onChoice={() => {}}
+        onExpired={() => {}}
         req={{ allowPermanent: true, command: 'echo test', description: 'test command' }}
         t={DEFAULT_THEME}
       />,
@@ -111,5 +113,45 @@ describe('ApprovalPrompt frame invalidation', () => {
     await tick()
     expect(harness.invalidations).toBeGreaterThan(moved)
     instance.cleanup()
+  })
+
+  it('runs the local expiry guard exactly once', async () => {
+    vi.useFakeTimers()
+    const onExpired = vi.fn()
+    const stdout = new PassThrough()
+    const stdin = new PassThrough()
+    const stderr = new PassThrough()
+
+    Object.assign(stdout, { columns: 100, isTTY: false, rows: 30 })
+    Object.assign(stdin, { isTTY: false })
+    Object.assign(stderr, { isTTY: false })
+
+    const instance = renderSync(
+      <ApprovalPrompt
+        cols={100}
+        onChoice={() => {}}
+        onExpired={onExpired}
+        req={{
+          allowPermanent: true,
+          command: 'echo test',
+          description: 'expires immediately',
+          expiresAtMs: Date.now(),
+          requestId: 'approval-local-expiry-test'
+        }}
+        t={DEFAULT_THEME}
+      />,
+      {
+        patchConsole: false,
+        stderr: stderr as unknown as NodeJS.WriteStream,
+        stdin: stdin as unknown as NodeJS.ReadStream,
+        stdout: stdout as unknown as NodeJS.WriteStream
+      }
+    )
+
+    await vi.runOnlyPendingTimersAsync()
+    expect(onExpired).toHaveBeenCalledTimes(1)
+    instance.unmount()
+    instance.cleanup()
+    vi.useRealTimers()
   })
 })

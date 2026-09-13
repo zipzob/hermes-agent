@@ -10,7 +10,7 @@ import SourceText from '../../packages/hermes-ink/src/ink/components/Text.js'
 import type { DOMElement } from '../../packages/hermes-ink/src/ink/dom.js'
 import Output from '../../packages/hermes-ink/src/ink/output.js'
 import { scrollFastPathStats as sourceScrollFastPathStats } from '../../packages/hermes-ink/src/ink/render-node-to-output.js'
-import { renderSync as renderSourceSync } from '../../packages/hermes-ink/src/ink/root.js'
+import { invalidatePrevFrame as invalidateSourcePrevFrame, renderSync as renderSourceSync } from '../../packages/hermes-ink/src/ink/root.js'
 import { useVirtualHistory } from '../hooks/useVirtualHistory.js'
 
 interface Item {
@@ -156,16 +156,18 @@ function FastPathRepairHarness({
   expose,
   tick,
   dirtyTick = tick,
-  includeOverlay = true
+  includeOverlay = true,
+  scrollWidth = 80
 }: {
   dirtyTick?: number
   expose: React.MutableRefObject<FastPathRepairExpose | null>
   includeOverlay?: boolean
+  scrollWidth?: number
   tick: number
 }) {
   return React.createElement(
     SourceBox,
-    { flexDirection: 'column', height: 12, width: 40 },
+    { flexDirection: 'column', height: 12, width: 80 },
     React.createElement(
       SourceScrollBox,
       {
@@ -176,7 +178,7 @@ function FastPathRepairHarness({
             expose.current.scroll = scroll
           }
         },
-        width: 40
+        width: scrollWidth
       },
       React.createElement(SourceBox, { height: 2 }, React.createElement(SourceText, null, 'head-row')),
       React.createElement(
@@ -534,6 +536,83 @@ describe('ScrollBox renderer bounds', () => {
       expect(streams.stderr.read()?.toString() ?? '').toBe('')
     } finally {
       vi.restoreAllMocks()
+      instance.unmount()
+      instance.cleanup()
+    }
+  })
+
+  it('declines the full-row terminal scroll fast path for a partial-width ScrollBox', async () => {
+    const expose = {
+      current: {
+        adjacent: null,
+        dirtyChild: null,
+        overlay: null,
+        scroll: null,
+        scrollBox: null
+      } as FastPathRepairExpose
+    }
+    const streams = makeStreams()
+    const instance = renderSourceSync(
+      React.createElement(FastPathRepairHarness, { expose, includeOverlay: false, scrollWidth: 30, tick: 0 }),
+      {
+        patchConsole: false,
+        stderr: streams.stderr as unknown as NodeJS.WriteStream,
+        stdin: streams.stdin as unknown as NodeJS.ReadStream,
+        stdout: streams.stdout as unknown as NodeJS.WriteStream
+      }
+    )
+
+    try {
+      await delay(20)
+      const capturedBefore = sourceScrollFastPathStats.captured
+      const takenBefore = sourceScrollFastPathStats.taken
+
+      expose.current!.scroll!.scrollTo(1)
+      await delay(40)
+
+      expect(sourceScrollFastPathStats.captured).toBeGreaterThan(capturedBefore)
+      expect(sourceScrollFastPathStats.taken).toBe(takenBefore)
+      expect(sourceScrollFastPathStats.lastDeclineReason).toBe('partialWidthRepairBounds')
+    } finally {
+      instance.unmount()
+      instance.cleanup()
+    }
+  })
+
+  it('declines a full-width scroll hint after the terminal frame was invalidated', async () => {
+    const expose = {
+      current: {
+        adjacent: null,
+        dirtyChild: null,
+        overlay: null,
+        scroll: null,
+        scrollBox: null
+      } as FastPathRepairExpose
+    }
+    const streams = makeStreams()
+    const instance = renderSourceSync(
+      React.createElement(FastPathRepairHarness, { expose, includeOverlay: false, tick: 0 }),
+      {
+        patchConsole: false,
+        stderr: streams.stderr as unknown as NodeJS.WriteStream,
+        stdin: streams.stdin as unknown as NodeJS.ReadStream,
+        stdout: streams.stdout as unknown as NodeJS.WriteStream
+      }
+    )
+
+    try {
+      await delay(20)
+      const capturedBefore = sourceScrollFastPathStats.captured
+      const takenBefore = sourceScrollFastPathStats.taken
+
+      expect(invalidateSourcePrevFrame(streams.stdout as unknown as NodeJS.WriteStream)).toBe(true)
+      expose.current!.scroll!.scrollTo(1)
+      await delay(40)
+
+      expect(sourceScrollFastPathStats.captured).toBeGreaterThan(capturedBefore)
+      expect(sourceScrollFastPathStats.taken).toBe(takenBefore)
+      expect(sourceScrollFastPathStats.lastDeclineReason).toBe('noPrevScreen')
+    } finally {
       instance.unmount()
       instance.cleanup()
     }

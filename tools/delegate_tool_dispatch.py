@@ -33,6 +33,9 @@ class _Batch:
     children: List[tuple]
     parent_agent: Any
     creds: Dict[str, Any]
+    # Effective model for every call-wide task. This remains distinct from the
+    # base route when an authorized child uses a different model.
+    task_models: List[Optional[str]]
     context: Optional[str]
     top_role: str
     max_children: int
@@ -384,7 +387,7 @@ def _dispatch_unit(unit: _Batch, unit_id: Optional[str], slot_key: Optional[str]
         # Call-wide goals: completion formatting indexes them by task_index.
         goals=[t["goal"] for t in unit.task_list], context=unit.context,
         toolsets=None,  # metadata for the completion block only; subagents inherit the parent's toolsets
-        role=unit.top_role, model=unit.creds["model"],
+        role=unit.top_role, model=unit.creds["model"], task_models=unit.task_models,
         runner=lambda: _execute_and_aggregate(unit, honor_parent_interrupt=False),
         interrupt_fn=_interrupt, delegation_id=unit_id, slot_key=slot_key,
         task_indexes=[i for (i, _, _) in unit.children] if len(unit.children) < len(unit.task_list) else None,

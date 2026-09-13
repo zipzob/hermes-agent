@@ -172,6 +172,23 @@ def _setup_mcp_shim(agent, args: dict, ctx: InlineToolContext) -> Any:
     }, ctx)
 
 
+def _request_model_escalation(agent, args: dict, ctx: InlineToolContext) -> Any:
+    from tools.approval_context import get_current_session_key
+    from tools.delegate_tool_config import _load_config
+    from tools.model_escalation import request_model_escalation
+
+    session_key = get_current_session_key(default="") or str(getattr(agent, "session_id", "") or "")
+    routing = _load_config().get("resource_routing")
+    return request_model_escalation(
+        target_model=args.get("target_model", ""), reason=args.get("reason", ""), scope=args.get("scope", ""),
+        lower_model=args.get("lower_model"), context_window=args.get("context_window", "auto"),
+        estimated_context_tokens=args.get("estimated_context_tokens"), provider=str(getattr(agent, "provider", "") or ""),
+        session_key=session_key, callback=getattr(agent, "clarify_callback", None),
+        policy=routing.get("escalation") if isinstance(routing, dict) else None,
+    )
+
+
+
 # Order is the historical if/elif order of ``execute_tool_calls_sequential``.
 INLINE_TOOL_EXECUTORS: Dict[str, InlineToolExecutor] = {
     "todo_list": _tool(
@@ -192,6 +209,7 @@ INLINE_TOOL_EXECUTORS: Dict[str, InlineToolExecutor] = {
         ("questions", "questions"),
         callback=lambda agent, ctx: agent.clarify_callback,
     ),
+    "request_model_escalation": _request_model_escalation,
     "read_terminal": _callback_tool(
         "tools.read_terminal_tool", "read_terminal_tool", "read_terminal_callback",
         ("start_line", "start_line"), ("count", "count"),

@@ -1752,14 +1752,18 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
                     has_replayable_native_compaction_checkpoint,
                 )
 
-                note_checkpoint = getattr(
-                    agent.context_compressor, "note_native_compaction_checkpoint", None
+                record_checkpoint = getattr(
+                    agent.context_compressor, "record_native_compaction_checkpoint", None
                 )
+                if not callable(record_checkpoint):
+                    record_checkpoint = getattr(
+                        agent.context_compressor, "note_native_compaction_checkpoint", None
+                    )
                 if (
-                    callable(note_checkpoint)
+                    callable(record_checkpoint)
                     and has_replayable_native_compaction_checkpoint(agent, [msg])
                 ):
-                    note_checkpoint()
+                    record_checkpoint()
 
     if assistant_tool_calls:
         msg["tool_calls"] = [_assistant_tool_call_dict(agent, tc, i) for i, tc in enumerate(assistant_tool_calls)]

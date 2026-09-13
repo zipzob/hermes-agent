@@ -380,8 +380,12 @@ export default class Output {
             let spans: [number, number][] = [[startX, maxX]]
 
             for (const r of absoluteClears) {
-              if (row < r.y || row >= r.y + r.height || !spans.length) {
+              if (!spans.length) {
                 break
+              }
+
+              if (row < r.y || row >= r.y + r.height) {
+                continue
               }
 
               const cs = Math.max(startX, r.x)

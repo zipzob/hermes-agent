@@ -82,7 +82,7 @@ export function approvalAction(
   return { kind: 'noop' }
 }
 
-export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptProps) {
+export function ApprovalPrompt({ cols = 80, onChoice, onExpired, req, t }: ApprovalPromptProps) {
   const [sel, setSel] = useState(0)
   const expiry = useApprovalExpiry(req.expiresAtMs)
   const opts = approvalOptions(req)
@@ -102,6 +102,19 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
       }
     }
   }, [expiry, sel, stdout])
+
+  // The backend remains authoritative for denial. This is a local liveness
+  // guard: if a gateway expiry event is lost during reconnect, remove only the
+  // request that actually expired so its modal cannot wedge later input.
+  useEffect(() => {
+    if (req.expiresAtMs === undefined) {
+      return
+    }
+
+    const timer = setTimeout(onExpired, Math.max(0, req.expiresAtMs - Date.now()))
+
+    return () => clearTimeout(timer)
+  }, [onExpired, req.expiresAtMs, req.requestId])
 
   useInput((ch, key) => {
     const action = approvalAction(ch, key, sel, opts)
@@ -499,6 +512,7 @@ export function ConfirmPrompt({ onCancel, onConfirm, req, t }: ConfirmPromptProp
 interface ApprovalPromptProps {
   cols?: number
   onChoice: (s: string) => void
+  onExpired: () => void
   req: ApprovalReq
   t: Theme
 }

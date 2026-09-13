@@ -339,6 +339,27 @@ describe('createGatewayEventHandler', () => {
     }
   })
 
+  it.each([
+    ['legacy thinking', 'thinking.delta'],
+    ['native reasoning', 'reasoning.delta'],
+    ['assistant text', 'message.delta']
+  ])('clears an orphaned compacting indicator when %s output resumes', (_kind, type) => {
+    const onEvent = createGatewayEventHandler(buildCtx([]))
+    patchUiState({ busy: true })
+
+    onEvent({
+      payload: { kind: 'compacting', text: '🗜️ Compacting context — summarizing earlier conversation...' },
+      type: 'status.update'
+    } as any)
+    expect(getUiState().compacting).toBe(true)
+
+    // The backend has compacted and resumed, but its `compacted` status edge
+    // was lost (for example, over a reconnect). Fresh model output is a
+    // stronger liveness signal than stale status chrome.
+    onEvent({ payload: { text: 'Resuming with the compacted context.' }, type } as any)
+    expect(getUiState().compacting).toBe(false)
+  })
+
   it('keeps goal verdict text in transcript but shows a brief idle status (#goal statusbar)', () => {
     const appended: Msg[] = []
     const ctx = buildCtx(appended)
