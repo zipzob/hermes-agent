@@ -274,6 +274,25 @@ def test_manifest_includes_model_and_provider():
     assert len(manifest["tasks"]) == 2
 
 
+def test_manifest_includes_bounded_per_task_route_metadata():
+    route = {
+        "model": "gpt-5.6-terra-900k",
+        "workload": "substantive",
+        "context_tier": "large",
+        "estimated_context_tokens": 250_000,
+        "reasons": ["large_context_required"],
+    }
+    delegation_id, _writers, _paths = create_live_transcripts(
+        [{"goal": "review large corpus"}], routes=[route]
+    )
+    assert delegation_id is not None
+
+    manifest = json.loads(
+        (live_transcript_root() / delegation_id / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["tasks"][0]["route"] == route
+
+
 def test_manifest_model_provider_are_optional_and_default_none():
     """When not provided, model and provider should be null in the manifest."""
     delegation_id, _writers, _paths = create_live_transcripts(
