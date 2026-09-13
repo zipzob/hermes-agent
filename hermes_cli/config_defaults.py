@@ -1341,6 +1341,27 @@ DEFAULT_CONFIG = {
         # {"extra_body": {"provider": {"sort": "throughput"}}}. Explicit values win OVER
         # runtime/parent overrides (extra_body deep-merged 1 level).
         "request_overrides": {},
+        # Optional task/context/quota-aware model selection for openai-codex children. Off preserves exact
+        # inheritance/pinning behavior. Strength and context capacity are independent: 900k is selected only
+        # for a declared/estimated large isolated child working set. Astra is never selected automatically.
+        "resource_routing": {
+            "mode": "off",  # "off" | "automatic_safe"
+            "large_context_trigger_tokens": 220000,
+            "quota_snapshot_file": "",
+            "quota_snapshot_command": [],
+            "quota_timeout_seconds": 3,
+            "models": {
+                # Luna replaces retired GPT-5.4 Mini on ChatGPT/Codex sign-in.
+                # Legacy/API-key users may still pin Mini explicitly.
+                "simple": "gpt-5.6-luna",
+                "volume": "gpt-5.6-luna",
+                "substantive": "gpt-5.6-terra",
+                # Spark remains available through an explicit delegation model pin;
+                # automatic routing uses the stable substantive lane.
+                "latency_critical": "gpt-5.6-terra",
+                "judgment": "gpt-5.6-sol",
+            },
+        },
         # compression_threshold_tokens: optional absolute cap on a subagent's compaction TRIGGER
         # (not the request payload), applied as the lower of this and the child's ratio threshold.
         # 0 (default) = no subagent-specific cap; children compact where the parent does — the lower
