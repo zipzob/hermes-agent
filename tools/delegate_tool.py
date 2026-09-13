@@ -361,6 +361,7 @@ def _build_children(
     task_list: List[Dict[str, Any]], task_schemas: List[Optional[Dict[str, Any]]], creds: Dict[str, Any], *,
     top_role: str, max_iterations: int, parent_agent, routing_cfg: Dict[str, Any],
     live_deleg_id: Optional[str], live_writers: list,
+    task_creds: Optional[List[Dict[str, Any]]] = None,
 ) -> tuple[List[tuple], Optional[str]]:
     """Build every child on the main thread (construction is not thread-safe);
     ``(children, None)`` or ``([], error)`` on an explicit-pin preflight failure."""
@@ -376,6 +377,7 @@ def _build_children(
     }
     children = []
     for i, t in enumerate(task_list):
+        child_creds = task_creds[i] if task_creds is not None and i < len(task_creds) else creds
         _task_schema = task_schemas[i] if i < len(task_schemas) else None
         _child_context = t.get("context")
         if _task_schema is not None:
@@ -384,7 +386,7 @@ def _build_children(
             child = _build_child_preserving_parent_tools(
                 task_index=i, goal=t["goal"], context=_child_context,
                 toolsets=None,  # always inherit the parent's toolsets
-                model=creds["model"], max_iterations=max_iterations, task_count=len(task_list),
+                model=child_creds["model"], max_iterations=max_iterations, task_count=len(task_list),
                 parent_agent=parent_agent, role=_normalize_role(t.get("role") or top_role), **overrides,
             )
         except ValueError as exc:
@@ -405,6 +407,44 @@ def _build_children(
                 _ident_ref["delegation_id"] = live_deleg_id
         children.append((i, t, child))
     return children, None
+
+
+def _route_task_credentials(
+    task_list: List[Dict[str, Any]], creds: Dict[str, Any], routing_cfg: Dict[str, Any], parent_agent,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Select bounded per-task model routes without exposing credential material."""
+    policy = routing_cfg.get("resource_routing")
+    if creds.get("provider") != "openai-codex" or not isinstance(policy, dict):
+        return [creds for _ in task_list], []
+
+    explicit_pin = str(routing_cfg.get("model") or "").strip() or None
+    if str(policy.get("mode") or "off").casefold() != "automatic_safe" or explicit_pin:
+        return [creds for _ in task_list], []
+
+    from tools.delegation_resource_routing import load_quota_snapshot, route_delegation_tasks
+
+    routes = route_delegation_tasks(
+        task_list,
+        parent_model=str(creds.get("model") or ""),
+        policy=policy,
+        quota_snapshot=load_quota_snapshot(policy),
+        parent_context_tokens=getattr(parent_agent, "_last_context_tokens", None),
+        explicit_model_pin=explicit_pin,
+    )
+    routed_creds: List[Dict[str, Any]] = []
+    route_metadata: List[Dict[str, Any]] = []
+    for route in routes:
+        child_creds = dict(creds)
+        child_creds["model"] = route.model
+        routed_creds.append(child_creds)
+        route_metadata.append({
+            "model": route.model,
+            "workload": route.workload,
+            "context_tier": route.context_tier,
+            "estimated_context_tokens": route.estimated_context_tokens,
+            "reasons": list(route.reasons),
+        })
+    return routed_creds, route_metadata
 
 
 def delegate_task(
@@ -472,20 +512,23 @@ def delegate_task(
         task_schemas, err = _coerce_task_schemas(task_list, output_schema)
     if err:
         return tool_error(err)
+    assert task_list is not None
+
+    task_creds, task_routes = _route_task_credentials(task_list, creds, routing_cfg, parent_agent)
 
     overall_start = time.monotonic()
     # Live transcripts: cache/delegation/live/<id>/task-<n>.log per task, a side channel with zero effect on message
     # content or prompt caching. Best-effort: on failure live_paths is empty and delegation proceeds.
     from tools.delegation_live_log import create_live_transcripts
     live_deleg_id, live_writers, live_paths = create_live_transcripts(
-        task_list, context, model=creds.get("model"), provider=creds.get("provider")
+        task_list, context, model=creds.get("model"), provider=creds.get("provider"), routes=task_routes,
     )
     _announce_batch(parent_agent, len(task_list), live_deleg_id)
     origin = _capture_origin()
 
     children, err = _build_children(
         task_list, task_schemas, creds, top_role=top_role, max_iterations=default_max_iter, parent_agent=parent_agent,
-        routing_cfg=routing_cfg, live_deleg_id=live_deleg_id, live_writers=live_writers,
+        routing_cfg=routing_cfg, live_deleg_id=live_deleg_id, live_writers=live_writers, task_creds=task_creds,
     )
     if err:
         return tool_error(err)
@@ -554,7 +597,8 @@ _DESCRIPTION_HEAD = (
     "succeeded.\n"
 )
 _DESCRIPTION_TAIL = (
-    "- Children inherit the parent model unless pinned via delegation.provider / delegation.model in config.yaml."
+    "- Children inherit the parent model unless config pins delegation.provider/model or trusted resource routing "
+    "selects by task. Declare workload/context; parent session size does not imply a 900k child."
 )
 
 def _build_tasks_param_description() -> str:
@@ -640,6 +684,21 @@ DELEGATE_TASK_SCHEMA = {
                             "is enabled; otherwise the whole call returns as one message). Tasks sharing a group return "
                             "together in ONE message; ungrouped tasks return individually as each finishes. This does not "
                             "order execution; if B needs A's output, dispatch B after A returns.",
+                        ),
+                        "workload": _p(
+                            "string",
+                            "Optional task lane used by trusted automatic routing.",
+                            enum=["simple", "volume", "substantive", "latency_critical", "judgment"],
+                        ),
+                        "context_window": _p(
+                            "string",
+                            "Isolated child working-set requirement; parent-session size is not inherited.",
+                            enum=["auto", "regular", "large"],
+                        ),
+                        "estimated_context_tokens": _p(
+                            "integer",
+                            "Optional estimate of this child's isolated input working set.",
+                            minimum=0,
                         ),
                     },
                     "required": ["goal"],
