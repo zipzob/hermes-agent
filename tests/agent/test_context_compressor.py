@@ -348,10 +348,18 @@ class TestPreflightDeferral:
         compressor.note_native_compaction_checkpoint()
 
         assert compressor.awaiting_real_usage_after_compression is True
+        assert compressor.compression_count == 0
         assert compressor.last_compression_rough_tokens == 0
         assert compressor.should_defer_preflight_to_real_usage(1_300_000) is True
         compressor.update_from_response({"prompt_tokens": 65_000})
         assert compressor.awaiting_real_usage_after_compression is False
+
+    def test_live_native_checkpoint_increments_once_without_affecting_rehydration(self, compressor):
+        compressor.record_native_compaction_checkpoint()
+
+        assert compressor.compression_count == 1
+        compressor.note_native_compaction_checkpoint()
+        assert compressor.compression_count == 1
 
 
 class TestCompress:

@@ -836,6 +836,16 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
         if (text !== undefined) {
           const value = String(text)
+
+          // `compacted` is the primary terminal edge, but a reconnect or an
+          // interrupted status stream can lose it after the backend has
+          // already committed the smaller context. Fresh model reasoning
+          // proves the turn resumed, so do not leave the FaceTicker latched
+          // on "compacting" indefinitely.
+          if (value && getUiState().compacting) {
+            patchUiState({ compacting: false })
+          }
+
           scheduleThinkingStatus(value || statusFromBusy())
 
           if (value) {
@@ -847,6 +857,11 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
       }
 
       case 'message.start':
+        // Same recovery as reasoning above for providers that begin an
+        // assistant message without exposing a reasoning stream.
+        if (getUiState().compacting) {
+          patchUiState({ compacting: false })
+        }
         resetAgentsNudgeTurnState()
         turnController.startMessage()
 
@@ -1171,6 +1186,12 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
       case 'reasoning.delta':
         if (ev.payload?.text) {
+          // Native/Codex streams use reasoning.delta rather than the legacy
+          // thinking.delta path. Any fresh model output proves a previously
+          // latched compaction status is stale after a lost completion edge.
+          if (getUiState().compacting) {
+            patchUiState({ compacting: false })
+          }
           turnController.recordReasoningDelta(ev.payload.text, Boolean(ev.payload.verbose))
         }
 
@@ -1526,6 +1547,11 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         return
 
       case 'message.delta':
+        // Providers without a reasoning stream can resume directly with text.
+        // Treat it as the same liveness proof as a reasoning delta.
+        if (ev.payload?.text && getUiState().compacting) {
+          patchUiState({ compacting: false })
+        }
         turnController.recordMessageDelta(ev.payload ?? {})
 
         return

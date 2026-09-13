@@ -534,6 +534,11 @@ export function useVirtualHistory(
             heights.current.set(key, h)
             offsetVersion.current++
             onHeightsChangeRef.current?.(heights.current)
+            // `offsetVersion` is consumed only during render. An unmount can
+            // correct a row and compensate scrollTop within the same quantized
+            // viewport bin, so no scroll subscription render is guaranteed.
+            // Rebuild spacers, clamp bounds, sticky prompt, and scrollbar now.
+            bumpMeasuredHeightVersion(n => n + 1)
           }
 
           nodes.current.delete(key)

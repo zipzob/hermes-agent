@@ -1120,7 +1120,15 @@ function renderNodeToOutput(
             return { bottom, top, width: x2 - x1, x: x1 }
           })()
 
-          const safeForFastPath = heightSafeForFastPath && (!hint || fastPathBounds !== null)
+          // DECSTBM has row bounds but no horizontal bounds. A partial-width
+          // ScrollBox must not use it: the terminal (and Output.shift) moves
+          // every column in those rows, while the repair pass redraws only
+          // the ScrollBox. That leaves adjacent rails or composer cells on
+          // the wrong rows. Fall back to the regular diff in that case.
+          const fastPathCoversFullWidth =
+            fastPathBounds !== null && fastPathBounds.x === 0 && fastPathBounds.width === outputWidth
+          const safeForFastPath =
+            heightSafeForFastPath && (!hint || (prevScreen !== undefined && fastPathCoversFullWidth))
 
           // Diagnostics (opt-in via scrollFastPathStats reader).  Only
           // counts when a hint was captured — cases where nothing scrolled
@@ -1138,6 +1146,9 @@ function renderNodeToOutput(
             } else if (!fastPathBounds) {
               scrollFastPathStats.declined.other++
               scrollFastPathStats.lastDeclineReason = 'invalidOrEmptyRepairBounds'
+            } else if (!fastPathCoversFullWidth) {
+              scrollFastPathStats.declined.other++
+              scrollFastPathStats.lastDeclineReason = 'partialWidthRepairBounds'
             } else if (!prevScreen) {
               scrollFastPathStats.declined.noPrevScreen++
               scrollFastPathStats.lastDeclineReason = 'noPrevScreen'

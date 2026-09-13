@@ -36,6 +36,17 @@ def test_failure_notice_reaches_the_queue_while_the_batch_keeps_running_and_form
     assert "consolidated results will still arrive" in text
 
 
+def test_failure_notice_preserves_the_call_wide_effective_model_vector():
+    q = queue.Queue()
+    record = _record()
+    record["task_models"] = ["gpt-5.6-terra", "gpt-6-astra", "gpt-5.6-sol"]
+    with patch.object(ad, "_records", {"deleg_x": record}), \
+         patch("tools.process_registry.process_registry") as reg:
+        reg.completion_queue = q
+        ad.push_task_failure_notice("deleg_x", {"task_index": 1, "status": "error"}, n_tasks=3)
+    assert q.get_nowait()["task_models"] == record["task_models"]
+
+
 def test_notice_is_not_sent_for_a_finished_batch_and_does_not_dedup_against_the_final_result():
     q = queue.Queue()
     with patch.object(ad, "_records", {"deleg_x": _record(status="completed")}), \

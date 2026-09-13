@@ -198,6 +198,43 @@ def test_completion_event_lands_on_shared_queue_with_session_key():
     assert evt["summary"] == "the result"
     assert evt["session_key"] == "agent:main:cli:dm:local"
     assert evt["parent_session_id"] == "20260703_parent_sid"
+
+
+def test_batch_completion_preserves_effective_models_and_formats_them_per_task():
+    res = ad.dispatch_async_delegation_batch(
+        goals=["inspect the renderer", "arbitrate the design"], context=None, toolsets=None,
+        role="leaf", model="gpt-5.6-terra", task_models=["gpt-5.6-terra", "gpt-6-astra"], session_key="",
+        runner=lambda: {
+            "results": [
+                {"task_index": 0, "status": "completed", "summary": "renderer checked"},
+                {"task_index": 1, "status": "completed", "summary": "design checked"},
+            ],
+            "total_duration_seconds": 0.1,
+        }, max_async_children=1,
+    )
+
+    assert res["status"] == "dispatched"
+    evt = _drain_for(res["delegation_id"])
+    assert evt is not None
+    assert evt["model"] == "gpt-5.6-terra"
+    assert evt["task_models"] == ["gpt-5.6-terra", "gpt-6-astra"]
+    text = format_process_notification(evt)
+    assert text is not None
+    assert "Model: mixed (per-task models below)" in text
+    assert "model=gpt-5.6-terra" in text
+    assert "model=gpt-6-astra" in text
+
+
+def test_batch_ignores_misaligned_task_models():
+    res = ad.dispatch_async_delegation_batch(
+        goals=["one", "two"], context=None, toolsets=None, role="leaf", model="base",
+        task_models=["only-one"], session_key="",
+        runner=lambda: {"results": [], "total_duration_seconds": 0.1}, max_async_children=1,
+    )
+
+    evt = _drain_for(res["delegation_id"])
+    assert evt is not None
+    assert "task_models" not in evt
     assert evt["delegation_id"] == res["delegation_id"]
 
 
@@ -1145,3 +1182,25 @@ print(json.dumps(q.get_nowait(), sort_keys=True))
     assert by_index[1]["status"] == "unknown"
     assert "1/2 child results were recorded" in evt["error"]
     assert "done: fast member" in format_process_notification(evt)
+
+
+def test_mixed_route_display_prefers_runtime_model_and_lists_recovery_route():
+    completed = {
+        "type": "async_delegation", "delegation_id": "deleg_mixed", "is_batch": True,
+        "model": "gpt-5.6-terra", "task_models": ["gpt-6-astra"],
+        "goals": ["review"], "results": [{"task_index": 0, "status": "completed", "summary": "done", "model": "gpt-5.6-sol"}],
+    }
+    text = format_process_notification(completed)
+    assert text is not None
+    assert "Model: mixed (per-task models below)" in text
+    assert "model=gpt-5.6-sol" in text
+
+    recovered = {
+        "type": "async_delegation", "delegation_id": "deleg_recovered", "is_batch": True,
+        "model": "gpt-5.6-terra", "task_models": ["gpt-6-astra"], "task_indexes": [1],
+        "goals": ["first", "second"], "results": [], "error": "owner exited",
+    }
+    text = format_process_notification(recovered)
+    assert text is not None
+    assert "Model: mixed (per-task models below)" in text
+    assert "Route: task 2 model=gpt-6-astra" in text

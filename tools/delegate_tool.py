@@ -412,14 +412,40 @@ def _build_children(
 def _route_task_credentials(
     task_list: List[Dict[str, Any]], creds: Dict[str, Any], routing_cfg: Dict[str, Any], parent_agent,
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Select bounded per-task model routes without exposing credential material."""
+    """Select bounded per-task model routes without exposing credential material.
+
+    A task-level ``model`` is an explicit operator request, not an automatic
+    lane. It changes only the inherited provider's model for that child and
+    therefore cannot select credentials, endpoints, or tools.
+    """
+    task_model_pins = [
+        value.strip() if isinstance(value := task.get("model"), str) and value.strip() else None
+        for task in task_list
+    ]
+
+    def direct_routes() -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        routed = []
+        metadata = []
+        has_pin = any(task_model_pins)
+        for pin in task_model_pins:
+            child_creds = dict(creds)
+            if pin:
+                child_creds["model"] = pin
+            routed.append(child_creds)
+            if has_pin:
+                metadata.append({
+                    "model": child_creds.get("model"),
+                    "reasons": ["explicit_task_model_pin"] if pin else ["inherited"],
+                })
+        return routed, metadata
+
     policy = routing_cfg.get("resource_routing")
     if creds.get("provider") != "openai-codex" or not isinstance(policy, dict):
-        return [creds for _ in task_list], []
+        return direct_routes()
 
     explicit_pin = str(routing_cfg.get("model") or "").strip() or None
     if str(policy.get("mode") or "off").casefold() != "automatic_safe" or explicit_pin:
-        return [creds for _ in task_list], []
+        return direct_routes()
 
     from tools.delegation_resource_routing import load_quota_snapshot, route_delegation_tasks
 
@@ -433,16 +459,16 @@ def _route_task_credentials(
     )
     routed_creds: List[Dict[str, Any]] = []
     route_metadata: List[Dict[str, Any]] = []
-    for route in routes:
+    for pin, route in zip(task_model_pins, routes):
         child_creds = dict(creds)
-        child_creds["model"] = route.model
+        child_creds["model"] = pin or route.model
         routed_creds.append(child_creds)
         route_metadata.append({
-            "model": route.model,
+            "model": pin or route.model,
             "workload": route.workload,
             "context_tier": route.context_tier,
             "estimated_context_tokens": route.estimated_context_tokens,
-            "reasons": list(route.reasons),
+            "reasons": ["explicit_task_model_pin"] if pin else list(route.reasons),
         })
     return routed_creds, route_metadata
 
@@ -514,7 +540,22 @@ def delegate_task(
         return tool_error(err)
     assert task_list is not None
 
+    from tools.approval_context import get_current_session_key
+    from tools.model_escalation import consume_model_escalation_authorization
+    authorization_session_key = get_current_session_key(default="") or str(getattr(parent_agent, "session_id", "") or "")
+    for index, task in enumerate(task_list):
+        model = task.get("model")
+        if not isinstance(model, str) or not model.strip():
+            continue
+        authorization_error = consume_model_escalation_authorization(
+            task.get("model_authorization"), session_key=authorization_session_key,
+            provider=str(creds.get("provider") or ""), target_model=model, scope=task["goal"],
+        )
+        if authorization_error:
+            return tool_error(f"Task {index} model pin rejected: {authorization_error}")
+
     task_creds, task_routes = _route_task_credentials(task_list, creds, routing_cfg, parent_agent)
+    task_models = [str(task_creds_for_task.get("model") or "") or None for task_creds_for_task in task_creds]
 
     overall_start = time.monotonic()
     # Live transcripts: cache/delegation/live/<id>/task-<n>.log per task, a side channel with zero effect on message
@@ -533,7 +574,7 @@ def delegate_task(
     if err:
         return tool_error(err)
     batch = _Batch(
-        task_list, children, parent_agent, creds, context, top_role, max_children,
+        task_list, children, parent_agent, creds, task_models, context, top_role, max_children,
         live_deleg_id, live_writers, live_paths, *origin, overall_start,
     )
     return _run_batch(batch, background)
@@ -677,6 +718,18 @@ DELEGATE_TASK_SCHEMA = {
                             "child up front; parent validates with one bounded correction retry; result gains "
                             "schema_valid, plus schema_errors on failure). Keep it forgiving — require only "
                             "fields you will read.",
+                        ),
+                        "model": _p(
+                            "string",
+                            "Optional explicit model for this child on the inherited provider route. It requires a "
+                            "one-use user authorization returned by request_model_escalation. This does not select "
+                            "credentials, endpoints, or tools.",
+                            minLength=1,
+                        ),
+                        "model_authorization": _p(
+                            "string",
+                            "One-use authorization returned by request_model_escalation for this exact task model and goal.",
+                            minLength=1,
                         ),
                         "group": _p(
                             "string",

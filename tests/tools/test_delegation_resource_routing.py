@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+
 from tools.delegate_tool import DELEGATE_TASK_SCHEMA, _route_task_credentials
 from tools.delegation_resource_routing import route_delegation_tasks
 
@@ -205,14 +208,74 @@ def test_delegate_integration_builds_per_task_credentials_without_leaking_secret
     assert metadata[1]["context_tier"] == "large"
 
 
-def test_delegate_schema_advertises_task_axes_not_direct_model_selection():
+def test_delegate_schema_advertises_task_axes_and_an_explicit_model_pin():
     task_props = DELEGATE_TASK_SCHEMA["parameters"]["properties"]["tasks"]["items"]["properties"]
     assert task_props["workload"]["enum"] == [
         "simple", "volume", "substantive", "latency_critical", "judgment",
     ]
     assert task_props["context_window"]["enum"] == ["auto", "regular", "large"]
     assert task_props["estimated_context_tokens"]["minimum"] == 0
-    assert "model" not in task_props
+    assert task_props["model"]["type"] == "string"
+    assert task_props["model_authorization"]["type"] == "string"
+
+
+def test_delegate_rejects_an_unapproved_explicit_task_model_before_child_construction(monkeypatch):
+    import tools.delegate_tool as delegate_tool
+
+    monkeypatch.setattr(delegate_tool, "_load_config", lambda: {})
+    monkeypatch.setattr(
+        delegate_tool,
+        "_resolve_delegation_credentials",
+        lambda _cfg, _parent: {"provider": "openai-codex", "model": "gpt-5.6-terra"},
+    )
+    monkeypatch.setattr(delegate_tool, "_get_max_concurrent_children", lambda: 1)
+    monkeypatch.setattr(delegate_tool, "_get_max_spawn_depth", lambda: 1)
+    parent = SimpleNamespace(_delegate_depth=0, session_id="session-a")
+
+    result = json.loads(delegate_tool.delegate_task(
+        goal="Review one bounded change", parent_agent=parent,
+        tasks=[{"goal": "Review one bounded change", "model": "gpt-6-astra"}],
+    ))
+
+    assert "error" in result
+    assert "requires a user-authorized model escalation" in result["error"]
+
+
+def test_task_model_pin_overrides_automatic_routing_without_mutating_base_credentials():
+    base = {"provider": "openai-codex", "model": "gpt-5.6-terra", "api_key": "never-write-this"}
+    routed, metadata = _route_task_credentials(
+        [
+            {"goal": "normal implementation", "workload": "substantive"},
+            {"goal": "independent operator-requested review", "model": "gpt-6-astra", "workload": "judgment"},
+        ],
+        base,
+        {"resource_routing": policy()},
+        object(),
+    )
+
+    assert [item["model"] for item in routed] == ["gpt-5.6-terra", "gpt-6-astra"]
+    assert base["model"] == "gpt-5.6-terra"
+    assert metadata[1]["reasons"] == ["explicit_task_model_pin"]
+    assert "never-write-this" not in repr(metadata)
+
+
+def test_task_model_pin_keeps_manifest_routes_aligned_when_automatic_routing_is_off():
+    base = {"provider": "openai-codex", "model": "gpt-5.6-terra"}
+    routed, metadata = _route_task_credentials(
+        [
+            {"goal": "inherit the parent model"},
+            {"goal": "explicit operator review", "model": "gpt-6-astra"},
+        ],
+        base,
+        {"resource_routing": {"mode": "off"}},
+        object(),
+    )
+
+    assert [item["model"] for item in routed] == ["gpt-5.6-terra", "gpt-6-astra"]
+    assert metadata == [
+        {"model": "gpt-5.6-terra", "reasons": ["inherited"]},
+        {"model": "gpt-6-astra", "reasons": ["explicit_task_model_pin"]},
+    ]
 
 
 def test_delegate_integration_bypasses_quota_io_when_routing_is_off_or_pinned(monkeypatch):

@@ -565,7 +565,7 @@ describe('useVirtualHistory offset cache reuse', () => {
       expect(scroll.getScrollTop()).toBe(6)
       expect(scroll.isSticky()).toBe(false)
       expect(expose.current!.virtualHistory.start).toBeGreaterThan(0)
-      expect(expose.current!.virtualHistory.offsets[1]).toBe(2)
+      await vi.waitFor(() => expect(expose.current!.virtualHistory.offsets[1]).toBe(2))
     } finally {
       instance.unmount()
       instance.cleanup()
