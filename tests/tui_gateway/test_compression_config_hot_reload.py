@@ -281,4 +281,15 @@ def test_removing_codex_native_threshold_restores_default(monkeypatch):
     session, _ = _neutral_session()
     session["agent"].codex_responses_compact_threshold = 120_000
     _sync_with_cfg(monkeypatch, session, {"compression": {}})
-    assert session["agent"].codex_responses_compact_threshold == 200_000
+    assert session["agent"].codex_responses_compact_threshold is None
+
+
+def test_invalid_codex_native_threshold_restores_automatic(monkeypatch):
+    session, _ = _neutral_session()
+    session["agent"].codex_responses_compact_threshold = 120_000
+    _sync_with_cfg(
+        monkeypatch,
+        session,
+        {"compression": {"codex_responses_compact_threshold": True}},
+    )
+    assert session["agent"].codex_responses_compact_threshold is None
