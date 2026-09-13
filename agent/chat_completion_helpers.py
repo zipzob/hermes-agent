@@ -2204,6 +2204,8 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
 _SUMMARY_FOREIGN_MESSAGE_KEYS = ("reasoning", "finish_reason", "tool_name", "codex_reasoning_items",
     "codex_message_items", "timestamp", "platform_message_id")
 _EMPTY_SUMMARY_RESPONSE = "I reached the iteration limit and couldn't generate a summary."
+_ITERATION_SUMMARY_DEFAULT_OUTPUT_RESERVE = 8192
+_ITERATION_SUMMARY_SAFETY_FRACTION = 0.10
 
 
 def _iteration_summary_api_messages(agent, messages: list) -> list:
@@ -2265,6 +2267,24 @@ def _iteration_summary_api_messages(agent, messages: list) -> list:
             for internal_key in [k for k in api_msg if isinstance(k, str) and k.startswith("_")]:
                 del api_msg[internal_key]
     return api_messages
+
+
+def _iteration_summary_fits_context(agent, api_messages: list) -> bool:
+    """Fail closed before the special summary call bypasses normal preflight compression."""
+    context_length = getattr(getattr(agent, "context_compressor", None), "context_length", None)
+    if not isinstance(context_length, int) or isinstance(context_length, bool) or context_length <= 0:
+        return True
+
+    from agent.model_metadata import estimate_messages_tokens_rough
+
+    configured_max = getattr(agent, "max_tokens", None)
+    output_reserve = (
+        configured_max
+        if isinstance(configured_max, int) and not isinstance(configured_max, bool) and configured_max > 0
+        else _ITERATION_SUMMARY_DEFAULT_OUTPUT_RESERVE
+    )
+    input_budget = int(context_length * (1.0 - _ITERATION_SUMMARY_SAFETY_FRACTION)) - output_reserve
+    return input_budget > 0 and estimate_messages_tokens_rough(api_messages) <= input_budget
 
 
 def _managed_summary_call(agent, api_request_id: str, request, callback, *, retry_count: int):
@@ -2360,6 +2380,12 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
 
     try:
         api_messages = _iteration_summary_api_messages(agent, messages)
+        if not _iteration_summary_fits_context(agent, api_messages):
+            summary_call_outcome = "skipped_context_limit"
+            return (
+                f"Agent run reached {api_call_count}/{agent.max_iterations} iterations. "
+                "The transcript is too large for a safe final summary; progress remains preserved in session history."
+            )
         build_attempt = _SUMMARY_ATTEMPT_BUILDERS.get(agent.api_mode, _chat_summary_attempt)
         attempt = build_attempt(agent, api_messages, summary_api_request_id)
 
@@ -2379,8 +2405,22 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
 
     except Exception as e:
         logger.warning("Failed to get summary response: %s", e)
-        from agent.turn_failure_copy import site_copy
-        final_response = site_copy("max_iterations_no_summary", limit=agent.max_iterations)
+        from agent.error_classifier import FailoverReason, classify_api_error
+        classified = classify_api_error(
+            e,
+            provider=str(getattr(agent, "provider", "") or ""),
+            model=str(getattr(agent, "model", "") or ""),
+            context_length=getattr(getattr(agent, "context_compressor", None), "context_length", 200_000),
+        )
+        if classified.reason in {FailoverReason.context_overflow, FailoverReason.payload_too_large}:
+            summary_call_outcome = "skipped_context_limit"
+            final_response = (
+                f"Agent run reached {api_call_count}/{agent.max_iterations} iterations. "
+                "The transcript is too large for a safe final summary; progress remains preserved in session history."
+            )
+        else:
+            from agent.turn_failure_copy import site_copy
+            final_response = site_copy("max_iterations_no_summary", limit=agent.max_iterations)
     finally:
         from agent import relay_llm
         relay_llm.complete_logical_call(summary_api_request_id, outcome=summary_call_outcome)
