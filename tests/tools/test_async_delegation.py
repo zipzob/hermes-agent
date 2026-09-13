@@ -1210,3 +1210,27 @@ def test_prune_never_evicts_live_records():
 
     assert {"live-stalling", "live-finalizing", "live-running"} <= survivors
     assert "done-0" not in survivors and len(survivors - {"live-stalling", "live-finalizing", "live-running"}) == ad._MAX_RETAINED_COMPLETED
+
+
+def test_mixed_route_display_prefers_runtime_model_and_lists_recovery_route():
+    completed = {
+        "type": "async_delegation", "delegation_id": "deleg_mixed", "is_batch": True,
+        "model": "gpt-5.6-terra", "task_models": ["gpt-6-astra"],
+        "goals": ["review"],
+        "results": [{"task_index": 0, "status": "completed", "summary": "done", "model": "gpt-5.6-sol"}],
+    }
+    text = format_process_notification(completed)
+    assert text is not None
+    assert "Model: mixed (per-task models below)" in text
+    assert "model=gpt-5.6-sol" in text
+
+    recovered = {
+        "type": "async_delegation", "delegation_id": "deleg_recovered", "is_batch": True,
+        "model": "gpt-5.6-terra", "task_models": ["gpt-5.6-terra", "gpt-6-astra"], "task_indexes": [1],
+        "goals": ["first", "second"], "results": [], "error": "owner exited",
+    }
+    text = format_process_notification(recovered)
+    assert text is not None
+    assert "Model: mixed (per-task models below)" in text
+    assert "Route: task 2 model=gpt-6-astra" in text
+

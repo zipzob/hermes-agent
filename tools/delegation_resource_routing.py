@@ -29,7 +29,7 @@ _DEFAULT_MODELS = {
     "volume": "gpt-5.6-luna",
     "substantive": "gpt-5.6-terra",
     "latency_critical": "gpt-5.6-terra",
-    "judgment": "gpt-5.6-sol",
+    "judgment": "gpt-5.6-terra",
 }
 
 
@@ -124,7 +124,7 @@ def _base_model(workload: str, models: Mapping[str, Any]) -> tuple[str, bool]:
     configured = str(models.get(workload) or _DEFAULT_MODELS[workload]).strip()
     # Context aliases are selected below, not embedded in strength configuration.
     base = strip_codex_context_variant_suffix(configured)
-    operator_only = "spark" in base.casefold() or "astra" in base.casefold()
+    operator_only = any(name in base.casefold() for name in ("sol", "spark", "astra"))
     return (_DEFAULT_MODELS[workload] if operator_only else base), operator_only
 
 

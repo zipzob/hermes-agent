@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+
 from tools.delegate_tool import DELEGATE_TASK_SCHEMA, _route_task_credentials
 from tools.delegation_resource_routing import route_delegation_tasks
 
@@ -13,7 +16,7 @@ def policy(**overrides):
             "volume": "gpt-5.6-luna",
             "substantive": "gpt-5.6-terra",
             "latency_critical": "gpt-5.6-terra",
-            "judgment": "gpt-5.6-sol",
+            "judgment": "gpt-5.6-terra",
         },
     }
     value.update(overrides)
@@ -40,7 +43,7 @@ def test_routes_each_task_by_workload_without_inheriting_parent_context_pressure
         "gpt-5.6-luna",
         "gpt-5.6-luna",
         "gpt-5.6-terra",
-        "gpt-5.6-sol",
+        "gpt-5.6-terra",
     ]
     assert all(route.context_tier == "regular" for route in routes)
 
@@ -60,8 +63,8 @@ def test_900k_is_selected_only_for_large_isolated_child_working_set():
     )
 
     assert [route.model for route in routes] == [
-        "gpt-5.6-sol",
-        "gpt-5.6-sol-900k",
+        "gpt-5.6-terra",
+        "gpt-5.6-terra-900k",
         "gpt-5.6-terra-900k",
     ]
     assert [route.context_tier for route in routes] == ["regular", "large", "large"]
@@ -145,8 +148,8 @@ def test_astra_is_never_automatically_selected_even_if_parent_uses_it():
         policy=policy(),
         quota_snapshot={"general": "GREEN", "spark": "GREEN", "astra": "GREEN"},
     )
-    assert route.model == "gpt-5.6-sol"
-    assert "astra" not in route.model
+    assert route.model == "gpt-5.6-terra"
+    assert "astra" not in route.model and "sol" not in route.model
 
 
 def test_operator_only_models_cannot_be_injected_into_automatic_lanes():
@@ -155,7 +158,7 @@ def test_operator_only_models_cannot_be_injected_into_automatic_lanes():
         "volume": "gpt-5.6-luna",
         "substantive": "gpt-6-astra",
         "latency_critical": "gpt-5.3-codex-spark",
-        "judgment": "gpt-6-astra-900k",
+        "judgment": "gpt-5.6-sol-900k",
     })
     routes = route_delegation_tasks(
         [
@@ -171,7 +174,7 @@ def test_operator_only_models_cannot_be_injected_into_automatic_lanes():
     assert [route.model for route in routes] == [
         "gpt-5.6-luna",
         "gpt-5.6-terra",
-        "gpt-5.6-sol-900k",
+        "gpt-5.6-terra-900k",
     ]
     assert all("operator_only_model_ignored" in route.reasons for route in routes)
 
@@ -198,21 +201,81 @@ def test_delegate_integration_builds_per_task_credentials_without_leaking_secret
         object(),
     )
 
-    assert [item["model"] for item in routed] == ["gpt-5.6-luna", "gpt-5.6-sol-900k"]
+    assert [item["model"] for item in routed] == ["gpt-5.6-luna", "gpt-5.6-terra-900k"]
     assert base["model"] == "gpt-5.6-sol-900k"
     assert routed[0]["api_key"] == "never-write-this"
     assert "never-write-this" not in repr(metadata)
     assert metadata[1]["context_tier"] == "large"
 
 
-def test_delegate_schema_advertises_task_axes_not_direct_model_selection():
+def test_delegate_schema_advertises_task_axes_and_an_explicit_model_pin():
     task_props = DELEGATE_TASK_SCHEMA["parameters"]["properties"]["tasks"]["items"]["properties"]
     assert task_props["workload"]["enum"] == [
         "simple", "volume", "substantive", "latency_critical", "judgment",
     ]
     assert task_props["context_window"]["enum"] == ["auto", "regular", "large"]
     assert task_props["estimated_context_tokens"]["minimum"] == 0
-    assert "model" not in task_props
+    assert task_props["model"]["type"] == "string"
+    assert task_props["model_authorization"]["type"] == "string"
+
+
+def test_delegate_rejects_an_unapproved_explicit_task_model_before_child_construction(monkeypatch):
+    import tools.delegate_tool as delegate_tool
+
+    monkeypatch.setattr(delegate_tool, "_load_config", lambda: {})
+    monkeypatch.setattr(
+        delegate_tool,
+        "_resolve_delegation_credentials",
+        lambda _cfg, _parent: {"provider": "openai-codex", "model": "gpt-5.6-terra"},
+    )
+    monkeypatch.setattr(delegate_tool, "_get_max_concurrent_children", lambda: 1)
+    monkeypatch.setattr(delegate_tool, "_get_max_spawn_depth", lambda: 1)
+    parent = SimpleNamespace(_delegate_depth=0, session_id="session-a")
+
+    result = json.loads(delegate_tool.delegate_task(
+        goal="Review one bounded change", parent_agent=parent,
+        tasks=[{"goal": "Review one bounded change", "model": "gpt-6-astra"}],
+    ))
+
+    assert "error" in result
+    assert "requires a user-authorized model escalation" in result["error"]
+
+
+def test_task_model_pin_overrides_automatic_routing_without_mutating_base_credentials():
+    base = {"provider": "openai-codex", "model": "gpt-5.6-terra", "api_key": "never-write-this"}
+    routed, metadata = _route_task_credentials(
+        [
+            {"goal": "normal implementation", "workload": "substantive"},
+            {"goal": "independent operator-requested review", "model": "gpt-6-astra", "workload": "judgment"},
+        ],
+        base,
+        {"resource_routing": policy()},
+        object(),
+    )
+
+    assert [item["model"] for item in routed] == ["gpt-5.6-terra", "gpt-6-astra"]
+    assert base["model"] == "gpt-5.6-terra"
+    assert metadata[1]["reasons"] == ["explicit_task_model_pin"]
+    assert "never-write-this" not in repr(metadata)
+
+
+def test_task_model_pin_keeps_manifest_routes_aligned_when_automatic_routing_is_off():
+    base = {"provider": "openai-codex", "model": "gpt-5.6-terra"}
+    routed, metadata = _route_task_credentials(
+        [
+            {"goal": "inherit the parent model"},
+            {"goal": "explicit operator review", "model": "gpt-6-astra"},
+        ],
+        base,
+        {"resource_routing": {"mode": "off"}},
+        object(),
+    )
+
+    assert [item["model"] for item in routed] == ["gpt-5.6-terra", "gpt-6-astra"]
+    assert metadata == [
+        {"model": "gpt-5.6-terra", "reasons": ["inherited"]},
+        {"model": "gpt-6-astra", "reasons": ["explicit_task_model_pin"]},
+    ]
 
 
 def test_delegate_integration_bypasses_quota_io_when_routing_is_off_or_pinned(monkeypatch):

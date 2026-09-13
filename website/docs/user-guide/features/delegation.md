@@ -52,6 +52,14 @@ delegate_task(tasks=[
 ])
 ```
 
+## User-authorized model escalation
+
+Hermes may propose a stronger route for one bounded child when the current route is unlikely to be sufficient. It must ask first; it cannot silently select Astra, Spark, Sol, or a 900k child from its own prose. The prompt offers **Approve this child**, **Use lower model**, **Decline**, and **Defer**.
+
+Approval creates a short-lived, one-use capability bound to the active session, inherited provider, exact target model, and normalized task scope. `delegate_task` consumes it before it builds that child. A stale, replayed, cross-session, different-model, or different-scope capability fails closed. The parent session's model does not change. Background results retain each task's effective model so mixed-model batches remain auditable after restart recovery.
+
+The operating principle is: **Hermes proposes calibrated next-best assistance; the user authorizes it.**
+
 ## Structured Output (`output_schema`)
 
 Each task can carry an optional `output_schema`, a JSON Schema object the child's final answer must validate against. The child sees the schema up front as an output contract ("return ONLY the JSON value — no prose, no code fence"); when the answer comes back the parent validates it, and on failure sends the child exactly one bounded correction turn carrying the validation errors verbatim (the schema is not re-pasted). The task's result then gains `schema_valid` (true/false) and, on failure, `schema_errors`.

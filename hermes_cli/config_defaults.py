@@ -1310,6 +1310,14 @@ DEFAULT_CONFIG = {
         "resource_routing": {
             "mode": "off",  # "off" | "automatic_safe"
             "large_context_trigger_tokens": 220000,
+            # The agent may propose, never silently select, a premium child route.
+            # Approval is session-bound, target/scope-bound, one-use, and short-lived.
+            "escalation": {
+                "enabled": True,
+                "authorization_ttl_seconds": 300,
+                "cooldown_seconds": 120,
+                "max_requests_per_session": 3,
+            },
             "quota_snapshot_file": "",
             "quota_snapshot_command": [],
             "quota_timeout_seconds": 3,
@@ -1322,7 +1330,7 @@ DEFAULT_CONFIG = {
                 # Spark remains available through an explicit delegation model pin;
                 # automatic routing uses the stable substantive lane.
                 "latency_critical": "gpt-5.6-terra",
-                "judgment": "gpt-5.6-sol",
+                "judgment": "gpt-5.6-terra",
             },
         },
         # compression_threshold_tokens: optional absolute cap on a subagent's compaction TRIGGER

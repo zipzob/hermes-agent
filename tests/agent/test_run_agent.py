@@ -1532,13 +1532,13 @@ class TestBuildAssistantMessage:
         }
         msg = _mock_assistant_msg(content="Compacted")
         msg.codex_reasoning_items = [checkpoint]
-        agent.context_compressor.note_native_compaction_checkpoint = MagicMock()
+        agent.context_compressor.record_native_compaction_checkpoint = MagicMock()
         self._enable_native_compaction(agent)
 
         result = agent._build_assistant_message(msg, "stop")
 
         assert result["codex_reasoning_items"] == [checkpoint]
-        agent.context_compressor.note_native_compaction_checkpoint.assert_called_once_with()
+        agent.context_compressor.record_native_compaction_checkpoint.assert_called_once_with()
 
     def test_native_checkpoint_remains_compatible_with_plugin_context_engine(self, agent):
         checkpoint = {

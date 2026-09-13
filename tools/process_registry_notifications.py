@@ -152,8 +152,30 @@ def _preamble(evt: dict, title: str, intro: str, completed_at: float, *, with_go
         lines.append(f"Context you provided: {evt['context']}")
     if evt.get("toolsets"):
         lines.append(f"Toolsets: {', '.join(evt['toolsets'])}")
-    lines.append(f"Role: {evt.get('role') or 'leaf'}   Model: {evt.get('model') or '?'}")
+    task_models = evt.get("task_models")
+    known_models = {model for model in task_models if isinstance(model, str) and model} if isinstance(task_models, list) else set()
+    base_model = evt.get("model") or "?"
+    model_label = "mixed (per-task models below)" if any(model != base_model for model in known_models) else base_model
+    lines.append(f"Role: {evt.get('role') or 'leaf'}   Model: {model_label}")
     return lines
+
+
+def _task_route_lines(evt: dict) -> "list[str]":
+    """Expose durable task routes when a recovered batch has no child result."""
+    task_models = evt.get("task_models")
+    if not isinstance(task_models, list):
+        return []
+    indexes = evt.get("task_indexes")
+    if not isinstance(indexes, list):
+        indexes = list(range(len(task_models)))
+    return [
+        f"Route: task {index + 1} model={task_models[index]}"
+        for index in indexes
+        if isinstance(index, int)
+        and 0 <= index < len(task_models)
+        and isinstance(task_models[index], str)
+        and task_models[index]
+    ]
 
 
 def _format_task_failure_notice(evt: dict, deleg_id: str) -> str:
@@ -192,7 +214,7 @@ def _format_batch_delegation(evt: dict, deleg_id: str, completed_at: float) -> s
         completed_at, with_goal=False)
     lines[-1] += f"   Total duration: {evt.get('total_duration_seconds', evt.get('duration_seconds', '?'))}s"
     if evt.get("error") and not results:
-        lines += ["--- ERROR ---", f"The batch did not complete successfully: {evt['error']}"]
+        lines += ["--- ERROR ---", f"The batch did not complete successfully: {evt['error']}", *_task_route_lines(evt)]
         return "\n".join(lines)
     # Config-level rejection notice BEFORE the per-task wall — a rejected
     # delegation model fails every task identically and must not stay buried.
@@ -202,7 +224,12 @@ def _format_batch_delegation(evt: dict, deleg_id: str, completed_at: float) -> s
         r_status, r_summary, r_error = r.get("status", "?"), r.get("summary"), r.get("error")
         r_goal = goals[idx] if idx < len(goals) else r.get("goal", "")
         icon = "⚠" if r_truncated else ("✓" if r_status in _DONE else "✗")
+        task_models = evt.get("task_models")
+        task_model = r.get("model") if isinstance(r.get("model"), str) and r.get("model") else (
+            task_models[idx] if isinstance(task_models, list) and 0 <= idx < len(task_models) and isinstance(task_models[idx], str) and task_models[idx] else evt.get("model")
+        )
         header = (f"--- {icon} TASK {idx + 1}/{n}" + (f": {r_goal}" if r_goal else "") + f"  (status={r_status}"
+                  + (f", model={task_model}" if task_model else "")
                   + (f", api_calls={r['api_calls']}" if r.get("api_calls") else "")
                   + (f", {r['duration_seconds']}s" if r.get("duration_seconds") is not None else "")
                   + (", TRUNCATED: hit max_iterations — work may be incomplete" if r_truncated else ""))

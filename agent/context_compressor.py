@@ -2611,6 +2611,16 @@ class ContextCompressor(SummaryDispatchMixin, MicroCompactionMixin, ContextEngin
         self.awaiting_real_usage_after_compression = True
         self.last_compression_rough_tokens = 0
 
+    def record_native_compaction_checkpoint(self) -> None:
+        """Record one provider-confirmed native checkpoint without rewriting history.
+
+        ``note_native_compaction_checkpoint`` is also used while hydrating an
+        already-persisted checkpoint after restart, so incrementing there would
+        double-count. Only the live response path calls this method.
+        """
+        self.compression_count += 1
+        self.note_native_compaction_checkpoint()
+
     def should_defer_preflight_to_real_usage(self, rough_tokens: int) -> bool:
         """True when a whole-context ROUGH estimate over threshold must wait ONE request for the
         provider's real usage. Callers skip this for usage-anchored figures (real prompt count +

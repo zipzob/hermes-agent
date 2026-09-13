@@ -84,9 +84,21 @@ export function PromptZone({
   }
 
   if (overlay.approval) {
+    const requestId = overlay.approval.requestId
+    const onExpired = () =>
+      patchOverlayState(prev =>
+        prev.approval?.requestId === requestId ? { ...prev, approval: null } : prev
+      )
+
     return (
       <PromptCell cols={cols} id="approval">
-        <ApprovalPrompt cols={cols} onChoice={onApprovalChoice} req={overlay.approval} t={theme} />
+        <ApprovalPrompt
+          cols={cols}
+          onChoice={onApprovalChoice}
+          onExpired={onExpired}
+          req={overlay.approval}
+          t={theme}
+        />
       </PromptCell>
     )
   }
