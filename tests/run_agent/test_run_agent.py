@@ -2769,6 +2769,40 @@ class TestHandleMaxIterations:
         complete_logical.assert_called_once()
         assert complete_logical.call_args.kwargs == {"outcome": "failed"}
 
+    def test_oversize_summary_skips_provider_and_returns_bounded_fallback(self, agent):
+        agent._cached_system_prompt = "You are helpful."
+        agent.max_iterations = 60
+        agent.context_compressor.context_length = 100
+        messages = [{"role": "user", "content": "x" * 1000}]
+
+        with patch("agent.relay_llm.complete_logical_call") as complete_logical:
+            result = agent._handle_max_iterations(messages, 60)
+
+        assert result == (
+            "Agent run reached 60/60 iterations. The transcript is too large for a safe final summary; "
+            "progress remains preserved in session history."
+        )
+        agent.client.chat.completions.create.assert_not_called()
+        complete_logical.assert_called_once()
+        assert complete_logical.call_args.kwargs == {"outcome": "skipped_context_limit"}
+
+    def test_provider_context_overflow_returns_bounded_fallback(self, agent):
+        agent.max_iterations = 60
+        agent.context_compressor.context_length = 900_000
+        agent.client.chat.completions.create.side_effect = Exception(
+            "Your input exceeds the context window of this model. Please adjust your input and try again."
+        )
+
+        with patch("agent.relay_llm.complete_logical_call") as complete_logical:
+            result = agent._handle_max_iterations([{"role": "user", "content": "do stuff"}], 60)
+
+        assert result == (
+            "Agent run reached 60/60 iterations. The transcript is too large for a safe final summary; "
+            "progress remains preserved in session history."
+        )
+        complete_logical.assert_called_once()
+        assert complete_logical.call_args.kwargs == {"outcome": "skipped_context_limit"}
+
     def test_summary_skips_reasoning_for_unsupported_openrouter_model(self, agent):
         agent.base_url = "https://openrouter.ai/api/v1"
         agent.model = "minimax/minimax-m2.5"
