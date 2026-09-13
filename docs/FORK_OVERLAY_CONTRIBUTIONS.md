@@ -182,3 +182,44 @@ map. `.git/machete` records stack topology only and is not the rationale store.
   essentials remain intact.
 - **Verification:** 35 focused status tests and the full 1,829-test TUI suite passed;
   ESLint, typecheck, build, diff check, and independent exact-byte review passed.
+
+## Resource-aware delegation and lifecycle resilience — 2026-09-13
+
+These are separate contributions because model selection, stale-child detection,
+and iteration-summary safety have different owners and rollback boundaries.
+
+### Delegation workload and context routing
+
+- **Topic / integrated commit:** `contrib/delegation-resource-routing` —
+  `aa872403c1`; integrated as `57e94fd57c`.
+- **Symptom:** delegated children used one configured model regardless of task
+  capability, child working-set size, or independent subscription-pool pressure.
+- **Contract:** classify each child as simple, volume, substantive,
+  latency-critical, or judgment; use Luna/Terra/Sol respectively; select a 900k
+  alias only for that child's large dossier; preserve explicit pins; never
+  automatically select preview Spark or scarce Astra; retain bounded provenance.
+- **Verification:** 29 focused routing/live-log tests, Ruff, and diff checks passed.
+
+### Semantic delegated-child staleness
+
+- **Topic / integrated commit:** `contrib/delegation-semantic-stale-detection` —
+  `1cacd75296`; integrated as `5dbb2c6bb3`.
+- **Symptom:** a live PID or transport heartbeat could hide a child that made no
+  semantic progress until the hard timeout.
+- **Contract:** track semantic model/tool progress separately from process and
+  transport liveness, and classify bounded no-progress children as stalled without
+  treating ordinary long-running physical work as dead.
+- **Verification:** 57 focused tests passed with one platform skip; earlier owning
+  coverage passed 143 tests with one skip.
+
+### Iteration-limit summary capacity guard
+
+- **Topic / integrated commit:** `contrib/iteration-summary-context-fallback` —
+  `ba66db5e02`; integrated as `cf9ded7e09`.
+- **Symptom:** a resumed, very large session could reach `agent.max_turns`, then
+  fail the final summary request because the replay itself exceeded model context.
+- **Contract:** estimate the wire request with output/safety reserve; skip an
+  unsafe provider request and emit a bounded deterministic handoff; preserve
+  unrelated provider errors rather than misclassifying them as context overflow.
+- **Verification:** 286 owning tests passed with the Anthropic test extra enabled;
+  Ruff and diff checks passed.
