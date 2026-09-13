@@ -560,6 +560,7 @@ _TURN_STATE: Dict[str, Any] = {
     # Activity tracking (API call / tool / stream chunk) for the gateway timeout handler and
     # "still working" notifications. Named provenances are stamped only by compression writers.
     "_last_activity_ts": lambda: time.time(),
+    "_last_progress_ts": lambda: time.time(),
     "_last_activity_desc": "initializing",
     "_last_activity_provenance": ActivityProvenance.UNKNOWN,
     "_session_activity_last_persist_mono": 0.0,  # rate-limits durable SessionDB stamps

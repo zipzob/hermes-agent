@@ -70,11 +70,11 @@ def _normalize_role(r: Optional[str]) -> str:
 
 DEFAULT_MAX_ITERATIONS = 250
 _HEARTBEAT_INTERVAL = 30  # seconds between parent activity heartbeats during delegation
-# Stale-heartbeat thresholds (cycles of _HEARTBEAT_INTERVAL with no progress). Progress = iteration, current_tool OR
-# last_activity_ts advancing; an in-flight model wait refreshes last_activity_ts, so slow models are not "idle". Idle
-# stays tight so a truly wedged child doesn't mask the gateway timeout; in-tool is much higher so legitimately long
-# tools can finish.
-_HEARTBEAT_STALE_CYCLES_IDLE = 15  # 450s idle between turns → stale
+# Stale-heartbeat thresholds (cycles of _HEARTBEAT_INTERVAL with no semantic progress). Progress = iteration,
+# current_tool transition, streamed output, or API completion. Transport-only heartbeats keep the host alive without
+# masking provider silence. Idle stays tight enough to beat the detached-task hard ceiling; in-tool is much higher so
+# legitimately long tools can finish.
+_HEARTBEAT_STALE_CYCLES_IDLE = 12  # 360s without semantic progress → stale
 _HEARTBEAT_STALE_CYCLES_IN_TOOL = 40  # 1200s stuck on same tool → stale
 
 def check_delegate_requirements() -> bool:

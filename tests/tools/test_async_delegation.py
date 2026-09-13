@@ -19,6 +19,7 @@ import pytest
 from tools import async_delegation as ad
 from tools.process_registry import process_registry
 from tools.process_registry_notifications import format_process_notification
+from tools.delegate_tool_dispatch import _batch_progress_token
 
 
 @pytest.fixture(autouse=True)
@@ -435,6 +436,25 @@ def test_streaming_child_counts_as_alive(monkeypatch):
     evt = _drain_for(res["delegation_id"], timeout=5.0)
     assert evt is not None
     assert evt["status"] == "completed"
+
+
+def test_batch_progress_token_ignores_transport_only_heartbeat():
+    class Child:
+        def get_activity_summary(self):
+            return {
+                "api_call_count": 1,
+                "current_tool": None,
+                "last_activity_ts": 200.0,
+                "last_progress_ts": 100.0,
+            }
+
+    assert _batch_progress_token([Child()]) == (((1, None, 100.0),), False)
+
+
+def test_default_stall_finalization_precedes_detached_task_hard_ceiling():
+    """The stale event must win before the 600s detached-task ceiling."""
+    worst_case = ad._STALE_IDLE_SECONDS + ad._STALL_GRACE_SECONDS + ad._STALE_CHECK_INTERVAL
+    assert worst_case < 600.0
 
 
 def test_stalled_event_carries_structured_stall_metadata(monkeypatch):

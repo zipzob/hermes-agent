@@ -57,9 +57,9 @@ _DB_LOCK = threading.Lock()
 # the normal finalize path, and only force-finalized (terminal ``stalled`` event) if
 # it never returns. Thresholds mirror delegate_tool's sync heartbeat monitor.
 _STALE_CHECK_INTERVAL = 30.0
-_STALE_IDLE_SECONDS = 450.0
+_STALE_IDLE_SECONDS = 360.0
 _STALE_IN_TOOL_SECONDS = 1200.0
-_STALL_GRACE_SECONDS = 120.0
+_STALL_GRACE_SECONDS = 60.0
 
 _monitor_lock = threading.Lock()
 _monitor_thread: Optional[threading.Thread] = None
@@ -913,7 +913,7 @@ def _stalled_result(delegation_id: str, event_record: Dict[str, Any]) -> Dict[st
 # ── Observability + control ─────────────────────────────────────────────────
 def _children_activity_from_token(token: Any, now: float) -> Optional[List]:
     """Parse a progress token into per-child activity dicts (best-effort): delegate_tool
-    emits one ``(api_call_count, current_tool, last_activity_ts)`` tuple per child;
+    emits one ``(api_call_count, current_tool, last_progress_ts)`` tuple per child;
     foreign token shapes degrade to ``None`` entries."""
     try:
         parts = list(token)

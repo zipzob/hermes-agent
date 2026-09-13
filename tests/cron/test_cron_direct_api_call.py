@@ -24,6 +24,7 @@ def _make_agent(*, platform="cron"):
     agent.provider = "openrouter"
     agent._interrupt_requested = False
     agent._touch_activity = MagicMock()
+    agent._touch_liveness = MagicMock()
     agent._create_request_openai_client = MagicMock()
     agent._close_request_openai_client = MagicMock()
     return agent
@@ -71,13 +72,12 @@ def test_direct_api_call_runs_two_sequential_requests_on_same_thread():
     assert agent._close_request_openai_client.call_count == 2
 
 
-def test_direct_api_call_keeps_activity_alive_during_slow_wait(monkeypatch):
-    """Mid-wait activity heartbeats must tick while the inline request blocks.
+def test_direct_api_call_keeps_transport_alive_during_slow_wait(monkeypatch):
+    """Mid-wait liveness heartbeats must tick while the inline request blocks.
 
-    Subagents use direct_api_call (non-streaming). Without mid-call
-    ``_touch_activity`` ticks, the async stall monitor treats a slow-but-
-    healthy local model wait as frozen progress and interrupts around 450s
-    (``Operation interrupted: waiting for model response``).
+    Subagents use direct_api_call (non-streaming). Mid-call liveness ticks
+    deliberately do not claim semantic progress, allowing the detached
+    delegation watchdog to classify a provider-silent child independently.
     """
     import threading
     import time
@@ -112,21 +112,21 @@ def test_direct_api_call_keeps_activity_alive_during_slow_wait(monkeypatch):
 
     # Allow several heartbeat intervals while the request is still blocked.
     deadline = time.time() + 1.0
-    while time.time() < deadline and agent._touch_activity.call_count < 3:
+    while time.time() < deadline and agent._touch_liveness.call_count < 2:
         time.sleep(0.05)
 
-    touches_while_blocked = agent._touch_activity.call_count
+    touches_while_blocked = agent._touch_liveness.call_count
     release.set()
     worker.join(timeout=2.0)
 
     assert worker.is_alive() is False
     assert result_box["response"].id == "slow"
-    assert touches_while_blocked >= 3, (
+    assert touches_while_blocked >= 2, (
         f"expected mid-wait activity heartbeats, got {touches_while_blocked}"
     )
     assert all(
         call.args[0] == "waiting for non-streaming API response"
-        for call in agent._touch_activity.call_args_list
+        for call in agent._touch_liveness.call_args_list
     )
 
 

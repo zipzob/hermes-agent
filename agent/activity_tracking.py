@@ -40,7 +40,7 @@ class ActivityTrackingMixin:
 
     def _touch_activity(
         self, desc: str, *, provenance: Optional[ActivityProvenance] = None,
-        force_persist: bool = False,
+        force_persist: bool = False, _semantic: bool = True,
     ) -> None:
         """Update the last-activity timestamp and description (thread-safe).
 
@@ -64,6 +64,8 @@ class ActivityTrackingMixin:
                 getattr(self, "_turn_liveness_activity_generation", 0) + 1
             )
             self._last_activity_ts = time.time()
+            if _semantic:
+                self._last_progress_ts = self._last_activity_ts
             self._last_activity_desc = bound_activity_description(desc)
             self._last_activity_provenance = normalize_activity_provenance(provenance)
             # Real progress invalidates a reserved abort claim; an in-flight watchdog interrupt must abandon
@@ -81,6 +83,15 @@ class ActivityTrackingMixin:
         if force_persist:
             reset_session_activity_persist_window(self)
         self._persist_session_activity_if_due()
+
+    def _touch_liveness(
+        self, desc: str, *, provenance: Optional[ActivityProvenance] = None,
+        force_persist: bool = False,
+    ) -> None:
+        """Refresh host/session liveness without claiming observable child progress."""
+        self._touch_activity(
+            desc, provenance=provenance, force_persist=force_persist, _semantic=False,
+        )
 
     def _persist_session_activity_if_due(self) -> None:
         """Best-effort durable activity heartbeat for SessionDB consumers.
