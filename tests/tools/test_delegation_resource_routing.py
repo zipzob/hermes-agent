@@ -149,6 +149,33 @@ def test_astra_is_never_automatically_selected_even_if_parent_uses_it():
     assert "astra" not in route.model
 
 
+def test_operator_only_models_cannot_be_injected_into_automatic_lanes():
+    configured = policy(models={
+        "simple": "gpt-5.3-codex-spark",
+        "volume": "gpt-5.6-luna",
+        "substantive": "gpt-6-astra",
+        "latency_critical": "gpt-5.3-codex-spark",
+        "judgment": "gpt-6-astra-900k",
+    })
+    routes = route_delegation_tasks(
+        [
+            {"goal": "mechanical", "workload": "simple"},
+            {"goal": "implementation", "workload": "substantive"},
+            {"goal": "arbitration", "workload": "judgment", "context_window": "large"},
+        ],
+        parent_model="gpt-5.6-sol",
+        policy=configured,
+        quota_snapshot={"general": "GREEN", "spark": "GREEN", "astra": "GREEN"},
+    )
+
+    assert [route.model for route in routes] == [
+        "gpt-5.6-luna",
+        "gpt-5.6-terra",
+        "gpt-5.6-sol-900k",
+    ]
+    assert all("operator_only_model_ignored" in route.reasons for route in routes)
+
+
 def test_delegate_integration_builds_per_task_credentials_without_leaking_secrets(monkeypatch):
     monkeypatch.setattr(
         "tools.delegation_resource_routing.load_quota_snapshot",
