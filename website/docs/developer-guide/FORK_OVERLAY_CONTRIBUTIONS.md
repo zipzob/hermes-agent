@@ -237,6 +237,19 @@ and iteration-summary safety have different owners and rollback boundaries.
 - **Verification:** two deterministic production-path heartbeat regressions and the
   complete owning suite passed: 89 tests, one platform skip, Ruff and diff checks.
 
+#### Approval delivery timing-test stability
+
+- **Topic / integrated commit:** `contrib/approval-delivery-test-stability` —
+  `82eb8089bf0d6586a45564f545ef77cfbc8806b1` (integrated unchanged).
+- **Symptom:** the full six-worker canonical run failed one approval test when a
+  correct 20ms delivery-ack timeout completed in 0.517s under scheduler pressure,
+  narrowly exceeding an unrelated `<0.5s` wall-clock assertion.
+- **Contract:** preserve the integration assertions for failure attribution and
+  queue cleanup; prove the exact 20ms monotonic deadline and bounded wait slice
+  with a deterministic fake clock rather than host scheduling latency.
+- **Verification:** 20 retry-free serial reproductions of the original test passed;
+  the corrected complete approval file passed 122 tests, Ruff, and diff checks.
+
 ### Iteration-limit summary capacity guard
 
 - **Topic / integrated commit:** `contrib/iteration-summary-context-fallback` —
