@@ -120,10 +120,12 @@ def _estimated_tokens(task: Mapping[str, Any]) -> int:
     return estimate_tokens_rough(f"{task.get('goal', '')}\n{task.get('context', '')}")
 
 
-def _base_model(workload: str, models: Mapping[str, Any]) -> str:
+def _base_model(workload: str, models: Mapping[str, Any]) -> tuple[str, bool]:
     configured = str(models.get(workload) or _DEFAULT_MODELS[workload]).strip()
     # Context aliases are selected below, not embedded in strength configuration.
-    return strip_codex_context_variant_suffix(configured)
+    base = strip_codex_context_variant_suffix(configured)
+    operator_only = "spark" in base.casefold() or "astra" in base.casefold()
+    return (_DEFAULT_MODELS[workload] if operator_only else base), operator_only
 
 
 def route_delegation_tasks(
@@ -163,17 +165,23 @@ def route_delegation_tasks(
             model = parent_model
             reasons.append("routing_off")
         else:
-            model = _base_model(workload, models)
+            def automatic_model(lane: str) -> str:
+                selected, ignored = _base_model(lane, models)
+                if ignored and "operator_only_model_ignored" not in reasons:
+                    reasons.append("operator_only_model_ignored")
+                return selected
+
+            model = automatic_model(workload)
             if workload == "latency_critical":
                 # Spark is a volatile preview pool. Automatic classification
                 # never spends it; an explicit model pin remains authoritative.
-                model = _base_model("substantive", models)
+                model = automatic_model("substantive")
                 reasons.append("spark_explicit_only")
             if pools["general"] in {"ORANGE", "RED", "EXHAUSTED"}:
                 if workload == "judgment":
-                    model = _base_model("substantive", models)
+                    model = automatic_model("substantive")
                 elif workload == "substantive" and pools["general"] in {"RED", "EXHAUSTED"}:
-                    model = _base_model("volume", models)
+                    model = automatic_model("volume")
                 reasons.append(f"general_quota_{pools['general'].lower()}")
             reasons.append(f"workload_{workload}")
 
