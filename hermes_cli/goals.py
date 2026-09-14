@@ -54,13 +54,23 @@ DEFAULT_GATE_MAX_RETRIES = 3
 _MAX_BARRIER_WAIT_S = 30 * 60
 # Bounded tail of a failed gate's combined stdout/stderr fed back to the agent.
 _GATE_OUTPUT_TAIL_CHARS = 3000
+GOAL_COMPLETION_MARKER = "[[GOAL_COMPLETE]]"
+
+
+def _agent_declares_goal_complete(response: str) -> bool:
+    return bool(response and response.rstrip().splitlines()[-1].strip() == GOAL_COMPLETION_MARKER)
+
+
+def _background_work_active(processes: Optional[List[Dict[str, Any]]]) -> bool:
+    return any(str(item.get("status") or "").lower() in {"queued", "running"} for item in (processes or []))
 
 
 CONTINUATION_PROMPT_TEMPLATE = (
     "[Continuing toward your standing goal]\n"
     "Goal: {goal}\n\n"
     "Continue working toward this goal. Take the next concrete step. "
-    "If you believe the goal is complete, state so explicitly and stop. "
+    "If you believe the goal is complete, provide a compact evidence receipt and end the response with "
+    f"{GOAL_COMPLETION_MARKER}. "
     "If you are blocked and need input from the user, say so clearly and stop."
 )
 
@@ -75,6 +85,7 @@ CONTINUATION_PROMPT_WITH_CONTRACT_TEMPLATE = (
     "Stay within the stated boundaries and do not violate the constraints. "
     "Before claiming the goal is done, satisfy the Verification criterion and "
     "show the concrete evidence (command output, file contents, test result). "
+    f"End a completed response with {GOAL_COMPLETION_MARKER}. "
     "If you hit the stated stop condition or are otherwise blocked and need "
     "user input, say so clearly and stop."
 )
@@ -87,7 +98,8 @@ CONTINUATION_PROMPT_WITH_SUBGOALS_TEMPLATE = (
     "{subgoals_block}\n\n"
     "Continue working toward the goal AND all additional criteria. Take "
     "the next concrete step. If you believe the goal and every "
-    "additional criterion are complete, state so explicitly and stop. "
+    "additional criterion are complete, provide a compact evidence receipt and end the response with "
+    f"{GOAL_COMPLETION_MARKER}. "
     "If you are blocked and need input from the user, say so clearly "
     "and stop."
 )
@@ -1472,6 +1484,17 @@ class GoalManager:
             if gate_decision.get("should_continue") and state.turns_used >= state.max_turns:
                 return self._budget_pause(state, "gate_failed", gate_decision.get("reason", ""), note=" (a quality gate is still failing)")
             return gate_decision
+
+        if (
+            _agent_declares_goal_complete(last_response)
+            and active_delegations == 0
+            and not _background_work_active(background_processes)
+        ):
+            state.status = "done"
+            state.last_verdict = "done"
+            state.last_reason = "agent supplied the explicit completion marker after all deterministic gates passed"
+            self._save()
+            return _decision("done", False, None, "done", state.last_reason, f"✓ Goal achieved: {state.last_reason}")
 
         verdict, reason, parse_failed, wait_directive, transport_failed = judge_goal(
             state.goal, last_response, subgoals=state.subgoals or None, background_processes=background_processes,
