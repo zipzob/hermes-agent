@@ -10113,6 +10113,62 @@
         "title": "CurrentSubscription",
         "type": "object"
       },
+      "DelegationLifecycle": {
+        "additionalProperties": false,
+        "properties": {
+          "active_tasks": {
+            "title": "Active Tasks",
+            "type": "integer"
+          },
+          "stalled_tasks": {
+            "title": "Stalled Tasks",
+            "type": "integer"
+          },
+          "batches": {
+            "items": {
+              "$ref": "#/components/schemas/DelegationLifecycleBatch"
+            },
+            "title": "Batches",
+            "type": "array"
+          }
+        },
+        "required": [
+          "active_tasks",
+          "stalled_tasks",
+          "batches"
+        ],
+        "title": "DelegationLifecycle",
+        "type": "object"
+      },
+      "DelegationLifecycleBatch": {
+        "additionalProperties": false,
+        "properties": {
+          "delegation_id": {
+            "title": "Delegation Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "task_count": {
+            "title": "Task Count",
+            "type": "integer"
+          },
+          "runner_settled": {
+            "title": "Runner Settled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "delegation_id",
+          "status",
+          "task_count",
+          "runner_settled"
+        ],
+        "title": "DelegationLifecycleBatch",
+        "type": "object"
+      },
       "DelegationPauseParams": {
         "additionalProperties": false,
         "properties": {
@@ -10207,15 +10263,13 @@
           "lifecycle": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/DelegationLifecycle"
               },
               {
                 "type": "null"
               }
             ],
-            "default": null,
-            "title": "Lifecycle"
+            "default": null
           }
         },
         "required": [

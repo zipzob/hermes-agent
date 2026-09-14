@@ -374,6 +374,19 @@ class ActiveSubagent(OpenModel):
     owner_agent_session_id: str | None = None
 
 
+class DelegationLifecycleBatch(Result):
+    delegation_id: str
+    status: str
+    task_count: int
+    runner_settled: bool
+
+
+class DelegationLifecycle(Result):
+    active_tasks: int
+    stalled_tasks: int
+    batches: list[DelegationLifecycleBatch]
+
+
 class DelegationStatusParams(ProfileParams):
     session_id: str | None = None
 
@@ -383,7 +396,7 @@ class DelegationStatusResult(Result):
     paused: bool
     max_spawn_depth: int
     max_concurrent_children: int
-    lifecycle: dict[str, JsonValue] | None = None
+    lifecycle: DelegationLifecycle | None = None
 
 
 method("delegation.status", params=DelegationStatusParams, result=DelegationStatusResult,
