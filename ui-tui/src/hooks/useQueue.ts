@@ -14,7 +14,12 @@ export function prependQueueItem(queue: QueueItem[], item: QueueItem): void {
   queue.unshift(item)
 }
 
-export function takeQueueItem(queue: QueueItem[], index: number, editedDisplay?: string): QueueItem | undefined {
+export function takeQueueItem(
+  queue: QueueItem[],
+  index: number,
+  editedDisplay?: string,
+  editedText = editedDisplay
+): QueueItem | undefined {
   if (index < 0 || index >= queue.length) {
     return undefined
   }
@@ -27,7 +32,7 @@ export function takeQueueItem(queue: QueueItem[], index: number, editedDisplay?:
 
   return {
     display: editedDisplay,
-    text: editedDisplay.includes(item.display) ? editedDisplay.replace(item.display, item.text) : editedDisplay
+    text: editedText?.includes(item.display) ? editedText.replace(item.display, item.text) : (editedText ?? editedDisplay)
   }
 }
 
@@ -144,8 +149,8 @@ export function useQueue() {
   }, [queueRef, syncQueue])
 
   const takeQ = useCallback(
-    (i: number, editedDisplay?: string) => {
-      const item = takeQueueItem(queueRef.current, i, editedDisplay)
+    (i: number, editedDisplay?: string, editedText?: string) => {
+      const item = takeQueueItem(queueRef.current, i, editedDisplay, editedText)
 
       if (item) {
         syncQueue()

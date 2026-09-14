@@ -298,7 +298,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
 
       if (!live.sid) {
         composerActions.pushHistory(toHistory)
-        composerActions.enqueue(full)
+        composerActions.enqueue(submission.text, submission.display)
         composerActions.clearIn()
 
         return
@@ -308,7 +308,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
       composerActions.clearIn()
 
       if (editIdx !== null) {
-        const picked = composerActions.takeQueue(editIdx, full)
+        const picked = composerActions.takeQueue(editIdx, submission.display, submission.text)
         composerActions.setQueueEdit(null)
 
         if (!picked || !live.sid) {
@@ -332,7 +332,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
       composerActions.pushHistory(toHistory)
 
       if (getUiState().busy) {
-        return handleBusyInput(queueItem(full))
+        return handleBusyInput(queueItem(submission.text, submission.display))
       }
 
       if (shouldInterpolateSubmission(full)) {

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { ComposerToken } from '../app/interfaces.js'
 import { expandPasteTokens, prepareSlashSubmission, queueItemFromSlash } from '../app/useSubmission.js'
 import { imageToken } from '../domain/attachments.js'
+import { takeQueueItem } from '../hooks/useQueue.js'
 
 describe('/queue collapsed paste submission', () => {
   it('keeps the collapsed argument for display and the full multiline payload for execution', () => {
@@ -54,5 +55,16 @@ describe('prepareSlashSubmission', () => {
 
   it('is a no-op on a token-free command', () => {
     expect(prepareSlashSubmission('/model opus', [])).toEqual({ command: '/model opus', display: '/model opus' })
+  })
+})
+
+describe('queued paste payload freezing', () => {
+  it('preserves old and newly pasted payloads while keeping both labels compact', () => {
+    const queue = [{ display: '[[ old ]]', text: 'old full text' }]
+
+    expect(takeQueueItem(queue, 0, '[[ old ]] + [[ new ]]', '[[ old ]] + new full text')).toEqual({
+      display: '[[ old ]] + [[ new ]]',
+      text: 'old full text + new full text'
+    })
   })
 })
