@@ -398,3 +398,20 @@ and iteration-summary safety have different owners and rollback boundaries.
   persistent and unchanged.
 - **Verification:** the owning file passed 2 tests and ten fresh-process
   integration stress iterations passed without a missing tool.
+
+### Publication-boundary upstream reconciliation
+
+- The first sealed integration at `efa3c819885313a8565d32c69663c338f1d6481f`
+  passed the canonical runner with **49,460 passed, 0 failed, 462 skipped** across
+  4,173 files, with no retry section.
+- The publication fetch advanced `upstream/main` by 94 commits, from
+  `49c6d4a9e0dddc64d6333c5b1fcc9d911463a8fd` to
+  `14efb46089250e8b9e56e59b74291cf8dce8b207`. Fourteen changed paths overlapped
+  the overlay, including dependency manifests and agent/gateway entry points, so
+  the integration was rebased once rather than treated as zero-overlap drift.
+- `git range-diff` matched all 77 integration commits with zero changed markers.
+  The refreshed exact overlay passed **1,131 focused Python tests** and the full
+  **1,804-test TUI gate**, plus TUI typecheck/build, generated-contract, and diff
+  checks. The 42 original contribution tips remain recoverable under
+  `backup/contrib-pre-final-20260914/*`; the topic refs remain attributable
+  preparation roots while the refreshed integration is the publishable runtime.
