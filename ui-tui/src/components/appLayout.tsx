@@ -7,7 +7,7 @@ import { Fragment, memo, type MutableRefObject, useEffect, useMemo, useRef } fro
 
 import { useGateway } from '../app/gatewayContext.js'
 import type { AppLayoutProps } from '../app/interfaces.js'
-import { $isBlocked, $overlayState, patchOverlayState } from '../app/overlayStore.js'
+import { $isBlocked, $overlayState, composerDraftVisible, patchOverlayState } from '../app/overlayStore.js'
 import { $petBox } from '../app/petFlashStore.js'
 import { $uiState } from '../app/uiStore.js'
 import { usePet } from '../app/usePet.js'
@@ -269,6 +269,8 @@ const ComposerPane = memo(function ComposerPane({
 }) {
   const ui = useStore($uiState)
   const isBlocked = useStore($isBlocked)
+  const overlay = useStore($overlayState)
+  const showComposerDraft = composerDraftVisible(overlay)
   const sh = (composer.inputBuf[0] ?? composer.input).startsWith('!')
 
   const promptText = composerPromptText(
@@ -374,7 +376,7 @@ const ComposerPane = memo(function ComposerPane({
 
         {composer.input === '?' && !composer.inputBuf.length && <HelpHint t={ui.theme} />}
 
-        {!isBlocked && (
+        {showComposerDraft && (
           <>
             {composer.inputBuf.map((line, i) => (
               <Box key={i}>
@@ -414,6 +416,7 @@ const ComposerPane = memo(function ComposerPane({
                   color={ui.theme.color.text}
                   columns={inputColumns}
                   cursorSnapshotRef={cursorSnapshotRef}
+                  focus={!isBlocked}
                   mouseApiRef={inputMouseRef}
                   onChange={composer.updateInput}
                   onPaste={composer.handleTextPaste}

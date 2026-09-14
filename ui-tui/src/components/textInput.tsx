@@ -656,6 +656,12 @@ export function supportsFastEchoTerminal(env: NodeJS.ProcessEnv = process.env): 
     return false
   }
 
+  // ConEmu adds another cursor-owning ConPTY layer even when WSL markers are
+  // not inherited by the Node process. Keep direct writes inside Ink there.
+  if ((env.ConEmuPID ?? '').trim() || (env.ConEmuANSI ?? '').trim() || (env.ConEmuHWND ?? '').trim()) {
+    return false
+  }
+
   // Terminal.app still shows paint/cursor artifacts under the fast-echo
   // bypass path. Fall back to the normal Ink render path there.
   if ((env.TERM_PROGRAM ?? '').trim() === 'Apple_Terminal') {

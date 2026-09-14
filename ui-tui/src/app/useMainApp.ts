@@ -996,6 +996,9 @@ export function useMainApp(gw: GatewayClient) {
   const onServerRequest = useMemo(
     () =>
       createServerRequestHandler({
+        acknowledgeApproval: (requestId, sessionId) => {
+          void rpc('approval.received', { request_id: requestId, session_id: sessionId })
+        },
         ringPromptBell: () => {
           if (bellOnPrompt && stdout?.isTTY) {
             stdout.write('\x07')
@@ -1003,7 +1006,7 @@ export function useMainApp(gw: GatewayClient) {
         },
         setStatus: status => patchUiState({ status })
       }),
-    [bellOnPrompt, stdout]
+    [bellOnPrompt, rpc, stdout]
   )
 
   onServerRequestRef.current = onServerRequest

@@ -154,6 +154,10 @@ export const hasFloatingPanel = (overlay: OverlayState): boolean =>
     overlay.skillsHub
   )
 
+/** Keep an existing draft geometrically stable while an in-flow prompt owns keys. */
+export const composerDraftVisible = (overlay: OverlayState): boolean =>
+  !overlay.agents && !overlay.journey && !overlay.widget && !hasFloatingPanel(overlay)
+
 export const $isStatusRuleOccluded = computed([$overlayState, $uiState], (overlay, ui) =>
   Boolean(overlay.widget || (ui.statusBar === 'top' && hasFloatingPanel(overlay)))
 )
