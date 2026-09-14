@@ -14,6 +14,8 @@ import threading
 import pytest
 import yaml
 
+from tui_gateway import slash_worker
+
 _mcp_server_mod = pytest.importorskip("mcp.server")
 
 if not hasattr(_mcp_server_mod, "MCPServer"):
@@ -24,6 +26,29 @@ if not hasattr(_mcp_server_mod, "MCPServer"):
         "profile-local MCP discovery probe requires mcp >= 2.0 (MCPServer)",
         allow_module_level=True,
     )
+
+
+def test_slash_worker_uses_the_long_first_snapshot_discovery_bound(monkeypatch):
+    from hermes_cli import mcp_startup
+
+    calls = []
+    monkeypatch.setattr(
+        mcp_startup,
+        "start_background_mcp_discovery",
+        lambda **kwargs: calls.append(("start", kwargs)),
+    )
+    monkeypatch.setattr(
+        mcp_startup,
+        "wait_for_mcp_discovery",
+        lambda **kwargs: calls.append(("wait", kwargs)),
+    )
+
+    slash_worker._prepare_slash_worker_runtime()
+
+    assert calls == [
+        ("start", {"logger": slash_worker.logger, "thread_name": "slash-worker-mcp-discovery"}),
+        ("wait", {"single_query": True}),
+    ]
 
 
 def test_profile_local_mcp_tool_is_visible_in_slash_worker(tmp_path):
