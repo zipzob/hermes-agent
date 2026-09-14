@@ -119,6 +119,65 @@ from tools.voice_mode import (
 
 logger = logging.getLogger(__name__)
 
+# A failed STT request must not erase audio that was successfully captured.
+# Keep one process-local recording only long enough for an explicit retry; it
+# is never persisted in session history and is always removed on success,
+# discard, replacement, or expiry.
+_RECOVERY_TTL_SECONDS = 600
+_recoverable_recording_lock = threading.Lock()
+_recoverable_recording_path: Optional[str] = None
+_recoverable_recording_timer: Optional[threading.Timer] = None
+
+
+def _discard_recoverable_recording(path: Optional[str] = None) -> bool:
+    """Discard the retained capture, optionally only when it matches ``path``."""
+    global _recoverable_recording_path, _recoverable_recording_timer
+    with _recoverable_recording_lock:
+        current = _recoverable_recording_path
+        if path is not None and current != path:
+            return False
+        _recoverable_recording_path = None
+        timer, _recoverable_recording_timer = _recoverable_recording_timer, None
+    if timer is not None:
+        timer.cancel()
+    if current:
+        with contextlib.suppress(OSError):
+            os.unlink(current)
+    return current is not None
+
+
+def _retain_recoverable_recording(path: str) -> None:
+    """Retain one failed capture for a bounded, user-initiated STT retry."""
+    global _recoverable_recording_path, _recoverable_recording_timer
+    with _recoverable_recording_lock:
+        previous = _recoverable_recording_path
+        previous_timer = _recoverable_recording_timer
+        _recoverable_recording_path = path
+        timer = threading.Timer(_RECOVERY_TTL_SECONDS, _discard_recoverable_recording, args=(path,))
+        timer.daemon = True
+        _recoverable_recording_timer = timer
+    if previous_timer is not None:
+        previous_timer.cancel()
+    if previous and previous != path:
+        with contextlib.suppress(OSError):
+            os.unlink(previous)
+    timer.start()
+
+
+def has_recoverable_recording() -> bool:
+    """Whether one bounded failed-STT capture is available for retry/discard."""
+    with _recoverable_recording_lock:
+        path = _recoverable_recording_path
+    if path and os.path.isfile(path):
+        return True
+    _discard_recoverable_recording(path)
+    return False
+
+
+def discard_recoverable_recording() -> bool:
+    """Explicitly delete a failed-STT capture without retrying it."""
+    return _discard_recoverable_recording()
+
 
 def _debug(msg: str) -> None:
     """HERMES_VOICE_DEBUG=1 breadcrumb on stderr (the TUI gateway shows it as a gateway.stderr
@@ -174,12 +233,13 @@ def _safe_call(cb: Optional[Callable], *args: Any, warn: Optional[str] = None) -
 def _transcribe_wav_result(
     wav_path: str, fail_msg: str, debug_prefix: Optional[str] = None
 ) -> tuple[Optional[str], Optional[str]]:
-    """Transcribe and unlink audio, returning ``(clean_text, provider_error)``.
+    """Transcribe audio, returning ``(clean_text, provider_error)``.
 
     transcribe_recording returns {"success", "transcript", "error"?} — NOT {"text"}; the wrong key
     silently masqueraded as "not hearing the user". Empty text and Whisper hallucinations are
     dropped; failures are logged with ``fail_msg``.
     """
+    failed = True
     try:
         result = transcribe_recording(wav_path)
         success = bool(result.get("success"))
@@ -187,19 +247,37 @@ def _transcribe_wav_result(
         if debug_prefix:
             _debug(f"{debug_prefix}: transcribe -> success={success} text={text!r} err={result.get('error')!r}")
         if success and text and not is_whisper_hallucination(text):
+            failed = False
             return text, None
         if not success:
             return None, str(result.get("error") or "Voice transcription failed")
+        failed = False
     except Exception as e:
         logger.warning(fail_msg, e)
         if debug_prefix:
             _debug(f"{debug_prefix}: transcribe raised {type(e).__name__}: {e}")
         return None, str(e)
     finally:
-        with contextlib.suppress(Exception):
-            if os.path.isfile(wav_path):
+        if failed:
+            _retain_recoverable_recording(wav_path)
+        else:
+            # The capture is no longer recoverable after a successful or
+            # definitive no-speech result.  Remove this WAV even when a
+            # different failed capture is currently retained for retry.
+            _discard_recoverable_recording(wav_path)
+            with contextlib.suppress(OSError):
                 os.unlink(wav_path)
     return None, None
+
+
+def retry_recoverable_transcription() -> tuple[Optional[str], Optional[str]]:
+    """Retry STT for the single retained failed capture, if it has not expired."""
+    with _recoverable_recording_lock:
+        path = _recoverable_recording_path
+    if not path or not os.path.isfile(path):
+        _discard_recoverable_recording(path)
+        return None, "No recoverable voice recording is available"
+    return _transcribe_wav_result(path, "voice transcription retry failed: %s", "voice retry")
 
 
 def _transcribe_wav(wav_path: str, fail_msg: str, debug_prefix: Optional[str] = None) -> Optional[str]:
