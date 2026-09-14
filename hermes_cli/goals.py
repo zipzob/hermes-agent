@@ -1485,17 +1485,6 @@ class GoalManager:
                 return self._budget_pause(state, "gate_failed", gate_decision.get("reason", ""), note=" (a quality gate is still failing)")
             return gate_decision
 
-        if (
-            _agent_declares_goal_complete(last_response)
-            and active_delegations == 0
-            and not _background_work_active(background_processes)
-        ):
-            state.status = "done"
-            state.last_verdict = "done"
-            state.last_reason = "agent supplied the explicit completion marker after all deterministic gates passed"
-            self._save()
-            return _decision("done", False, None, "done", state.last_reason, f"✓ Goal achieved: {state.last_reason}")
-
         verdict, reason, parse_failed, wait_directive, transport_failed = judge_goal(
             state.goal, last_response, subgoals=state.subgoals or None, background_processes=background_processes,
             contract=state.contract if state.has_contract() else None, active_delegations=active_delegations,
@@ -1527,6 +1516,22 @@ class GoalManager:
             state.status = "done"
             self._save()
             return _decision("done", False, None, "done", reason, f"✓ Goal achieved: {reason}")
+
+        # The marker is an agent assertion, never trusted proof. A disagreement
+        # must not bypass the independent judge, but repeatedly re-prompting the
+        # same finished-looking response burns the full goal budget. Pause the
+        # disputed lifecycle for human inspection instead.
+        if (
+            _agent_declares_goal_complete(last_response)
+            and active_delegations == 0
+            and not _background_work_active(background_processes)
+        ):
+            return self._pause_decision(
+                f"agent declared completion but judge did not confirm: {reason}",
+                "completion_disputed",
+                reason,
+                f"⏸ Goal paused — the agent declared completion but the judge did not confirm it: {reason}",
+            )
 
         # Persistent judge failures (API unreachable / unparseable output) auto-pause and point at the
         # goal_judge config so a broken judge can't burn the whole turn budget.
