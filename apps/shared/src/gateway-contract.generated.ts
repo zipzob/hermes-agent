@@ -279,11 +279,16 @@ export interface BillingStepUpResult {
   recovery?: string | null
   granted?: boolean | null
 }
+export interface DelegationStatusParams {
+  profile?: string | null
+  session_id?: string | null
+}
 export interface DelegationStatusResult {
   active: ActiveSubagent[]
   paused: boolean
   max_spawn_depth: number
   max_concurrent_children: number
+  lifecycle?: Record<string, unknown> | null
 }
 /** One live child from ``tools/delegate_tool_registry.py::list_active_subagents`` (the record is extended by the child runner — ``missed_steer`` etc. — so it stays open). */
 export interface ActiveSubagent {
@@ -4293,7 +4298,7 @@ export interface RpcMethods {
   /** Block/unblock NEW spawns globally (active children keep running); returns the new state. */
   'delegation.pause': { params: DelegationPauseParams; result: DelegationPauseResult }
   /** Running subagent tree plus the spawn pause flag and limits. */
-  'delegation.status': { params: ProfileParams; result: DelegationStatusResult }
+  'delegation.status': { params: DelegationStatusParams; result: DelegationStatusResult }
   /** Upload a force-redacted debug bundle to Nous-internal diagnostics storage. */
   'diagnostics.share_nous': { params: DiagnosticsShareNousParams; result: DiagnosticsShareNousResult }
   /** Stage a non-image file into the session workspace and hand back its @file: ref. */
