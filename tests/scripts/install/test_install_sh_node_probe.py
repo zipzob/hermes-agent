@@ -93,7 +93,7 @@ def _run_install_node(tmp_path: Path, node_body: str) -> tuple[int, str, str, li
         "if [ \"${3:-}\" = \"-o\" ]; then\n"
         '    cp "$FIXTURE" "$4"\n'
         "else\n"
-        "    echo 'node-v26.7.0-linux-x64.tar.xz'\n"
+        "    printf '%s\\n' 'node-v26.7.0-linux-x64.tar.xz' 'node-v26.7.0-linux-x64.tar.gz'\n"
         "fi\n",
     )
     _stub("sudo", "#!/bin/sh\nshift_if_env() { :; }\nexec env \"$@\"\n")
