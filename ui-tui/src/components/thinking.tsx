@@ -1199,12 +1199,12 @@ export const ToolTrail = memo(function ToolTrail({
                       ) : null}
                     </>
                   }
-                  rails={rails}
                   prefix={
                     <Text color={t.color.tool}>
                       ● {group.live ? <Spinner color={t.color.tool} variant="tool" /> : null}{' '}
                     </Text>
                   }
+                  rails={rails}
                   t={t}
                 />
                 {renderedDetails.map((detail, detailIndex) => (
