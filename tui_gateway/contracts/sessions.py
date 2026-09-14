@@ -200,6 +200,7 @@ class SessionListRow(Result):
     started_at: float = 0
     message_count: int = 0
     source: str = ""
+    parent_session_id: str | None = None
 
 
 class SessionListResult(Result):
@@ -242,6 +243,7 @@ class SessionActiveItem(Result):
     started_at: float
     status: LiveSessionStatus
     title: str
+    parent_session_id: str | None = None
 
 
 class SessionActiveListResult(Result):

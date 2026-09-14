@@ -1,8 +1,8 @@
+import { looksLikeSlashCommand } from '@hermes/shared/slash'
 import { describe, expect, it } from 'vitest'
 
 import { collapsedPaste, looksLikeDroppedPath } from '../app/useComposerState.js'
 import { prepareSlashSubmission, shouldInterpolateSubmission } from '../app/useSubmission.js'
-import { looksLikeSlashCommand } from '../domain/slash.js'
 
 describe('collapsed slash paste', () => {
   it('keeps the goal command visible while preserving its multiline body', () => {
