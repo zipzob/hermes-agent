@@ -335,10 +335,13 @@ class VoiceToggleAction(WireEnum):
     on = "on"
     off = "off"
     tts = "tts"
+    dictation = "dictation"
+    silence = "silence"
 
 
 class VoiceToggleParams(Params):
     action: VoiceToggleAction = VoiceToggleAction.status
+    value: str | None = None
     profile: str | None = None
 
 
@@ -346,14 +349,18 @@ class VoiceToggleResult(Result):
     """``methods_voice.py::_voice_status_payload`` (+ the requirements probe on ``status``, the spoken
     stop hint on ``on``)."""
 
-    enabled: bool
-    record_key: str
-    tts: bool
+    enabled: bool | None = None
+    record_key: str | None = None
+    tts: bool | None = None
     stop_hint: str | None = None
     available: bool | None = None
     audio_available: bool | None = None
     stt_available: bool | None = None
     details: str | None = None
+    input_mode: str | None = None
+    recording_mode: str | None = None
+    silence_duration_seconds: float | None = None
+    max_recording_seconds: float | None = None
 
 
 method("voice.toggle", params=VoiceToggleParams, result=VoiceToggleResult,
@@ -363,6 +370,8 @@ method("voice.toggle", params=VoiceToggleParams, result=VoiceToggleResult,
 class VoiceRecordAction(WireEnum):
     start = "start"
     stop = "stop"
+    retry = "retry"
+    discard = "discard"
 
 
 class VoiceRecordParams(Params):
@@ -375,11 +384,18 @@ class VoiceRecordStatus(WireEnum):
     recording = "recording"
     stopped = "stopped"
     busy = "busy"
+    retrying = "retrying"
+    discarded = "discarded"
 
 
 class VoiceRecordResult(Result):
     status: VoiceRecordStatus
     reason: str | None = None  # "wake_owned" when another surface holds the mic
+    discarded: bool | None = None
+    input_mode: str | None = None
+    recording_mode: str | None = None
+    silence_duration_seconds: float | None = None
+    max_recording_seconds: float | None = None
 
 
 method("voice.record", params=VoiceRecordParams, result=VoiceRecordResult,

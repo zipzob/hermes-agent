@@ -616,6 +616,14 @@ class VoiceStatusPayload(Payload):
     """``methods_voice._vr_on_status``; states come from the recorder (idle / listening / transcribing …)."""
 
     state: str
+    capture_kind: str | None = None
+    cutoff_reason: str | None = None
+    input_mode: str | None = None
+    max_recording_seconds: float | None = None
+    recording_mode: str | None = None
+    silence_duration_seconds: float | None = None
+    silence_remaining_seconds: float | None = None
+    started_at_ms: int | None = None
 
 
 class VoiceTranscriptPayload(Payload):
@@ -625,6 +633,10 @@ class VoiceTranscriptPayload(Payload):
     stop_phrase: bool | None = None
     typed: bool | None = None
     no_speech_limit: bool | None = None
+    delivery: str | None = None
+    error: str | None = None
+    recovery_available: bool | None = None
+    voice_stopped: bool | None = None
 
 
 class WakeDetectedPayload(Payload):

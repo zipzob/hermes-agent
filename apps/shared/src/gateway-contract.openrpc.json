@@ -32547,7 +32547,9 @@
       "VoiceRecordAction": {
         "enum": [
           "start",
-          "stop"
+          "stop",
+          "retry",
+          "discard"
         ],
         "title": "VoiceRecordAction",
         "type": "string"
@@ -32604,6 +32606,66 @@
             ],
             "default": null,
             "title": "Reason"
+          },
+          "discarded": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Discarded"
+          },
+          "input_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Mode"
+          },
+          "recording_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Recording Mode"
+          },
+          "silence_duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Silence Duration Seconds"
+          },
+          "max_recording_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Recording Seconds"
           }
         },
         "required": [
@@ -32616,7 +32678,9 @@
         "enum": [
           "recording",
           "stopped",
-          "busy"
+          "busy",
+          "retrying",
+          "discarded"
         ],
         "title": "VoiceRecordStatus",
         "type": "string"
@@ -32628,6 +32692,102 @@
           "state": {
             "title": "State",
             "type": "string"
+          },
+          "capture_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Capture Kind"
+          },
+          "cutoff_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cutoff Reason"
+          },
+          "input_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Mode"
+          },
+          "max_recording_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Recording Seconds"
+          },
+          "recording_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Recording Mode"
+          },
+          "silence_duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Silence Duration Seconds"
+          },
+          "silence_remaining_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Silence Remaining Seconds"
+          },
+          "started_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Started At Ms"
           }
         },
         "required": [
@@ -32641,7 +32801,9 @@
           "status",
           "on",
           "off",
-          "tts"
+          "tts",
+          "dictation",
+          "silence"
         ],
         "title": "VoiceToggleAction",
         "type": "string"
@@ -32652,6 +32814,18 @@
           "action": {
             "$ref": "#/components/schemas/VoiceToggleAction",
             "default": "status"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Value"
           },
           "profile": {
             "anyOf": [
@@ -32674,16 +32848,40 @@
         "description": "``methods_voice.py::_voice_status_payload`` (+ the requirements probe on ``status``, the spoken\nstop hint on ``on``).",
         "properties": {
           "enabled": {
-            "title": "Enabled",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Enabled"
           },
           "record_key": {
-            "title": "Record Key",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Record Key"
           },
           "tts": {
-            "title": "Tts",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tts"
           },
           "stop_hint": {
             "anyOf": [
@@ -32744,13 +32942,56 @@
             ],
             "default": null,
             "title": "Details"
+          },
+          "input_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Mode"
+          },
+          "recording_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Recording Mode"
+          },
+          "silence_duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Silence Duration Seconds"
+          },
+          "max_recording_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Recording Seconds"
           }
         },
-        "required": [
-          "enabled",
-          "record_key",
-          "tts"
-        ],
         "title": "VoiceToggleResult",
         "type": "object"
       },
@@ -32805,6 +33046,54 @@
             ],
             "default": null,
             "title": "No Speech Limit"
+          },
+          "delivery": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Delivery"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "recovery_available": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Recovery Available"
+          },
+          "voice_stopped": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Voice Stopped"
           }
         },
         "title": "VoiceTranscriptPayload",

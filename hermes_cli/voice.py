@@ -643,6 +643,12 @@ def is_continuous_active() -> bool:
         return _continuous_active
 
 
+def is_continuous_busy() -> bool:
+    """Whether this process still owns a capture/transcription lifecycle."""
+    with _continuous_lock:
+        return _continuous_active or _continuous_stopping
+
+
 def _continuous_on_silence() -> None:
     """AudioRecorder silence callback — runs in a daemon thread.
 
