@@ -119,6 +119,14 @@ describe('createGatewayEventHandler', () => {
 
     onEvent({ payload: { error: 'Parakeet unavailable' }, type: 'voice.transcript' } as any)
     expect(ctx.system.sys).toHaveBeenCalledWith('voice error: Parakeet unavailable')
+
+    onEvent({
+      payload: { error: 'service request failed: timed out', recovery_available: true },
+      type: 'voice.transcript'
+    } as any)
+    expect(ctx.system.sys).toHaveBeenCalledWith(
+      'voice error: service request failed: timed out — recording retained for 10 minutes; /voice retry or /voice discard'
+    )
     expect(ctx.submission.submitRef.current).not.toHaveBeenCalled()
 
     onEvent({ payload: { delivery: 'draft', text: 'second section' }, type: 'voice.transcript' } as any)

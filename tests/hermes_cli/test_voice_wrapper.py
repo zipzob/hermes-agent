@@ -29,6 +29,36 @@ class TestPublicAPI:
         assert callable(speak_text)
 
 
+class TestTranscriptionRecovery:
+    def test_failed_transcription_retains_audio_for_one_explicit_retry(self, monkeypatch, tmp_path):
+        import hermes_cli.voice as voice
+
+        wav_path = tmp_path / "recording_failed.wav"
+        wav_path.write_bytes(b"audio")
+        monkeypatch.setattr(voice, "transcribe_recording", lambda _path: {
+            "success": False,
+            "transcript": "",
+            "error": "service request failed: timed out",
+        })
+
+        transcript, error = voice._transcribe_wav_result(str(wav_path), "voice transcription failed: %s")
+
+        assert transcript is None
+        assert error == "service request failed: timed out"
+        assert wav_path.exists()
+        assert voice.has_recoverable_recording()
+
+        monkeypatch.setattr(voice, "transcribe_recording", lambda _path: {
+            "success": True,
+            "transcript": "recovered text",
+        })
+        transcript, error = voice.retry_recoverable_transcription()
+
+        assert (transcript, error) == ("recovered text", None)
+        assert not wav_path.exists()
+        assert not voice.has_recoverable_recording()
+
+
 class TestNormalizeVoiceRecordKeyForPromptToolkit:
     """Round-9 Copilot review regression on #19835.
 

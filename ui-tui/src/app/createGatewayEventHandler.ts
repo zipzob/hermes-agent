@@ -1097,7 +1097,11 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         if (error) {
           setVoiceRecording(false)
           setVoiceProcessing(false)
-          sys(`voice error: ${error}`)
+          sys(
+            ev.payload?.recovery_available
+              ? `voice error: ${error} — recording retained for 10 minutes; /voice retry or /voice discard`
+              : `voice error: ${error}`
+          )
 
           return
         }

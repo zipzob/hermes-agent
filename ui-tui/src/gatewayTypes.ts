@@ -389,12 +389,13 @@ export interface VoiceToggleResponse {
 }
 
 export interface VoiceRecordResponse {
+  discarded?: boolean
   input_mode?: 'dictation' | 'submit'
   max_recording_seconds?: number
   reason?: 'barge_listener_active' | 'microphone_owned_by_other_process' | 'recording_active' | 'wake_owned'
   recording_mode?: 'manual' | 'silence'
   silence_duration_seconds?: number
-  status?: 'busy' | 'recording' | 'stopped'
+  status?: 'busy' | 'discarded' | 'recording' | 'retrying' | 'stopped'
   text?: string
 }
 

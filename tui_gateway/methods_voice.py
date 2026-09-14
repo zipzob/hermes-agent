@@ -896,7 +896,7 @@ def _(rid, params: dict) -> dict:
     action = params.get("action", "start")
     wake_paused = False
     capture_acquired = False
-    if action not in {"start", "stop"}:
+    if action not in {"discard", "retry", "start", "stop"}:
         return _err(rid, 4019, f"unknown voice action: {action}")
     transport = _caller_transport()
     wake_owner, _surface = _wake_owner_snapshot()
@@ -904,6 +904,30 @@ def _(rid, params: dict) -> dict:
         return _ok(rid, {"status": "busy", "reason": "wake_owned"})
     try:
         global _voice_event_sid, _voice_wake_owner
+        if action == "discard":
+            from hermes_cli.voice import discard_recoverable_recording
+            return _ok(rid, {"status": "discarded", "discarded": discard_recoverable_recording()})
+        if action == "retry":
+            from hermes_cli.voice import has_recoverable_recording, retry_recoverable_transcription
+            if not has_recoverable_recording():
+                return _err(rid, 4019, "no recoverable voice recording is available")
+
+            input_mode = _voice_input_mode()
+
+            def _retry() -> None:
+                _voice_emit("voice.status", {"state": "transcribing"})
+                text, error = retry_recoverable_transcription()
+                if error:
+                    _vr_transcript({"error": error, "recovery_available": has_recoverable_recording()})
+                elif text:
+                    _vr_transcript({
+                        "delivery": "draft" if input_mode == "dictation" else "submit",
+                        "text": text,
+                    })
+                _voice_emit("voice.status", {"state": "idle"})
+
+            threading.Thread(target=_retry, daemon=True).start()
+            return _ok(rid, {"status": "retrying"})
         if action == "stop":
             with _voice_sid_lock:
                 _voice_event_sid = params.get("session_id") or _voice_event_sid
@@ -956,7 +980,12 @@ def _(rid, params: dict) -> dict:
             })
 
         def _on_error(error):
-            _vr_transcript({"error": str(error)})
+            from hermes_cli import voice
+            recoverable = bool(getattr(voice, "has_recoverable_recording", lambda: False)())
+            payload: dict[str, object] = {"error": str(error)}
+            if recoverable:
+                payload["recovery_available"] = True
+            _vr_transcript(payload)
 
         recording_started_at_ms = 0
 

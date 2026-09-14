@@ -11,6 +11,7 @@ import type {
   SessionCompressResponse,
   SessionUsageResponse,
   SlashExecResponse,
+  VoiceRecordResponse,
   VoiceToggleResponse
 } from '../../../gatewayTypes.js'
 import { formatVoiceRecordKey, parseVoiceRecordKey } from '../../../lib/platform.js'
@@ -313,11 +314,26 @@ export const sessionCommands: SlashCommand[] = [
   },
 
   {
-    help: 'voice mode: [on|off|tts|status|dictation on|off|silence 1..60|off]',
+    help: 'voice mode: [on|off|tts|status|retry|discard|dictation on|off|silence 1..60|off]',
     name: 'voice',
     run: (arg, ctx) => {
       const normalized = (arg ?? '').trim().toLowerCase()
       const [command = '', value = ''] = normalized.split(/\s+/, 2)
+
+      if (command === 'retry' || command === 'discard') {
+        ctx.gateway.rpc<VoiceRecordResponse>('voice.record', { action: command }).then(
+          ctx.guarded<VoiceRecordResponse>(r => {
+            ctx.transcript.sys(
+              command === 'retry'
+                ? 'Voice: retrying retained recording.'
+                : r.discarded
+                  ? 'Voice: retained recording discarded.'
+                  : 'Voice: no retained recording to discard.'
+            )
+          })
+        )
+        return
+      }
 
       const action =
         command === 'on' ||
