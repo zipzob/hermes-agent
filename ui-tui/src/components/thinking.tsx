@@ -93,6 +93,7 @@ function TreeTextRow({
   content,
   dimColor,
   onClick,
+  prefix,
   rails = [],
   t,
   wrap = 'wrap-trim'
@@ -102,6 +103,7 @@ function TreeTextRow({
   content: ReactNode
   dimColor?: boolean
   onClick?: () => void
+  prefix?: ReactNode
   rails?: TreeRails
   t: Theme
   wrap?: 'truncate-end' | 'wrap' | 'wrap-trim'
@@ -118,7 +120,12 @@ function TreeTextRow({
 
   return (
     <TreeRow branch={branch} rails={rails} t={t}>
-      <Box onClick={onClick}>{text}</Box>
+      <Box flexDirection="row" flexGrow={1} minWidth={0} onClick={onClick}>
+        {prefix ? <Box flexShrink={0}>{prefix}</Box> : null}
+        <Box flexGrow={1} minWidth={0}>
+          {text}
+        </Box>
+      </Box>
     </TreeRow>
   )
 }
@@ -695,6 +702,7 @@ interface Group {
   details: DetailRow[]
   key: string
   label: string
+  live?: boolean
 }
 
 export const ToolTrail = memo(function ToolTrail({
@@ -913,6 +921,7 @@ export const ToolTrail = memo(function ToolTrail({
       color: t.color.text,
       key: tool.id,
       label,
+      live: true,
       details: tool.verboseArgs
         ? [
             {
@@ -926,7 +935,7 @@ export const ToolTrail = memo(function ToolTrail({
         : [],
       content: (
         <>
-          <Spinner color={t.color.tool} variant="tool" /> {label}
+          {label}
           {tool.startedAt ? ` (${fmtElapsed(now - tool.startedAt)})` : ''}
         </>
       )
@@ -1182,7 +1191,6 @@ export const ToolTrail = memo(function ToolTrail({
                   color={group.color}
                   content={
                     <>
-                      <Text color={t.color.tool}>● </Text>
                       {toolLabel(group)}
                       {isDelegateGroup ? (
                         <Text color={t.color.statusFg} dim>
@@ -1192,6 +1200,11 @@ export const ToolTrail = memo(function ToolTrail({
                     </>
                   }
                   rails={rails}
+                  prefix={
+                    <Text color={t.color.tool}>
+                      ● {group.live ? <Spinner color={t.color.tool} variant="tool" /> : null}{' '}
+                    </Text>
+                  }
                   t={t}
                 />
                 {renderedDetails.map((detail, detailIndex) => (
