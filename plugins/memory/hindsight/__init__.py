@@ -866,7 +866,7 @@ class HindsightMemoryProvider(MemoryProvider):
 
     def _apply_retain_settings(self, cfg: dict) -> None:
         def _cfg_or_env(key: str, env_var: str, default: str = "") -> Any:
-            return cfg.get(key) or os.environ.get(env_var, default)
+            return cfg.get(key) or _scoped_setting(env_var, default)
 
         self._retain_tags = _normalize_retain_tags(_cfg_or_env("retain_tags", "HINDSIGHT_RETAIN_TAGS"))
         self._tags = self._retain_tags or None

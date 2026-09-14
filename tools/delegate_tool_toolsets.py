@@ -117,7 +117,14 @@ def _resolve_child_toolsets(
         inherited_disabled = [name for name in inherited_disabled if name != "delegation"]
         if "delegation" not in child_toolsets:
             child_toolsets.append("delegation")
+    role_disabled = ["kanban"]
+    if effective_role != "orchestrator":
+        # A parent composite (for example ``hermes-cli``) can expand back into
+        # this bundle after ``child_toolsets`` is filtered. Keep the whole
+        # delegation surface denied for leaf children, including tools added to
+        # that bundle after this resolver was written.
+        role_disabled.append("delegation")
     child_disabled_toolsets = list(
-        dict.fromkeys(inherited_disabled + _blocked_toolsets_for_role(effective_role) + ["kanban"])
+        dict.fromkeys(inherited_disabled + _blocked_toolsets_for_role(effective_role) + role_disabled)
     )
     return child_toolsets, child_disabled_toolsets
