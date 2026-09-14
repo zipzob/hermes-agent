@@ -661,7 +661,7 @@
         {
           "name": "params",
           "schema": {
-            "$ref": "#/components/schemas/ProfileParams"
+            "$ref": "#/components/schemas/DelegationStatusParams"
           }
         }
       ],
@@ -10151,6 +10151,37 @@
         "title": "DelegationPauseResult",
         "type": "object"
       },
+      "DelegationStatusParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          }
+        },
+        "title": "DelegationStatusParams",
+        "type": "object"
+      },
       "DelegationStatusResult": {
         "additionalProperties": false,
         "properties": {
@@ -10172,6 +10203,19 @@
           "max_concurrent_children": {
             "title": "Max Concurrent Children",
             "type": "integer"
+          },
+          "lifecycle": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Lifecycle"
           }
         },
         "required": [

@@ -374,14 +374,19 @@ class ActiveSubagent(OpenModel):
     owner_agent_session_id: str | None = None
 
 
+class DelegationStatusParams(ProfileParams):
+    session_id: str | None = None
+
+
 class DelegationStatusResult(Result):
     active: list[ActiveSubagent]
     paused: bool
     max_spawn_depth: int
     max_concurrent_children: int
+    lifecycle: dict[str, JsonValue] | None = None
 
 
-method("delegation.status", params=ProfileParams, result=DelegationStatusResult,
+method("delegation.status", params=DelegationStatusParams, result=DelegationStatusResult,
        doc="Running subagent tree plus the spawn pause flag and limits.")
 
 
