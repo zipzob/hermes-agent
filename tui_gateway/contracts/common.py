@@ -37,6 +37,8 @@ class Usage(OpenModel):
     avg_latency_s: float | None = None
     avg_tps: float | None = None
     active_subagents: int | None = None
+    stalled_subagents: int | None = None
+    governor_status: str | None = None
     dev_credits_spent_micros: int | None = None
     cost_usd: float | None = None
     cost_status: str | None = None

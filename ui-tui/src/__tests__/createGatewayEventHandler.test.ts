@@ -64,9 +64,14 @@ const buildCtx = (appended: Msg[]) =>
 
 /** Deliver one server→client request (`tui_gateway/server_requests.py`) to the TUI's request handler. */
 const serverRequest = (method: string, params: Record<string, unknown>, id = `srq-${method}`) => {
+  const acknowledgeApproval = vi.fn()
   const respond = vi.fn()
 
-  const handled = createServerRequestHandler({ ringPromptBell: vi.fn(), setStatus: status => patchUiState({ status }) })({
+  const handled = createServerRequestHandler({
+    acknowledgeApproval,
+    ringPromptBell: vi.fn(),
+    setStatus: status => patchUiState({ status })
+  })({
     fail: vi.fn(),
     id,
     method,
@@ -74,7 +79,7 @@ const serverRequest = (method: string, params: Record<string, unknown>, id = `sr
     respond
   })
 
-  return { handled, respond }
+  return { acknowledgeApproval, handled, respond }
 }
 
 describe('createGatewayEventHandler', () => {
@@ -1357,24 +1362,15 @@ describe('createGatewayEventHandler', () => {
   })
 
   it('acknowledges an approval after accepting it into prompt state', () => {
-    const ctx = buildCtx([])
-    const onEvent = createGatewayEventHandler(ctx)
-
-    onEvent({
-      session_id: 'session-owned-by-event',
-      payload: {
-        command: 'rm -rf /tmp/x',
-        description: 'dangerous command',
-        request_id: 'approval-request-1'
-      },
-      type: 'approval.request'
-    } as any)
-
-    expect(getOverlayState().approval).toMatchObject({ requestId: 'approval-request-1' })
-    expect(ctx.gateway.rpc).toHaveBeenCalledWith('approval.received', {
+    const { acknowledgeApproval } = serverRequest('approval', {
+      command: 'rm -rf /tmp/x',
+      description: 'dangerous command',
       request_id: 'approval-request-1',
-      session_id: 'session-owned-by-event'
+      session_id: 'session-owned-by-request'
     })
+
+    expect(getOverlayState().approval).toMatchObject({ requestId: 'srq-approval' })
+    expect(acknowledgeApproval).toHaveBeenCalledWith('approval-request-1', 'session-owned-by-request')
   })
 
   it('preserves allow_permanent=false on approval overlays (tirith warning)', () => {

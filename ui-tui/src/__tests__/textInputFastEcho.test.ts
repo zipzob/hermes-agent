@@ -256,6 +256,11 @@ describe('supportsFastEchoTerminal', () => {
     expect(supportsFastEchoTerminal({ WSL_INTEROP: '/run/WSL/123_interop' } as NodeJS.ProcessEnv)).toBe(false)
   })
 
+  it('disables fast-echo in ConEmu/ConPTY proxy stacks', () => {
+    expect(supportsFastEchoTerminal({ ConEmuPID: '1234' } as NodeJS.ProcessEnv)).toBe(false)
+    expect(supportsFastEchoTerminal({ ConEmuANSI: 'ON' } as NodeJS.ProcessEnv)).toBe(false)
+  })
+
   it('disables fast-echo in Apple Terminal', () => {
     expect(supportsFastEchoTerminal({ TERM_PROGRAM: 'Apple_Terminal' } as NodeJS.ProcessEnv)).toBe(false)
   })

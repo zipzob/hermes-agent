@@ -27249,6 +27249,30 @@
             "default": null,
             "title": "Active Subagents"
           },
+          "stalled_subagents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Stalled Subagents"
+          },
+          "governor_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Governor Status"
+          },
           "dev_credits_spent_micros": {
             "anyOf": [
               {
@@ -31464,6 +31488,30 @@
             ],
             "default": null,
             "title": "Active Subagents"
+          },
+          "stalled_subagents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Stalled Subagents"
+          },
+          "governor_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Governor Status"
           },
           "dev_credits_spent_micros": {
             "anyOf": [

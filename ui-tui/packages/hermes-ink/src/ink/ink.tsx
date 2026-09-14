@@ -1368,22 +1368,11 @@ export default class Ink {
   }
 
   /**
-   * Mark the previous frame as untrustworthy for blit. In alt-screen mode,
-   * also erase and repaint on the next frame: a virtual full-damage diff
-   * cannot remove a glyph that exists only on the physical terminal.
-   *
-   * This is lifecycle-scoped (overlay mount/change/unmount), not a global
-   * redraw loop. The clear and repaint share the normal synchronized output
-   * buffer, unlike forceRedraw() which clears immediately in a separate write.
+   * Mark the previous virtual frame as untrustworthy for blit. Lifecycle
+   * recovery paths that have proven physical-screen divergence own any erase;
+   * ordinary overlay transitions repaint through the normal damage path.
    */
   invalidatePrevFrame(): void {
-    if (this.altScreenActive && this.options.stdout.isTTY && !this.isUnmounted && !this.isPaused) {
-      this.resetFramesForAltScreen()
-      this.needsEraseBeforePaint = true
-
-      return
-    }
-
     this.prevFrameContaminated = true
   }
 

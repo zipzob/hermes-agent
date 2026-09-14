@@ -631,6 +631,8 @@ export interface Usage {
   avg_latency_s?: number | null
   avg_tps?: number | null
   active_subagents?: number | null
+  stalled_subagents?: number | null
+  governor_status?: string | null
   dev_credits_spent_micros?: number | null
   cost_usd?: number | null
   cost_status?: string | null
@@ -2810,6 +2812,8 @@ export interface SessionUsageResult {
   avg_latency_s?: number | null
   avg_tps?: number | null
   active_subagents?: number | null
+  stalled_subagents?: number | null
+  governor_status?: string | null
   dev_credits_spent_micros?: number | null
   cost_usd?: number | null
   cost_status?: string | null

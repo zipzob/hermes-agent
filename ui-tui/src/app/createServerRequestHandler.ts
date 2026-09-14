@@ -6,6 +6,7 @@ import { patchOverlayState } from './overlayStore.js'
 import { rememberServerRequest } from './serverRequestStore.js'
 
 export interface ServerRequestHandlerContext {
+  acknowledgeApproval?: (requestId: string, sessionId: string) => void
   ringPromptBell: () => void
   setStatus: (status: string) => void
 }
@@ -25,7 +26,7 @@ const strList = (v: unknown): null | string[] =>
  * fails fast instead of waiting out its deadline.
  */
 export function createServerRequestHandler(ctx: ServerRequestHandlerContext): (request: ServerRequest) => boolean {
-  const { ringPromptBell, setStatus } = ctx
+  const { acknowledgeApproval, ringPromptBell, setStatus } = ctx
 
   const open = (request: ServerRequest, status: string) => {
     rememberServerRequest(request)
@@ -83,6 +84,12 @@ export function createServerRequestHandler(ctx: ServerRequestHandlerContext): (r
           }
         })
         open(request, 'approval needed')
+        const approvalRequestId = str(p.request_id)
+        const sessionId = str(p.session_id)
+
+        if (approvalRequestId && sessionId) {
+          acknowledgeApproval?.(approvalRequestId, sessionId)
+        }
 
         return true
       }

@@ -31,6 +31,7 @@ export { refreshSessionView, scheduleResumeScrollToBottom } from './sessionResum
 
 const usageFrom = (info: null | SessionInfo): Usage => (info?.usage ? { ...ZERO, ...info.usage } : ZERO)
 
+
 const statusFromLiveSession = (status?: string, running = false) => {
   if (status === 'waiting') {
     return 'waiting for input…'

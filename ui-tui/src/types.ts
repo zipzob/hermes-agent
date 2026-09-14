@@ -100,9 +100,12 @@ export interface ApprovalReq {
   choices?: string[]
   command: string
   description: string
+  expiresAtMs?: number
   /** Server→client request id; the answer is the response frame for it. */
   requestId: string
   smartDenied?: boolean
+  toolId?: string
+  toolName?: string
 }
 
 export interface ConfirmReq {

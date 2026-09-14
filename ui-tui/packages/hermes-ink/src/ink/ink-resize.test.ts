@@ -24,7 +24,7 @@ class FakeTty extends EventEmitter {
 const tick = () => new Promise<void>(resolve => queueMicrotask(resolve))
 
 describe('Ink resize healing', () => {
-  it('erases physical-only ghosts when an overlay invalidates the previous frame', () => {
+  it('repaints overlay invalidation without erasing the physical screen', () => {
     const stdout = new FakeTty()
     const stdin = new FakeTty()
     const stderr = new FakeTty()
@@ -46,8 +46,8 @@ describe('Ink resize healing', () => {
     ink.onRender()
 
     const out = stdout.chunks.join('')
-    expect(out).toContain(ERASE_SCREEN)
-    expect(out.indexOf(ERASE_SCREEN)).toBeLessThan(out.lastIndexOf('hello'))
+    expect(out).not.toContain(ERASE_SCREEN)
+    expect(out).toBe('')
 
     ink.unmount()
   })
