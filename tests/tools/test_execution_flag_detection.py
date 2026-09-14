@@ -274,13 +274,22 @@ def _time_benign_segments(count):
 
 
 def test_benign_segment_scaling_benchmark():
-    """Retain real metrics without making correctness depend on wall-clock ratios."""
-    small, small_result = _time_benign_segments(2_000)
-    large, large_result = _time_benign_segments(4_000)
+    """Retain real metrics within the bounded no-approval parser envelope."""
+    small, small_result = _time_benign_segments(200)
+    large, large_result = _time_benign_segments(400)
 
     assert small_result == (False, None, None)
     assert large_result == (False, None, None)
-    print(f"benign segment benchmark: 2k={small:.3f}s, 4k={large:.3f}s")
+    print(f"benign segment benchmark: 200={small:.3f}s, 400={large:.3f}s")
+
+
+def test_excessive_benign_segments_fail_closed_before_parser_work():
+    command = ";".join(f"printf segment-{index}" for index in range(513))
+    assert detect_dangerous_command(command) == (
+        True,
+        "command parser limit exceeded",
+        "command parser limit exceeded",
+    )
 
 
 def test_max_accepted_separator_free_input_is_fast():

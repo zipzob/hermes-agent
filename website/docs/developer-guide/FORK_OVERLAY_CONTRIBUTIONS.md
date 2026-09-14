@@ -415,3 +415,18 @@ and iteration-summary safety have different owners and rollback boundaries.
   checks. The 42 original contribution tips remain recoverable under
   `backup/contrib-pre-final-20260914/*`; the topic refs remain attributable
   preparation roots while the refreshed integration is the publishable runtime.
+
+### Final canonical-runner stability bounds
+
+- **Slash-worker fixture:** the profile-local MCP test had a test-only 10-second
+  response limit despite the production worker owning a 45-second first-command
+  budget. The direct child performs its initial discovery before reading stdin;
+  the fixture now uses the production deadline and retains a bounded stderr tail
+  for actionable failures. Ten fresh-process repetitions passed.
+- **Execution-flag detector:** accepting 2,000–4,000 benign shell segments let a
+  quote-aware command-position projection grow quadratically and occasionally
+  exceed the canonical runner's 300-second per-file limit. The detector now
+  fails closed at 512 separators, while the bounded 200/400-segment benchmark
+  preserves no-approval behavior. Eight fresh-process combined repetitions
+  passed; the two owning files completed in 8.8 seconds under the canonical
+  runner.

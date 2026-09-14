@@ -113,20 +113,35 @@ def test_profile_local_mcp_tool_is_visible_in_slash_worker(tmp_path):
         cwd=tmp_path,
     )
     output: queue.Queue[str] = queue.Queue()
+    stderr_tail: list[str] = []
     try:
         assert proc.stdin is not None
         assert proc.stdout is not None
+        assert proc.stderr is not None
         stdout = proc.stdout
+        stderr = proc.stderr
         threading.Thread(
             target=lambda: output.put(stdout.readline()),
             daemon=True,
         ).start()
+
+        def drain_stderr() -> None:
+            for line in stderr:
+                stderr_tail[:] = (stderr_tail + [line.rstrip("\n")])[-8:]
+
+        threading.Thread(target=drain_stderr, daemon=True).start()
         proc.stdin.write(json.dumps({"id": 1, "command": "/tools"}) + "\n")
         proc.stdin.flush()
         try:
-            line = output.get(timeout=10)
+            # The production `_SlashWorker` owns a 45-second startup/reply budget.
+            # This child performs its first MCP discovery before it begins reading
+            # stdin, so a smaller test-only deadline can fail while production works.
+            line = output.get(timeout=45)
         except queue.Empty:
-            pytest.fail("slash worker produced no /tools response within 10 seconds")
+            pytest.fail(
+                "slash worker produced no /tools response within the production "
+                f"deadline (returncode={proc.poll()}, stderr={stderr_tail!r})"
+            )
         response = json.loads(line)
         assert response["ok"] is True
         assert "mcp__profileprobe__hermes_61922_profile_probe" in response["output"]
