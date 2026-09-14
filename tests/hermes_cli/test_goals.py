@@ -998,7 +998,7 @@ def test_goal_session_db_is_the_registry_shared_handle(hermes_home):
         registry.release_or_close(db)
 
 
-def test_terminal_agent_completion_marker_bypasses_false_negative_judge(hermes_home):
+def test_terminal_agent_completion_marker_requires_judge_confirmation(hermes_home):
     from unittest.mock import patch
     from hermes_cli import goals
     from hermes_cli.goals import GoalManager
@@ -1006,12 +1006,30 @@ def test_terminal_agent_completion_marker_bypasses_false_negative_judge(hermes_h
     mgr = GoalManager(session_id="agent-completion-marker", default_max_turns=20)
     mgr.set("ship the verified repair")
 
-    with patch.object(goals, "judge_goal", side_effect=AssertionError("judge should not run")):
+    with patch.object(goals, "judge_goal", return_value=("done", "verified", False, None, False)) as judge:
         decision = mgr.evaluate_after_turn("Tests passed; install and remote SHA verified.\n[[GOAL_COMPLETE]]")
 
     assert decision["status"] == "done"
     assert decision["should_continue"] is False
     assert mgr.state.status == "done"
+    judge.assert_called_once()
+
+
+def test_disputed_completion_marker_pauses_instead_of_looping_or_bypassing_judge(hermes_home):
+    from unittest.mock import patch
+    from hermes_cli import goals
+    from hermes_cli.goals import GoalManager
+
+    mgr = GoalManager(session_id="agent-completion-marker-disputed", default_max_turns=20)
+    mgr.set("ship the verified repair")
+
+    with patch.object(goals, "judge_goal", return_value=("continue", "evidence is incomplete", False, None, False)):
+        decision = mgr.evaluate_after_turn("Done.\n[[GOAL_COMPLETE]]")
+
+    assert decision["status"] == "paused"
+    assert decision["should_continue"] is False
+    assert decision["verdict"] == "completion_disputed"
+    assert mgr.state.status == "paused"
 
 
 def test_completion_marker_must_be_terminal_and_have_no_active_delegations(hermes_home):
@@ -1019,12 +1037,14 @@ def test_completion_marker_must_be_terminal_and_have_no_active_delegations(herme
     from hermes_cli import goals
     from hermes_cli.goals import GoalManager
 
-    mgr = GoalManager(session_id="agent-completion-marker-guard", default_max_turns=20)
-    mgr.set("ship the verified repair")
+    nonterminal_mgr = GoalManager(session_id="agent-completion-marker-nonterminal", default_max_turns=20)
+    nonterminal_mgr.set("ship the verified repair")
+    active_mgr = GoalManager(session_id="agent-completion-marker-active", default_max_turns=20)
+    active_mgr.set("ship the verified repair")
 
     with patch.object(goals, "judge_goal", return_value=("continue", "work remains", False, None, False)) as judge:
-        nonterminal = mgr.evaluate_after_turn("Example: [[GOAL_COMPLETE]] is the marker, but work remains.")
-        active = mgr.evaluate_after_turn("Done.\n[[GOAL_COMPLETE]]", active_delegations=1)
+        nonterminal = nonterminal_mgr.evaluate_after_turn("Example: [[GOAL_COMPLETE]] is the marker, but work remains.")
+        active = active_mgr.evaluate_after_turn("Done.\n[[GOAL_COMPLETE]]", active_delegations=1)
 
     assert nonterminal["should_continue"] is True
     assert active["should_continue"] is True
