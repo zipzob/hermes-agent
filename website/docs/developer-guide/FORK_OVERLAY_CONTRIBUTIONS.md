@@ -332,13 +332,16 @@ and iteration-summary safety have different owners and rollback boundaries.
 
 ### Deterministic goal completion
 
-- **Branch / commit:** `contrib/goal-completion-marker-20260914` — `0290dbf2be`.
+- **Branch / commits:** `contrib/goal-completion-marker-20260914` —
+  `0290dbf2be` and `f33f2703d0`.
 - **Symptom:** a strict auxiliary judge could reject repeated prose completion
   claims and spend the full continuation budget after verified work was complete.
-- **Contract:** after deterministic gates pass, a terminal `[[GOAL_COMPLETE]]`
-  marker atomically completes the active goal only when no delegation or queued/
-  running background process remains; examples and non-terminal markers do not.
-- **Verification:** 85 focused goal, gate, gateway, and restart tests passed.
+- **Contract:** a terminal `[[GOAL_COMPLETE]]` remains an agent assertion and
+  never bypasses the independent judge. A confirmed `done` closes normally;
+  disagreement with no active delegation or background process pauses as
+  `completion_disputed` instead of burning the continuation budget. Examples
+  and non-terminal markers do not affect lifecycle state.
+- **Verification:** 86 focused goal, gate, gateway, and restart tests passed.
 
 ### Refresh contract reconciliation
 
