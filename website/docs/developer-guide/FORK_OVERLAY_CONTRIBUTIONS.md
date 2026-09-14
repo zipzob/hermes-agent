@@ -352,3 +352,23 @@ and iteration-summary safety have different owners and rollback boundaries.
 - **Verification:** the focused integration selection passed 984 tests and the
   full TUI gate passed 1,804 tests. Repository-wide Python closure is recorded
   only after its canonical runner completes on the final exact tree.
+
+### Delegation lifecycle contract
+
+- **Branch / commit:** `contrib/delegation-lifecycle-contract-20260914` —
+  `2a5c3afc97`.
+- **Symptom:** the rebased `delegation.status` handler accepted a session scope
+  and returned `lifecycle`, while the new generated contract declared neither;
+  strict dispatch therefore returned an error before the status payload.
+- **Contract:** declare optional session identity and structured lifecycle data
+  in the canonical Python contract, then regenerate TypeScript/OpenRPC outputs.
+- **Verification:** the owning status test, generated-contract tests, and TUI
+  typecheck passed.
+
+### Current-upstream installer fixture
+
+- **Integration commit:** `d57c68db59`.
+- **Symptom:** current upstream's Node download fixture advertised only `.tar.xz`,
+  but the installer correctly requests `.tar.gz` when `xz` is unavailable.
+- **Disposition:** test-fixture repair, reproduced identically on frozen upstream;
+  the fixture now advertises both archive formats. All three owning tests pass.
