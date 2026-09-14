@@ -355,15 +355,16 @@ and iteration-summary safety have different owners and rollback boundaries.
 
 ### Delegation lifecycle contract
 
-- **Branch / commit:** `contrib/delegation-lifecycle-contract-20260914` —
-  `2a5c3afc97`.
+- **Branch / commits:** `contrib/delegation-lifecycle-contract-20260914` —
+  `2a5c3afc97` and `1c886da7cd`.
 - **Symptom:** the rebased `delegation.status` handler accepted a session scope
   and returned `lifecycle`, while the new generated contract declared neither;
   strict dispatch therefore returned an error before the status payload.
-- **Contract:** declare optional session identity and structured lifecycle data
-  in the canonical Python contract, then regenerate TypeScript/OpenRPC outputs.
-- **Verification:** the owning status test, generated-contract tests, and TUI
-  typecheck passed.
+- **Contract:** declare optional session identity plus closed lifecycle and batch
+  models in the canonical Python contract, then regenerate TypeScript/OpenRPC
+  outputs. Malformed counts or unknown fields fail strict dispatch.
+- **Verification:** the two owning status tests, generated-contract tests, and
+  TUI typecheck passed; an independent review's overbroad-schema HIGH is closed.
 
 ### Current-upstream installer fixture
 
