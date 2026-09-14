@@ -279,3 +279,73 @@ and iteration-summary safety have different owners and rollback boundaries.
 - **Verification:** 93 focused hot-reload/native-compaction tests, Ruff, and diff
   checks passed. A temporary explicit 756,808-token config hotfix protects old
   running Sol-900k sessions until the integrated code is installed and restarted.
+
+## Current-upstream replay and final runtime repairs — 2026-09-14
+
+### Refresh boundary
+
+- **Frozen upstream:** `49c6d4a9e0dddc64d6333c5b1fcc9d911463a8fd`.
+- **Pre-refresh integration:** `c298f080d38e4363b3e64e90dc21f1f53f1b6269`.
+- **Rebased overlay tip before new repairs:** `fa50c52740` (59 carried commits).
+- **Rollback evidence:** `/home/zip/.hermes/backups/hermes-final-repair-20260914-143951/`.
+- All 42 existing `contrib/*` refs were advanced to their unique rebased commit
+  by exact subject plus patch-identity evidence, with expected-old update guards.
+  Original refs remain under `backup/contrib-pre-final-20260914/*`.
+- Upstream's generated Pydantic/TypeScript gateway-contract system supersedes
+  hand-written event interfaces. Voice, usage, session-lineage, and approval
+  fields were transplanted into the canonical Python contracts and regenerated.
+
+### Voice transcription overlap
+
+- **Branch / commit:** `contrib/voice-overlap-20260914` — `6b4b12713b`.
+- **Symptom:** after capture released the microphone but before Parakeet finished,
+  a second same-process recording could reacquire the lease and report a phantom
+  recording while the original continuous lifecycle was still active.
+- **Contract:** reject that start as `busy / transcription_active`; retain
+  cross-process microphone exclusion and serialized shared Parakeet inference.
+- **Verification:** 107 focused voice, capture-lease, Parakeet, generated-contract,
+  and TUI-gateway tests passed; Ruff and contract-generation checks passed.
+
+### Approval/composer repaint integrity
+
+- **Branch / commit:** `contrib/tui-composer-repaint-20260914` — `13eeb557df`.
+- **Symptoms:** in-flow approval cards unmounted the draft editor and shifted the
+  status/composer geometry; alt-screen invalidation blanked both frame buffers;
+  ConEmu/ConPTY could retain the direct fast-echo cursor writer.
+- **Contract:** keep the draft mounted but unfocused while a prompt owns input;
+  reserve destructive physical erasure for proven lifecycle recovery; disable
+  direct fast echo on ConEmu/ConPTY; acknowledge approval delivery only after the
+  server request is accepted into prompt state.
+- **Verification:** 201 focused renderer/approval/offset tests passed. The full
+  TUI gate later passed 1,804 tests; typecheck passed. Lint has only the recorded
+  12 warning baseline and no errors; production build passed.
+
+### Deferred paste payload identity
+
+- **Branch / commit:** `contrib/tui-paste-queue-20260914` — `d479ed9d52`.
+- **Symptom:** busy, pre-session, and edited queues retained only compact `[[…]]`
+  labels after composer tokens were cleared, so the model and downstream tools or
+  delegates received the placeholder rather than pasted content.
+- **Contract:** freeze expanded execution text and compact display text together
+  before clearing composer state; queue edits preserve old and newly pasted payloads.
+- **Verification:** 12 focused paste/submission tests and the full TUI gate passed.
+
+### Deterministic goal completion
+
+- **Branch / commit:** `contrib/goal-completion-marker-20260914` — `0290dbf2be`.
+- **Symptom:** a strict auxiliary judge could reject repeated prose completion
+  claims and spend the full continuation budget after verified work was complete.
+- **Contract:** after deterministic gates pass, a terminal `[[GOAL_COMPLETE]]`
+  marker atomically completes the active goal only when no delegation or queued/
+  running background process remains; examples and non-terminal markers do not.
+- **Verification:** 85 focused goal, gate, gateway, and restart tests passed.
+
+### Refresh contract reconciliation
+
+- **Branch / commit:** `contrib/refreshed-contract-reconciliation-20260914` —
+  `2d6cdfdfef`; style-only TUI closure follows on integration as `7fd5f03be7`.
+- **Contract:** session list and active-list rows preserve `parent_session_id` in
+  the generated wire schema; replayed tests import canonical shared utilities.
+- **Verification:** the focused integration selection passed 984 tests and the
+  full TUI gate passed 1,804 tests. Repository-wide Python closure is recorded
+  only after its canonical runner completes on the final exact tree.
