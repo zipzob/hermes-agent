@@ -938,6 +938,13 @@ def _(rid, params: dict) -> dict:
 
         if not _voice_mode_enabled():
             return _err(rid, 4015, "voice mode is off — enable with /voice on")
+        try:
+            from hermes_cli.voice import is_continuous_busy
+            continuous_busy = is_continuous_busy()
+        except ImportError:
+            continuous_busy = False
+        if _voice_capture_owner is None and continuous_busy:
+            return _ok(rid, {"status": "busy", "reason": "transcription_active"})
         if not _acquire_voice_capture("record", params.get("session_id")):
             reason = (
                 "barge_listener_active" if _voice_capture_owner == "full_duplex"

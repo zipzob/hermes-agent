@@ -2331,31 +2331,41 @@ export interface ApprovalRespondResult {
 }
 export interface VoiceToggleParams {
   action?: VoiceToggleAction
+  value?: string | null
   profile?: string | null
 }
-export type VoiceToggleAction = 'status' | 'on' | 'off' | 'tts'
+export type VoiceToggleAction = 'status' | 'on' | 'off' | 'tts' | 'dictation' | 'silence'
 /** ``methods_voice.py::_voice_status_payload`` (+ the requirements probe on ``status``, the spoken stop hint on ``on``). */
 export interface VoiceToggleResult {
-  enabled: boolean
-  record_key: string
-  tts: boolean
+  enabled?: boolean | null
+  record_key?: string | null
+  tts?: boolean | null
   stop_hint?: string | null
   available?: boolean | null
   audio_available?: boolean | null
   stt_available?: boolean | null
   details?: string | null
+  input_mode?: string | null
+  recording_mode?: string | null
+  silence_duration_seconds?: number | null
+  max_recording_seconds?: number | null
 }
 export interface VoiceRecordParams {
   action?: VoiceRecordAction
   session_id?: string | null
   profile?: string | null
 }
-export type VoiceRecordAction = 'start' | 'stop'
+export type VoiceRecordAction = 'start' | 'stop' | 'retry' | 'discard'
 export interface VoiceRecordResult {
   status: VoiceRecordStatus
   reason?: string | null
+  discarded?: boolean | null
+  input_mode?: string | null
+  recording_mode?: string | null
+  silence_duration_seconds?: number | null
+  max_recording_seconds?: number | null
 }
-export type VoiceRecordStatus = 'recording' | 'stopped' | 'busy'
+export type VoiceRecordStatus = 'recording' | 'stopped' | 'busy' | 'retrying' | 'discarded'
 export interface VoiceTtsParams {
   text: string
   profile?: string | null
@@ -4142,6 +4152,14 @@ export interface BrowserControllerCancelPayload {
 /** ``methods_voice._vr_on_status``; states come from the recorder (idle / listening / transcribing …). */
 export interface VoiceStatusPayload {
   state: string
+  capture_kind?: string | null
+  cutoff_reason?: string | null
+  input_mode?: string | null
+  max_recording_seconds?: number | null
+  recording_mode?: string | null
+  silence_duration_seconds?: number | null
+  silence_remaining_seconds?: number | null
+  started_at_ms?: number | null
 }
 /** ``methods_voice._vr_transcript`` / ``_deliver_fd_transcript`` / typed stop phrase in methods_prompt. */
 export interface VoiceTranscriptPayload {
@@ -4149,6 +4167,10 @@ export interface VoiceTranscriptPayload {
   stop_phrase?: boolean | null
   typed?: boolean | null
   no_speech_limit?: boolean | null
+  delivery?: string | null
+  error?: string | null
+  recovery_available?: boolean | null
+  voice_stopped?: boolean | null
 }
 /** ``methods_voice`` wake detector ``_on_detect``. */
 export interface WakeDetectedPayload {

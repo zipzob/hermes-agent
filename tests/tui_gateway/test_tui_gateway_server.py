@@ -2578,6 +2578,38 @@ def test_voice_record_start_refuses_second_microphone_owner(monkeypatch):
     assert starts == []
 
 
+def test_voice_record_start_refuses_same_process_transcription(monkeypatch):
+    starts = []
+    leases = []
+    monkeypatch.setenv("HERMES_VOICE", "1")
+    monkeypatch.setattr(server, "_voice_capture_owner", None)
+    monkeypatch.setattr(server, "_voice_capture_lease", None)
+    monkeypatch.setattr(
+        "tools.voice_capture_lease.acquire_voice_capture_lease",
+        lambda *_args, **_kwargs: leases.append(True),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hermes_cli.voice",
+        types.SimpleNamespace(
+            is_continuous_busy=lambda: True,
+            start_continuous=lambda **kwargs: starts.append(kwargs) or True,
+            stop_continuous=lambda **_kwargs: None,
+        ),
+    )
+
+    response = _dispatch_sync(
+        {"id": "voice-record-transcribing", "method": "voice.record", "params": {"action": "start"}}
+    )
+
+    assert response["result"] == {
+        "reason": "transcription_active",
+        "status": "busy",
+    }
+    assert starts == []
+    assert leases == []
+
+
 def test_voice_record_start_refuses_cross_process_microphone_owner(monkeypatch):
     starts = []
     monkeypatch.setenv("HERMES_VOICE", "1")
