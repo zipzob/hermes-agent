@@ -385,3 +385,16 @@ and iteration-summary safety have different owners and rollback boundaries.
   startup bound, consistent with the repository's loaded-runner timing policy.
 - **Verification:** the complete owning file passed 10 tests and the exact
   concurrency case passed 20 fresh-process stress iterations.
+
+### Slash-worker MCP discovery readiness
+
+- **Branch / commit:** `contrib/slash-worker-mcp-discovery-20260914` —
+  `be34d39ed0`.
+- **Symptom:** under canonical-suite load, the persistent slash worker exhausted
+  the ordinary 1.5-second MCP discovery wait, snapshotted tools without the
+  profile-local MCP tool, and only passed on automatic retry.
+- **Contract:** the worker's first and only tool snapshot uses the existing
+  15-second single-query discovery bound; later command processing remains
+  persistent and unchanged.
+- **Verification:** the owning file passed 2 tests and ten fresh-process
+  integration stress iterations passed without a missing tool.
