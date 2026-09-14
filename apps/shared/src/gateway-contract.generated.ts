@@ -2628,6 +2628,7 @@ export interface SessionListRow {
   started_at?: number
   message_count?: number
   source?: string
+  parent_session_id?: string | null
 }
 export interface SessionMostRecentParams {
   profile?: string | null
@@ -2657,6 +2658,7 @@ export interface SessionActiveItem {
   started_at: number
   status: LiveSessionStatus
   title: string
+  parent_session_id?: string | null
 }
 export type LiveSessionStatus = 'idle' | 'starting' | 'waiting' | 'working' | 'streaming' | 'resuming'
 /** ``session_id`` is the STORED id. */

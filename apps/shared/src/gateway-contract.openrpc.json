@@ -24150,6 +24150,18 @@
           "title": {
             "title": "Title",
             "type": "string"
+          },
+          "parent_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parent Session Id"
           }
         },
         "required": [
@@ -26057,6 +26069,18 @@
             "default": "",
             "title": "Source",
             "type": "string"
+          },
+          "parent_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parent Session Id"
           }
         },
         "required": [
