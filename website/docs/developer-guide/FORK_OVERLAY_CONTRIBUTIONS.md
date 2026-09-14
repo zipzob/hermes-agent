@@ -373,3 +373,15 @@ and iteration-summary safety have different owners and rollback boundaries.
   but the installer correctly requests `.tar.gz` when `xz` is unavailable.
 - **Disposition:** test-fixture repair, reproduced identically on frozen upstream;
   the fixture now advertises both archive formats. All three owning tests pass.
+
+### Profile sidebar test stability
+
+- **Branch / commit:** `contrib/profile-sidebar-test-stability-20260914` —
+  `d4d03c3bd0`.
+- **Symptom:** the canonical loaded runner could spend more than one second
+  scheduling the first worker in an eight-thread coalescing fixture, while the
+  same file and production behavior passed outside whole-suite contention.
+- **Contract:** retain the event-based coalescing assertion and use a five-second
+  startup bound, consistent with the repository's loaded-runner timing policy.
+- **Verification:** the complete owning file passed 10 tests and the exact
+  concurrency case passed 20 fresh-process stress iterations.
