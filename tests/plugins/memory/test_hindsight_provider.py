@@ -6,7 +6,6 @@ turn counting, tags), and schema completeness.
 """
 
 import asyncio
-import importlib.util
 import json
 import importlib
 import importlib.util
@@ -24,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+import plugins.memory.hindsight as hindsight_module
 from hermes_cli.memory_setup import _CANCELLED
 from plugins.memory.hindsight import (
     HindsightMemoryProvider,
@@ -352,6 +352,7 @@ def test_check_local_runtime_requires_sentence_transformers(monkeypatch):
         "find_spec",
         lambda name: None if name == "sentence_transformers" else object(),
     )
+    monkeypatch.setattr(importlib, "import_module", lambda name: SimpleNamespace())
 
     available, reason = _check_local_runtime()
 

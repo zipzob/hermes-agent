@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from agent.auxiliary_client import (
-    _RERAISE_ORIGINAL,
+
     _aux_recovery_ladder,
     _drive_ladder,
     _prepare_aux_request,
@@ -394,12 +394,13 @@ def test_pinned_main_route_recovery_never_reaches_provider_fallback():
             route_info=None,
             pinned_main_route=True,
         )
-        result = _drive_ladder(
-            ladder,
-            lambda step: pytest.fail(f"unexpected recovery step: {step}"),
-        )
+        with pytest.raises(ConnectionError) as raised:
+            _drive_ladder(
+                ladder,
+                lambda step: pytest.fail(f"unexpected recovery step: {step}"),
+            )
 
-    assert result is _RERAISE_ORIGINAL
+    assert raised.value is failure
     nous_rungs.assert_not_called()
     credential_rungs.assert_not_called()
     provider_fallback.assert_not_called()
