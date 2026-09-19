@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import httpx
@@ -30,6 +30,9 @@ class AccountUsageWindow:
     used_percent: Optional[float] = None
     reset_at: Optional[datetime] = None
     detail: Optional[str] = None
+    window_seconds: Optional[int] = None
+    scope: str = "general"
+    limit_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,38 @@ def _parse_dt(value: Any) -> Optional[datetime]:
         return None
 
 
+def _codex_window_period(seconds: Any, fallback: str) -> str:
+    """Name provider windows by duration, never by primary/secondary position."""
+    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or seconds <= 0:
+        return fallback
+    value = int(seconds)
+    if value == 60 * 60:
+        return "Hourly"
+    if value == 24 * 60 * 60:
+        return "Daily"
+    if value == 7 * 24 * 60 * 60:
+        return "Weekly"
+    for unit, unit_seconds in (("week", 7 * 24 * 60 * 60), ("day", 24 * 60 * 60), ("hour", 60 * 60), ("minute", 60)):
+        if value % unit_seconds == 0:
+            return f"{value // unit_seconds}-{unit}"
+    return f"{value}-second"
+
+
+def _virtual_daily_pace(window: AccountUsageWindow) -> Optional[tuple[float, float, float, float]]:
+    """Return daily budget, burn, schedule delta, and percent of daily pace."""
+    if (window.used_percent is None or not window.reset_at or not window.window_seconds
+            or window.window_seconds < 2 * 24 * 60 * 60):
+        return None
+    start = window.reset_at - timedelta(seconds=window.window_seconds)
+    elapsed_seconds = min(window.window_seconds, max(0.0, (_utc_now() - start).total_seconds()))
+    if elapsed_seconds <= 0:
+        return None
+    daily_budget = 100.0 * 24 * 60 * 60 / window.window_seconds
+    average_daily = float(window.used_percent) / (elapsed_seconds / (24 * 60 * 60))
+    expected_used = 100.0 * elapsed_seconds / window.window_seconds
+    return daily_budget, average_daily, float(window.used_percent) - expected_used, average_daily / daily_budget * 100.0
+
+
 def _format_reset(dt: Optional[datetime]) -> str:
     if not dt:
         return "unknown"
@@ -97,8 +132,21 @@ def render_account_usage_lines(snapshot: Optional[AccountUsageSnapshot], *, mark
         if window.used_percent is None:
             base = f"{window.label}: unavailable"
         else:
-            used = float(window.used_percent)
-            base = f"{window.label}: {max(0, round(100 - used))}% remaining ({max(0, round(used))}% used)"
+            remaining = max(0, round(100 - float(window.used_percent)))
+            used = max(0, round(float(window.used_percent)))
+            over = max(0, used - 100)
+            overage = f"; {over}% over limit" if over else ""
+            base = f"{window.label}: {remaining}% remaining ({used}% used{overage})"
+            if float(window.used_percent) >= 100:
+                base += " • LIMIT REACHED"
+        pace = _virtual_daily_pace(window)
+        if pace:
+            daily_budget, average_daily, schedule_delta, daily_pace_percent = pace
+            position = "over" if schedule_delta >= 0 else "under"
+            base += (
+                f" • virtual daily {daily_budget:.1f}% budget vs {average_daily:.1f}% used/day"
+                f" ({daily_pace_percent:.1f}% of daily pace; {abs(schedule_delta):.1f}pp {position})"
+            )
         if window.reset_at:
             base += f" • resets {_format_reset(window.reset_at)}"
         elif window.detail:
@@ -384,6 +432,24 @@ def _plural(count: int) -> str:
     return "s" if count != 1 else ""
 
 
+def _codex_usage_windows(source: dict, *, name: Optional[str] = None, limit_id: Optional[str] = "codex") -> list[AccountUsageWindow]:
+    """Enrich the shared window parser without changing other providers."""
+    windows: list[AccountUsageWindow] = []
+    for key, fallback in (("primary_window", "Session"), ("secondary_window", "Weekly")):
+        raw = source.get(key) or {}
+        if name is not None and not isinstance(raw.get("used_percent"), (int, float)):
+            continue
+        duration = raw.get("limit_window_seconds")
+        period = _codex_window_period(duration, fallback)
+        for window in _usage_windows(source, ((key, fallback),), "used_percent", "reset_at"):
+            windows.append(replace(
+                window, label=f"{name} {period.lower()}" if name is not None else period,
+                window_seconds=int(duration) if isinstance(duration, (int, float)) else None,
+                scope="model_specific" if name is not None else "general", limit_id=limit_id,
+            ))
+    return windows
+
+
 def _fetch_codex_account_usage(
     base_url: Optional[str] = None, api_key: Optional[str] = None,
 ) -> Optional[AccountUsageSnapshot]:
@@ -450,8 +516,12 @@ def _codex_reset_guard(payload: dict, available: int, force: bool) -> Optional[C
     """Refuse a redemption that would be wasted (no banked credits, or no window fully used and not ``force``)."""
     if available <= 0:
         return CodexResetRedeemResult(status="no_credits_banked", message="No banked reset credits on this account — nothing to redeem.")
-    rate_limit = payload.get("rate_limit") or {}
-    used_pcts = [float(u) for u in ((rate_limit.get(k) or {}).get("used_percent") for k in ("primary_window", "secondary_window"))
+    rate_limits = [payload.get("rate_limit") or {}]
+    for item in payload.get("additional_rate_limits") or []:
+        if isinstance(item, dict) and isinstance(item.get("rate_limit"), dict):
+            rate_limits.append(item["rate_limit"])
+    used_pcts = [float(u) for rate_limit in rate_limits
+                 for u in ((rate_limit.get(k) or {}).get("used_percent") for k in ("primary_window", "secondary_window"))
                  if _is_num(u)]
     worst_used: Optional[float] = max(0.0, *used_pcts) if used_pcts else None
     if force or (worst_used is not None and worst_used >= _CODEX_WINDOW_EXHAUSTED_PERCENT):
@@ -460,7 +530,7 @@ def _codex_reset_guard(payload: dict, available: int, force: bool) -> Optional[C
                   else "your current usage could not be confirmed as exhausted")
     return CodexResetRedeemResult(
         status="not_exhausted", available_count=available,
-        message=(f"⚠️ Not redeeming: {usage_note}. A banked reset restores your FULL 5h + weekly limits, so spending it "
+        message=(f"⚠️ Not redeeming: {usage_note}. A banked reset restores your full provider-reported limits, so spending it "
                  f"now would waste most of it. You have {available} reset{_plural(available)} banked. "
                  f"Use `/usage reset --force` to redeem anyway."),
     )

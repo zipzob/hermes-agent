@@ -149,8 +149,8 @@ class TestApprovalInterrupt:
         assert not thread.is_alive(), "command guard did not return after interrupt"
         result = result_holder["result"]
         assert result["approved"] is False
-        assert result["outcome"] == "interrupted"
-        assert "interrupted before user response" in result["message"]
+        assert result["outcome"] == "cancelled"
+        assert "turn interrupted" in result["message"]
         assert "denied by user" not in result["message"]
 
     def test_unrelated_thread_interrupt_does_not_unblock(self, monkeypatch):

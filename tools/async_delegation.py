@@ -489,6 +489,41 @@ def _new_delegation_id() -> str:
     return f"deleg_{uuid.uuid4().hex[:8]}"
 
 
+def _occupies_slot(record: Dict[str, Any]) -> bool:
+    """Terminal notification is not proof that the runner released its slot."""
+    return record.get("status") in _LIVE_STATES or record.get("_runner_settled") is False
+
+
+def status_snapshot(*, origin_ui_session_id: str = "", parent_session_id: str = "") -> Dict[str, Any]:
+    """Return session-scoped dispatch-task lifecycle and settlement state."""
+    with _records_lock:
+        records = [
+            r for r in _records.values()
+            if (
+                not origin_ui_session_id and not parent_session_id
+                or origin_ui_session_id and r.get("origin_ui_session_id") == origin_ui_session_id
+                or parent_session_id and r.get("parent_session_id") == parent_session_id
+            )
+        ]
+        batches = [
+            {
+                "delegation_id": r["delegation_id"],
+                "status": r["status"],
+                "task_count": len(r.get("task_indexes") or r.get("goals") or [r.get("goal")]),
+                "runner_settled": r.get("_runner_settled", True),
+            }
+            for r in records
+        ]
+    return {
+        "active_tasks": sum(b["task_count"] for b in batches if b["status"] in {"running", "finalizing"}),
+        "stalled_tasks": sum(
+            b["task_count"] for b in batches
+            if b["status"] == "stalling" or b["status"] == "stalled" and not b["runner_settled"]
+        ),
+        "batches": batches,
+    }
+
+
 def _prune_completed_locked() -> None:
     """Drop the oldest completed records beyond the cap. Caller holds ``_records_lock``.
     ``stalling``/``finalizing`` are still live: evicting one makes the late runner return hit
@@ -573,9 +608,10 @@ def _dispatch_admitted(
         # a forced finalization runs under the dispatcher's so it settles the same state.db.
         "_context": contextvars.copy_context(),
         # Stale-monitor bookkeeping (see _stale_monitor_loop).
-        "_progress_token": None, "_progress_ts": dispatched_at, "_interrupted_at": None}
+        "_progress_token": None, "_progress_ts": dispatched_at, "_interrupted_at": None,
+        "_runner_settled": False}
     with _records_lock:
-        active_slots = {r.get("slot_key") or r["delegation_id"] for r in _records.values() if r.get("status") in _ACTIVE_STATES}
+        active_slots = {r.get("slot_key") or r["delegation_id"] for r in _records.values() if _occupies_slot(r)}
         if record["slot_key"] not in active_slots and len(active_slots) >= max_async_children:
             return {"status": "rejected", "error": capacity_error}
         _records[delegation_id] = record
@@ -600,7 +636,12 @@ def _dispatch_admitted(
             logger.exception(f"Async delegation{label} %s crashed", delegation_id)
             result = crash_result(f"{type(exc).__name__}: {exc}", round(time.time() - dispatched_at, 2))
         finally:
-            _finalize(delegation_id, result, status)
+            try:
+                _finalize(delegation_id, result, status)
+            finally:
+                with _records_lock:
+                    record["_runner_settled"] = True
+                    _prune_completed_locked()
 
     from hermes_cli.backend_retirement import retirement
 

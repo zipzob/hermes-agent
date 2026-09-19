@@ -1233,4 +1233,3 @@ def test_mixed_route_display_prefers_runtime_model_and_lists_recovery_route():
     assert text is not None
     assert "Model: mixed (per-task models below)" in text
     assert "Route: task 2 model=gpt-6-astra" in text
-
