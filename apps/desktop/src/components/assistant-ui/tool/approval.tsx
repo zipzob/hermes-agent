@@ -147,7 +147,9 @@ function ApprovalActivity({ floating, visible }: { floating: boolean; visible: b
               }
               open={false}
             >
-              <span className={cn(SCAFFOLD_LABEL_CLASS, 'truncate')}>{summary || t.assistant.approval.jumpToApproval}</span>
+              <span className={cn(SCAFFOLD_LABEL_CLASS, 'truncate')}>
+                {summary || t.assistant.approval.jumpToApproval}
+              </span>
             </ScaffoldRow>
           </div>
         </motion.div>
@@ -274,7 +276,6 @@ const ApprovalCard: FC<ApprovalCardProps> = ({ request, total, position, stack }
   const hasMoreOptions = allowSession || allowAlways
   const hasCommand = request.command.trim().length > 0
 
-
   const respond = useCallback(
     async (choice: ApprovalChoice) => {
       const pending = sessionApprovalRequests(request.sessionId).get()
@@ -304,7 +305,6 @@ const ApprovalCard: FC<ApprovalCardProps> = ({ request, total, position, stack }
     },
     [copy.gatewayDisconnected, copy.sendFailed, gateway, request, restoreFocusOrigin, stack]
   )
-
 
   return (
     <article

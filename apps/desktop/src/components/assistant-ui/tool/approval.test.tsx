@@ -227,7 +227,10 @@ describe('PendingApprovalStack', () => {
 
     await waitFor(() => {
       expect(request).toHaveBeenCalledWith('approval.respond', {
-        all: false, choice: 'deny', request_id: 'apr-1', session_id: 'sess-1'
+        all: false,
+        choice: 'deny',
+        request_id: 'apr-1',
+        session_id: 'sess-1'
       })
     })
   })
@@ -248,6 +251,7 @@ describe('PendingApprovalStack', () => {
       </>
     )
 
+    expect(handleApprovalKey(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))).toBe(false)
     fireEvent.keyDown(screen.getByRole('textbox', { name: 'Criterion' }), { key: 'Escape' })
 
     await waitFor(() => expect(onDialogOpenChange).toHaveBeenCalledWith(false))
@@ -261,7 +265,7 @@ describe('PendingApprovalStack', () => {
     setRequest()
     render(
       <>
-        <PendingToolApproval part={part('terminal')} />
+        <PendingApprovalStack />
         <Sheet onOpenChange={onSheetOpenChange} open>
           <SheetContent>
             <SheetTitle>Foreground sheet</SheetTitle>
@@ -270,6 +274,7 @@ describe('PendingApprovalStack', () => {
       </>
     )
 
+    expect(handleApprovalKey(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))).toBe(false)
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
 
     await waitFor(() => expect(onSheetOpenChange).toHaveBeenCalledWith(false))
