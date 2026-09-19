@@ -141,6 +141,45 @@ class TestUnguardedPickStillDefers:
         assert pending["display_provider"] == "anthropic"
 
 
+def test_busy_large_context_switch_confirms_before_queueing(running_session, monkeypatch):
+    import hermes_cli.model_selection_guards as guards
+
+    monkeypatch.setattr(guards, "_context_cache_threshold", lambda: 100_000)
+    running_session["agent"] = types.SimpleNamespace(
+        model="previous-model",
+        context_compressor=types.SimpleNamespace(last_prompt_tokens=250_000),
+    )
+    result = _config_set_model(UNGUARDED_MODEL)["result"]
+
+    assert result["confirm_required"] is True
+    assert "LARGE CONTEXT MODEL SWITCH" in result["confirm_message"]
+    assert result["deferred"] is False
+    assert "pending_model_switch" not in running_session
+
+    confirmed = _config_set_model(UNGUARDED_MODEL, confirm_expensive_model=True)["result"]
+    assert confirmed["deferred"] is True
+    assert running_session["pending_model_switch"]["confirm_expensive_model"] is True
+
+
+@pytest.mark.parametrize(
+    ("current_model", "tokens"),
+    [(UNGUARDED_MODEL, 250_000), ("previous-model", 99_999)],
+)
+def test_busy_context_guard_keeps_safe_picks_deferred(
+    running_session, monkeypatch, current_model, tokens,
+):
+    import hermes_cli.model_selection_guards as guards
+
+    monkeypatch.setattr(guards, "_context_cache_threshold", lambda: 100_000)
+    running_session["agent"] = types.SimpleNamespace(
+        model=current_model, context_compressor=types.SimpleNamespace(last_prompt_tokens=tokens),
+    )
+    result = _config_set_model(UNGUARDED_MODEL)["result"]
+
+    assert result["confirm_required"] is False
+    assert result["deferred"] is True
+
+
 class TestGuardFailureIsNotFatal:
     def test_a_raising_guard_falls_back_to_deferring(self, running_session, monkeypatch):
         """A broken guard must never cost the user their model pick.
