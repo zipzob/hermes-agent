@@ -12,22 +12,8 @@ import {
   liveSessionInflightMessages,
   scheduleResumeScrollToBottom,
   signalFreshSessionBoundary,
-  statusFromCreatedSession,
-  storedSessionIdFromCreate,
   writeActiveSessionFile
 } from '../app/useSessionLifecycle.js'
-
-describe('lazy session startup', () => {
-  it('makes the composer ready before background agent hydration completes', () => {
-    expect(statusFromCreatedSession()).toBe('ready')
-  })
-
-  it('uses the durable session key for resume instructions', () => {
-    expect(storedSessionIdFromCreate({ session_id: 'live1234', stored_session_id: '20260803_191953_abcd12' })).toBe(
-      '20260803_191953_abcd12'
-    )
-  })
-})
 
 describe('fresh session boundary', () => {
   it('signals only when a live session is replaced by a different session', () => {
@@ -91,11 +77,13 @@ describe('live session activation in-flight state', () => {
       user: 'process completed'
     }
 
-    expect(liveSessionInflightMessages(inflight)).toEqual([{
-      kind: 'event',
-      role: 'system',
-      text: 'Finished syncing the workspace'
-    }])
+    expect(liveSessionInflightMessages(inflight)).toEqual([
+      {
+        kind: 'event',
+        role: 'system',
+        text: 'Finished syncing the workspace'
+      }
+    ])
   })
 
   it('ignores empty in-flight payloads', () => {

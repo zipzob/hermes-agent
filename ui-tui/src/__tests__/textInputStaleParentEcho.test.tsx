@@ -80,6 +80,10 @@ function Harness({
 describe('stale parent own-echo during deferred key-burst flush', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'Date'] })
+    for (const key of ['WSL_DISTRO_NAME', 'WSL_INTEROP', 'ConEmuPID', 'ConEmuANSI', 'ConEmuHWND']) {
+      vi.stubEnv(key, '')
+    }
+    vi.stubEnv('HERMES_TUI_FAST_ECHO', '1')
     // useStdout() resolves to process.stdout (not the FakeTty passed to
     // renderSync), so the fast-echo bypass has to be armed on the real stream.
     ;(process.stdout as { isTTY?: boolean }).isTTY = true

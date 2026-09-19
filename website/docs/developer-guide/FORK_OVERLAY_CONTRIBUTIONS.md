@@ -430,3 +430,39 @@ and iteration-summary safety have different owners and rollback boundaries.
   preserves no-approval behavior. Eight fresh-process combined repetitions
   passed; the two owning files completed in 8.8 seconds under the canonical
   runner.
+
+## September 19 upstream refresh and generic runtime repairs
+
+- Frozen upstream: `633dda6d7fdcac7e8340471c9f5ed08cdccbd70c`.
+- Replay input: `2a6410296b`, based on `14efb46089`; all 79 commits retained.
+- Replayed tip before integration repairs: `75f67887994f161fee75c89e8c29e2a05d811ef5`.
+- Existing contribution refs and the installed integration remain separate from
+  this candidate. Replay, verification, local installation, publication, and a
+  fresh-process restart are distinct acceptance boundaries.
+
+Semantic reconciliation preserves upstream credential rotation/cache identity,
+profile context, cancellation cause, deadline/answer races, backend retirement,
+and canonical generated gateway contracts. Fork usage-window metadata and physical
+delegation-runner settlement must accompany their callers; definition/call-site
+audits and the owning tests caught incomplete initial transplants. Desktop
+topmost Escape ownership now uses the upstream central approval key dispatcher,
+not a restored per-card window listener. Lazy-session tests exercise the current
+hook rather than resurrecting removed test-only helpers.
+
+### Model-switch confirmation
+
+Busy model picks carry the live context into pre-queue confirmation. Same-named
+models still require confirmation when known provider or endpoint identity changes.
+Existing RPC profile scoping is preserved and covered by a two-profile regression.
+These are generic Hermes behaviors, with no application-specific integration.
+
+### Background prompt lifetime
+
+Foreground completion previously cleared an already-acknowledged background
+approval while its server request remained open. Soft overlay reset now preserves
+unanswered server-owned approval, clarify, sudo, secret, and vault prompts. Actual
+response or request cancellation retires them; a full session reset remains full.
+A real Ink-renderer regression covers visible approval delivery, parent idle,
+replay, exact-once response, and cleanup, alongside the shared prompt cases.
+This candidate-level proof does not substitute for installed, restarted terminal
+acceptance on the user's host.
