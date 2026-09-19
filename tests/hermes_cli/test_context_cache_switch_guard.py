@@ -42,6 +42,25 @@ class TestContextCacheGuard:
         ctx = SelectionContext(context_tokens=DEFAULT_CONTEXT_CACHE_SWITCH_THRESHOLD * 2, current_model="same/model")
         assert _guard("same/model", ctx) is None
 
+    def test_same_model_with_a_different_provider_confirms(self):
+        ctx = SelectionContext(
+            context_tokens=DEFAULT_CONTEXT_CACHE_SWITCH_THRESHOLD * 2,
+            current_model="same/model",
+            current_provider="openai",
+        )
+        assert _guard("same/model", ctx) is not None
+
+    def test_same_model_with_a_different_endpoint_confirms(self):
+        ctx = SelectionContext(
+            context_tokens=DEFAULT_CONTEXT_CACHE_SWITCH_THRESHOLD * 2,
+            current_model="same/model",
+            current_provider="openrouter",
+            current_base_url="https://first.example/v1",
+        )
+        assert _context_cache_guard(
+            "same/model", "openrouter", "https://second.example/v1", None, None, ctx,
+        ) is not None
+
     def test_config_threshold_override_and_zero_disables(self):
         ctx = SelectionContext(context_tokens=20_000, current_model="old/model")
         assert _guard("new/model", ctx, lambda: {"model": {"switch_context_confirm_tokens": 10_000}}) is not None
@@ -65,6 +84,8 @@ class TestSelectionContextForAgent:
         class _Measured:
             context_compressor = _CC()
             model = "current/model"
+            provider = "openrouter"
+            base_url = "https://openrouter.example/v1"
 
         class _Fallback:
             context_compressor = None
@@ -72,7 +93,9 @@ class TestSelectionContextForAgent:
             model = "current/model"
 
         ctx = selection_context_for_agent(_Measured())
+        assert ctx is not None
         assert (ctx.context_tokens, ctx.current_model) == (123_456, "current/model")
+        assert (ctx.current_provider, ctx.current_base_url) == ("openrouter", "https://openrouter.example/v1")
         assert selection_context_for_agent(_Fallback()).context_tokens == 42_000
 
     def test_no_agent_or_empty_session_returns_none(self):

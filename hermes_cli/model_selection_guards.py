@@ -32,6 +32,8 @@ class SelectionContext:
 
     context_tokens: Optional[int] = None
     current_model: Optional[str] = None
+    current_provider: Optional[str] = None
+    current_base_url: Optional[str] = None
 
 
 def selection_context_for_agent(agent: object) -> Optional[SelectionContext]:
@@ -49,7 +51,12 @@ def selection_context_for_agent(agent: object) -> Optional[SelectionContext]:
         tokens = 0
     if tokens <= 0:
         return None
-    return SelectionContext(context_tokens=tokens, current_model=getattr(agent, "model", "") or None)
+    return SelectionContext(
+        context_tokens=tokens,
+        current_model=getattr(agent, "model", "") or None,
+        current_provider=getattr(agent, "provider", "") or None,
+        current_base_url=getattr(agent, "base_url", "") or None,
+    )
 
 
 def _wrap(kind: str, title: str, warning, model_name: str, provider: Optional[str]):
@@ -100,17 +107,33 @@ def _context_cache_threshold() -> int:
     return DEFAULT_CONTEXT_CACHE_SWITCH_THRESHOLD
 
 
+def _context_cache_identity_changed(ctx: SelectionContext, provider: Optional[str], base_url: Optional[str]) -> bool:
+    """Whether known runtime identity facts prove a same-named model changed route.
+
+    Missing fields preserve the old model-only behavior: a caller that cannot identify both
+    sides must not introduce a new warning merely because it learned one side's provider.
+    """
+    current_provider = (ctx.current_provider or "").strip()
+    target_provider = (provider or "").strip()
+    if current_provider and target_provider and current_provider != target_provider:
+        return True
+    current_base_url = (ctx.current_base_url or "").strip().rstrip("/")
+    target_base_url = (base_url or "").strip().rstrip("/")
+    return bool(current_base_url and target_base_url and current_base_url != target_base_url)
+
+
 def _context_cache_guard(
     model_name: str, provider: Optional[str], base_url: Optional[str], api_key: Optional[str],
     model_info: Optional[ModelInfo], ctx: Optional[SelectionContext] = None) -> Optional[SelectionWarning]:
     """Confirm a mid-session switch that abandons a large cached context. Fires only when the surface
-    supplied live facts showing the active context at/above the threshold; smaller sessions, sessions
-    with no measured size and same-model re-selects (cache stays warm) are silent."""
+    supplied live facts showing the active context at/above the threshold; smaller sessions and sessions
+    with no measured size stay silent. Same-model reselects stay silent unless known provider or endpoint
+    identity proves the route changed."""
     if ctx is None or not ctx.context_tokens:
         return None
     target = (model_name or "").strip()
     current = (ctx.current_model or "").strip()
-    if not target or (current and target == current):
+    if not target or (current and target == current and not _context_cache_identity_changed(ctx, provider, base_url)):
         return None
     threshold = _context_cache_threshold()
     tokens = int(ctx.context_tokens)

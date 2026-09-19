@@ -62,3 +62,21 @@ def test_unbound_config_set_still_writes_the_launch_profile(homes):
     assert resp["result"]["value"] == "steer"
     assert _read(launch)["display"]["busy_input_mode"] == "steer"
     assert _read(worker)["display"]["busy_input_mode"] == "queue"
+
+
+def test_config_set_rpc_returns_to_the_first_profile_after_a_second_profile(homes):
+    """A→B→A RPC calls must bind the session profile each time, not retain B's scope."""
+    launch, worker = homes
+    sessions = {
+        "launch": {"agent": None, "profile_home": None, "session_key": "launch-session"},
+        "worker": {"agent": None, "profile_home": str(worker), "session_key": "worker-session"},
+    }
+    with patch.dict(server._sessions, sessions, clear=False):
+        for sid, value in (("launch", "steer"), ("worker", "steer"), ("launch", "queue")):
+            response = server._methods["config.set"](
+                "rid", {"session_id": sid, "key": "busy", "value": value},
+            )
+            assert response["result"]["value"] == value
+
+    assert _read(launch)["display"]["busy_input_mode"] == "queue"
+    assert _read(worker)["display"]["busy_input_mode"] == "steer"
