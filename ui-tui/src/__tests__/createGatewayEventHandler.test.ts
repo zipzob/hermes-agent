@@ -140,7 +140,7 @@ describe('createGatewayEventHandler', () => {
     expect(ctx.submission.submitRef.current).not.toHaveBeenCalled()
   })
 
-  it('heals missed completion and blocking prompts only from the focused authoritative idle snapshot', () => {
+  it('heals missed foreground completion without discarding an unanswered server prompt', () => {
     patchUiState({ sid: 'focused' })
     const onEvent = createGatewayEventHandler(buildCtx([]))
     onEvent({ session_id: 'focused', payload: {}, type: 'message.start' } as any)
@@ -157,8 +157,14 @@ describe('createGatewayEventHandler', () => {
     onEvent({ session_id: 'focused', payload: { ...snapshot, running: false }, type: 'session.info' } as any)
     expect(getUiState().busy).toBe(false)
     expect(getUiState().status).toBe('ready')
-    expect(getOverlayState().approval).toBeNull()
+    expect(getOverlayState().approval).toEqual(busyOverlay)
     expect(getTurnState().tools).toEqual([])
+    onEvent({
+      session_id: 'focused',
+      payload: { id: 'srq-approval', method: 'approval', reason: 'resolved' },
+      type: 'request.cancel'
+    } as any)
+    expect(getOverlayState().approval).toBeNull()
   })
 
   it('keeps the durable session id when a session.info payload omits it', () => {
@@ -1799,7 +1805,9 @@ describe('createGatewayEventHandler', () => {
   it('renders a failed turn from error_surface instead of the raw provider JSON', () => {
     const appended: Msg[] = []
     const onEvent = createGatewayEventHandler(buildCtx(appended))
-    const raw = 'Error code: 401 - {"error": {"message": "Incorrect API key provided", "type": "invalid_request_error"}}'
+
+    const raw =
+      'Error code: 401 - {"error": {"message": "Incorrect API key provided", "type": "invalid_request_error"}}'
 
     onEvent({
       payload: {
@@ -1870,7 +1878,10 @@ describe('createGatewayEventHandler', () => {
     const ctx = buildCtx([])
     const onEvent = createGatewayEventHandler(ctx)
 
-    onEvent({ payload: { message: 'invalid params for prompt.submit: turn_author: Extra inputs are not permitted' }, type: 'error' } as any)
+    onEvent({
+      payload: { message: 'invalid params for prompt.submit: turn_author: Extra inputs are not permitted' },
+      type: 'error'
+    } as any)
 
     const line = String((ctx.system.sys as any).mock.calls.at(-1)?.[0])
     expect(line).toContain('/update')

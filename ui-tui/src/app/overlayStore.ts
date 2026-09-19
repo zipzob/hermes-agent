@@ -1,6 +1,7 @@
 import { atom, computed } from 'nanostores'
 
 import type { OverlayState } from './interfaces.js'
+import { hasOpenServerRequest } from './serverRequestStore.js'
 import { $uiState } from './uiStore.js'
 
 const buildOverlayState = (): OverlayState => ({
@@ -170,9 +171,13 @@ export const patchOverlayState = (next: Partial<OverlayState> | ((state: Overlay
 /** Full reset — used by session/turn teardown and tests. */
 export const resetOverlayState = () => $overlayState.set(buildOverlayState())
 
+const pendingPrompt = <T extends { requestId?: string }>(prompt: T | null): T | null =>
+  prompt?.requestId && hasOpenServerRequest(prompt.requestId) ? prompt : null
+
 /**
- * Soft reset: drop FLOW-scoped overlays (approval / clarify / confirm / sudo
- * / secret / pager) but PRESERVE user-toggled ones — agents dashboard, model
+ * Soft reset: preserve unanswered server-owned prompts, which may belong to a
+ * background worker outliving this foreground turn. Drop settled flow overlays
+ * but PRESERVE user-toggled ones — agents dashboard, model
  * picker, skills hub, sessions overlay.  Those are opened deliberately and
  * shouldn't vanish when a turn ends.  Called from turnController.idle() on
  * every turn completion / interrupt; the old "reset everything" behaviour
@@ -181,6 +186,11 @@ export const resetOverlayState = () => $overlayState.set(buildOverlayState())
 export const resetFlowOverlays = () =>
   $overlayState.set({
     ...buildOverlayState(),
+    approval: pendingPrompt($overlayState.get().approval),
+    clarify: pendingPrompt($overlayState.get().clarify),
+    secret: pendingPrompt($overlayState.get().secret),
+    sudo: pendingPrompt($overlayState.get().sudo),
+    vaultUnlock: pendingPrompt($overlayState.get().vaultUnlock),
     agents: $overlayState.get().agents,
     agentsInitialHistoryIndex: $overlayState.get().agentsInitialHistoryIndex,
     ambient: $overlayState.get().ambient,
