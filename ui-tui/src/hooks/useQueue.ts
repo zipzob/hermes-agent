@@ -32,7 +32,9 @@ export function takeQueueItem(
 
   return {
     display: editedDisplay,
-    text: editedText?.includes(item.display) ? editedText.replace(item.display, item.text) : (editedText ?? editedDisplay)
+    text: editedText?.includes(item.display)
+      ? editedText.replace(item.display, item.text)
+      : (editedText ?? editedDisplay)
   }
 }
 

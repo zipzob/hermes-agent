@@ -87,9 +87,7 @@ export function PromptZone({
     const requestId = overlay.approval.requestId
 
     const onExpired = () =>
-      patchOverlayState(prev =>
-        prev.approval?.requestId === requestId ? { ...prev, approval: null } : prev
-      )
+      patchOverlayState(prev => (prev.approval?.requestId === requestId ? { ...prev, approval: null } : prev))
 
     return (
       <PromptCell cols={cols} id="approval">

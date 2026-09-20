@@ -10,7 +10,10 @@ import SourceText from '../../packages/hermes-ink/src/ink/components/Text.js'
 import type { DOMElement } from '../../packages/hermes-ink/src/ink/dom.js'
 import Output from '../../packages/hermes-ink/src/ink/output.js'
 import { scrollFastPathStats as sourceScrollFastPathStats } from '../../packages/hermes-ink/src/ink/render-node-to-output.js'
-import { invalidatePrevFrame as invalidateSourcePrevFrame, renderSync as renderSourceSync } from '../../packages/hermes-ink/src/ink/root.js'
+import {
+  invalidatePrevFrame as invalidateSourcePrevFrame,
+  renderSync as renderSourceSync
+} from '../../packages/hermes-ink/src/ink/root.js'
 import { useVirtualHistory } from '../hooks/useVirtualHistory.js'
 
 interface Item {

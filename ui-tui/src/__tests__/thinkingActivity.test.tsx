@@ -21,15 +21,12 @@ const renderThinking = (reasoning: string, active = true) => {
     output += chunk.toString()
   })
 
-  const instance = renderSync(
-    <Thinking active={active} reasoning={reasoning} streaming={false} t={DEFAULT_THEME} />,
-    {
-      patchConsole: false,
-      stderr: stderr as NodeJS.WriteStream,
-      stdin: stdin as NodeJS.ReadStream,
-      stdout: stdout as NodeJS.WriteStream
-    }
-  )
+  const instance = renderSync(<Thinking active={active} reasoning={reasoning} streaming={false} t={DEFAULT_THEME} />, {
+    patchConsole: false,
+    stderr: stderr as NodeJS.WriteStream,
+    stdin: stdin as NodeJS.ReadStream,
+    stdout: stdout as NodeJS.WriteStream
+  })
 
   return { instance, output: () => stripAnsi(output) }
 }
@@ -37,7 +34,10 @@ const renderThinking = (reasoning: string, active = true) => {
 describe('Thinking pending activity', () => {
   it('renders a one-cell activity glyph before reasoning text arrives', () => {
     const { instance, output } = renderThinking('')
-    const line = output().split('\n').find(candidate => candidate.includes('└─')) ?? ''
+    const line =
+      output()
+        .split('\n')
+        .find(candidate => candidate.includes('└─')) ?? ''
 
     expect(line).toMatch(/└─ \S/)
     expect([...line.slice(line.indexOf('└─ ') + 3)].length).toBe(1)
@@ -58,8 +58,16 @@ describe('Thinking pending activity', () => {
   it('uses the same tree lead before and after reasoning arrives', () => {
     const pending = renderThinking('')
     const reasoning = renderThinking('first reasoning token')
-    const pendingLine = pending.output().split('\n').find(candidate => candidate.includes('└─')) ?? ''
-    const reasoningLine = reasoning.output().split('\n').find(candidate => candidate.includes('└─')) ?? ''
+    const pendingLine =
+      pending
+        .output()
+        .split('\n')
+        .find(candidate => candidate.includes('└─')) ?? ''
+    const reasoningLine =
+      reasoning
+        .output()
+        .split('\n')
+        .find(candidate => candidate.includes('└─')) ?? ''
 
     expect(pendingLine.slice(0, pendingLine.indexOf('└─ ') + 3)).toBe(
       reasoningLine.slice(0, reasoningLine.indexOf('└─ ') + 3)

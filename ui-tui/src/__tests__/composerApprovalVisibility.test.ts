@@ -32,7 +32,17 @@ describe('composer draft visibility while another input layer owns keys', () => 
   })
 
   it('hides the draft behind full/floating navigation surfaces', () => {
-    for (const key of ['agents', 'journey', 'modelPicker', 'pager', 'petPicker', 'pluginsHub', 'sessions', 'skillsHub', 'widget']) {
+    for (const key of [
+      'agents',
+      'journey',
+      'modelPicker',
+      'pager',
+      'petPicker',
+      'pluginsHub',
+      'sessions',
+      'skillsHub',
+      'widget'
+    ]) {
       expect(composerDraftVisible({ ...emptyOverlay, [key]: {} } as never)).toBe(false)
     }
   })

@@ -49,7 +49,11 @@ describe('ToolTrail narrow live-tool layout', () => {
     const trail = renderTrailAt(13)
 
     try {
-      const toolLine = trail.frame().split('\n').find(line => line.includes('●')) ?? ''
+      const toolLine =
+        trail
+          .frame()
+          .split('\n')
+          .find(line => line.includes('●')) ?? ''
 
       // Thirteen columns cannot fit the complete label, but it must reserve
       // room for the label rather than emitting an indicator-only row.

@@ -987,7 +987,9 @@ describe('createSlashHandler', () => {
               return Promise.reject(new JsonRpcGatewayError('slash worker timed out', { code: 5030 }))
             }
 
-            return Promise.reject(new JsonRpcGatewayError('not a quick/plugin/bundle/skill command: insights', { code: 4018 }))
+            return Promise.reject(
+              new JsonRpcGatewayError('not a quick/plugin/bundle/skill command: insights', { code: 4018 })
+            )
           })
         },
         rpc: vi.fn(() => Promise.resolve({}))
