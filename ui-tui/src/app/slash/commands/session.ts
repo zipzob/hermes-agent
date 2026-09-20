@@ -332,6 +332,7 @@ export const sessionCommands: SlashCommand[] = [
             )
           })
         )
+
         return
       }
 

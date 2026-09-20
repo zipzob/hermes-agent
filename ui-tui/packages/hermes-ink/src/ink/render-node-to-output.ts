@@ -1127,6 +1127,7 @@ function renderNodeToOutput(
           // the wrong rows. Fall back to the regular diff in that case.
           const fastPathCoversFullWidth =
             fastPathBounds !== null && fastPathBounds.x === 0 && fastPathBounds.width === outputWidth
+
           const safeForFastPath =
             heightSafeForFastPath && (!hint || (prevScreen !== undefined && fastPathCoversFullWidth))
 

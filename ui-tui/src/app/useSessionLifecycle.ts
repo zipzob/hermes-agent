@@ -437,8 +437,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       newSession,
       resetSession,
       resetVisibleHistory,
-      resumeById,
-      trimTail
+      resumeById
     ]
   )
 }

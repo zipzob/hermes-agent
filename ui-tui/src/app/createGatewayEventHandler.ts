@@ -899,6 +899,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         if (getUiState().compacting) {
           patchUiState({ compacting: false })
         }
+
         resetAgentsNudgeTurnState()
         turnController.startMessage()
 
@@ -1251,6 +1252,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
           if (getUiState().compacting) {
             patchUiState({ compacting: false })
           }
+
           turnController.recordReasoningDelta(ev.payload.text, Boolean(ev.payload.verbose))
         }
 
@@ -1565,6 +1567,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         if (ev.payload?.text && getUiState().compacting) {
           patchUiState({ compacting: false })
         }
+
         turnController.recordMessageDelta(ev.payload ?? ({} as StreamDeltaPayload))
 
         return

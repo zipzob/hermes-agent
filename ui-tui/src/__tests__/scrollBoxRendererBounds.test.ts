@@ -551,7 +551,9 @@ describe('ScrollBox renderer bounds', () => {
         scrollBox: null
       } as FastPathRepairExpose
     }
+
     const streams = makeStreams()
+
     const instance = renderSourceSync(
       React.createElement(FastPathRepairHarness, { expose, includeOverlay: false, scrollWidth: 30, tick: 0 }),
       {
@@ -589,7 +591,9 @@ describe('ScrollBox renderer bounds', () => {
         scrollBox: null
       } as FastPathRepairExpose
     }
+
     const streams = makeStreams()
+
     const instance = renderSourceSync(
       React.createElement(FastPathRepairHarness, { expose, includeOverlay: false, tick: 0 }),
       {

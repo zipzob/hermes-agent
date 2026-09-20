@@ -977,6 +977,7 @@ describe('createSlashHandler', () => {
 
   it('surfaces the slash worker failure itself instead of the command.dispatch refusal', async () => {
     patchUiState({ sid: 'sid-abc' })
+
     const ctx = buildCtx({
       gateway: {
         gw: {
@@ -1005,6 +1006,7 @@ describe('createSlashHandler', () => {
 
   it('still falls back to command.dispatch on a 4018 "not mine" refusal', async () => {
     patchUiState({ sid: 'sid-abc' })
+
     const ctx = buildCtx({
       gateway: {
         gw: {
