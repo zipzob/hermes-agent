@@ -42,6 +42,26 @@ class DelegationRoute:
     reasons: tuple[str, ...]
 
 
+def delegation_control_plane_diagnostics(
+    route: DelegationRoute, *, configured_limit: int, occupied_slots: int, child_timeout_seconds: float | None,
+    model_authorization_required: bool,
+) -> dict[str, dict[str, Any]]:
+    """Keep capacity, authorization, context, and provider observations separate."""
+    return {
+        "max_concurrent_children": {"configured_limit": configured_limit},
+        "occupied_slots": {"current": occupied_slots},
+        "child_timeout": {"seconds": child_timeout_seconds},
+        "model_authorization": {"required": model_authorization_required},
+        "context_tier": {
+            "selected": route.context_tier,
+            "estimated_context_tokens": route.estimated_context_tokens,
+        },
+        # Governor/routing state is advisory. Only a real provider response can
+        # establish an exhausted or rate-limited provider quota.
+        "provider_quota": {"status": "not_observed"},
+    }
+
+
 def _state(value: Any) -> str:
     normalized = str(value or "UNKNOWN").upper()
     return normalized if normalized in _STATES else "UNKNOWN"

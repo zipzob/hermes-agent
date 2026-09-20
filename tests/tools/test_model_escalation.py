@@ -72,6 +72,31 @@ def test_disallowed_provider_and_model_are_rejected():
         assert "error" in result
 
 
+def test_openai_codex_qualified_target_normalizes_but_foreign_provider_is_rejected():
+    approved = json.loads(request_model_escalation(
+        target_model="openai-codex/gpt-5.6-sol", reason="final judgment",
+        scope="Review one bounded change", provider="openai-codex", session_key="session-a",
+        callback=lambda _q, _choices: "Approve gpt-5.6-sol",
+    ))
+
+    assert approved["target_model"] == "gpt-5.6-sol"
+    assert set(approved["delegation_diagnostics"]) == {
+        "max_concurrent_children", "occupied_slots", "child_timeout", "model_authorization", "context_tier", "provider_quota",
+    }
+    assert approved["delegation_diagnostics"]["provider_quota"]["status"] == "not_observed"
+    assert consume_model_escalation_authorization(
+        approved["model_authorization"], session_key="session-a", provider="openai-codex",
+        target_model="openai-codex/gpt-5.6-sol", scope="Review one bounded change",
+    ) is None
+
+    rejected = json.loads(request_model_escalation(
+        target_model="other-provider/gpt-5.6-sol", reason="final judgment",
+        scope="Review another bounded change", provider="openai-codex", session_key="session-b",
+        callback=lambda _q, _choices: "Approve gpt-5.6-sol",
+    ))
+    assert "provider mismatch" in rejected["error"]
+
+
 def test_900k_proposal_requires_a_large_isolated_context_estimate():
     rejected = json.loads(request_model_escalation(
         target_model="gpt-5.6-sol-900k", reason="corpus review", scope="Review the complete bounded corpus",

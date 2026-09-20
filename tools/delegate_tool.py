@@ -475,7 +475,10 @@ def _route_task_credentials(
     if str(policy.get("mode") or "off").casefold() != "automatic_safe" or explicit_pin:
         return direct_routes()
 
-    from tools.delegation_resource_routing import load_quota_snapshot, route_delegation_tasks
+    from tools.async_delegation import active_count
+    from tools.delegation_resource_routing import (
+        delegation_control_plane_diagnostics, load_quota_snapshot, route_delegation_tasks,
+    )
 
     routes = route_delegation_tasks(
         task_list,
@@ -497,6 +500,13 @@ def _route_task_credentials(
             "context_tier": route.context_tier,
             "estimated_context_tokens": route.estimated_context_tokens,
             "reasons": ["explicit_task_model_pin"] if pin else list(route.reasons),
+            "diagnostics": delegation_control_plane_diagnostics(
+                route,
+                configured_limit=_get_max_concurrent_children(),
+                occupied_slots=active_count(),
+                child_timeout_seconds=_get_child_timeout(),
+                model_authorization_required=bool(pin),
+            ),
         })
     return routed_creds, route_metadata
 
@@ -590,6 +600,9 @@ def delegate_task(
         )
         if authorization_error:
             return tool_error(f"Task {index} model pin rejected: {authorization_error}")
+        # Authorization accepts only the inherited provider's qualified alias;
+        # persist its canonical bare model so child construction cannot drift.
+        task["model"] = model.removeprefix("openai-codex/")
 
     task_creds, task_routes = _route_task_credentials(task_list, creds, routing_cfg, parent_agent)
     task_models = [str(task_creds_for_task.get("model") or "") or None for task_creds_for_task in task_creds]

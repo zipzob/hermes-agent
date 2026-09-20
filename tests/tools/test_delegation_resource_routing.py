@@ -208,6 +208,27 @@ def test_delegate_integration_builds_per_task_credentials_without_leaking_secret
     assert metadata[1]["context_tier"] == "large"
 
 
+def test_route_metadata_keeps_delegation_control_planes_distinct(monkeypatch):
+    monkeypatch.setattr("tools.async_delegation.active_count", lambda: 1)
+    monkeypatch.setattr("tools.delegate_tool._get_child_timeout", lambda: 600)
+    monkeypatch.setattr("tools.delegate_tool._get_max_concurrent_children", lambda: 2)
+    routed, metadata = _route_task_credentials(
+        [{"goal": "final judgment", "workload": "judgment", "context_window": "large"}],
+        {"provider": "openai-codex", "model": "gpt-5.6-terra"},
+        {"max_concurrent_children": 2, "resource_routing": policy()},
+        object(),
+    )
+
+    assert routed[0]["model"] == "gpt-5.6-terra-900k"
+    diagnostics = metadata[0]["diagnostics"]
+    assert diagnostics["max_concurrent_children"] == {"configured_limit": 2}
+    assert diagnostics["occupied_slots"] == {"current": 1}
+    assert diagnostics["child_timeout"] == {"seconds": 600}
+    assert diagnostics["model_authorization"]["required"] is False
+    assert diagnostics["context_tier"]["selected"] == "large"
+    assert diagnostics["provider_quota"]["status"] == "not_observed"
+
+
 def test_delegate_schema_advertises_task_axes_and_an_explicit_model_pin():
     task_props = DELEGATE_TASK_SCHEMA["parameters"]["properties"]["tasks"]["items"]["properties"]
     assert task_props["workload"]["enum"] == [

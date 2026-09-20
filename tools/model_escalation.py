@@ -99,6 +99,44 @@ def _clean_model(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def _normalized_openai_codex_model(value: Any, provider: Any) -> tuple[str, str | None]:
+    """Accept only the inherited provider's qualified aliases at this boundary."""
+    model = _clean_model(value)
+    if "/" not in model:
+        return model, None
+    qualified_provider, separator, bare_model = model.partition("/")
+    if not separator or not qualified_provider or not bare_model:
+        return model, None
+    inherited_provider = str(provider or "").strip()
+    if qualified_provider != inherited_provider:
+        return "", (
+            f"target_model provider mismatch: '{qualified_provider}' does not match inherited provider "
+            f"'{inherited_provider}'."
+        )
+    if qualified_provider != "openai-codex":
+        return "", "Model escalation is available only for inherited openai-codex child routes."
+    return bare_model, None
+
+
+def _control_plane_diagnostics(*, target: str, policy: dict[str, int | bool], estimated_context_tokens: Any) -> dict[str, Any]:
+    """Report independent controls without implying quota failure from routing state."""
+    from tools.async_delegation import active_count
+    from tools.delegate_tool_config import _get_child_timeout, _get_max_concurrent_children
+
+    return {
+        "max_concurrent_children": {"configured_limit": _get_max_concurrent_children()},
+        "occupied_slots": {"current": active_count()},
+        "child_timeout": {"seconds": _get_child_timeout()},
+        "model_authorization": {"required": True, "target_model": target},
+        "context_tier": {
+            "requested": "large" if target.endswith("-900k") else "regular",
+            "estimated_context_tokens": estimated_context_tokens if isinstance(estimated_context_tokens, int) else None,
+            "large_context_trigger_tokens": policy["large_context_trigger_tokens"],
+        },
+        "provider_quota": {"status": "not_observed", "note": "Reported only after an actual provider failure."},
+    }
+
+
 def _is_valid_lower_model(lower: str, target: str) -> bool:
     """A lower choice may not silently increase model strength or capacity."""
     return (
@@ -110,12 +148,14 @@ def _is_valid_lower_model(lower: str, target: str) -> bool:
 def _validate_request(
     target_model: Any, scope: Any, provider: Any, policy: dict[str, int | bool], estimated_context_tokens: Any,
 ) -> tuple[str, str, str | None]:
-    target = _clean_model(target_model)
+    target, target_error = _normalized_openai_codex_model(target_model, provider)
     normalized_scope = " ".join(str(scope or "").split())
     if not policy["enabled"]:
         return "", "", "Model-escalation proposals are disabled by delegation.resource_routing.escalation.enabled."
     if str(provider or "") != "openai-codex":
         return "", "", "Model escalation is available only for inherited openai-codex child routes."
+    if target_error:
+        return "", "", target_error
     if target not in _ALLOWED_MODELS:
         return "", "", "The requested target is not an operator-only escalation model."
     if target.endswith("-900k") and (
@@ -220,6 +260,9 @@ def request_model_escalation(
     return json.dumps({
         "status": "approved", "target_model": selected, "model_authorization": authorization,
         "expires_in_seconds": effective_policy["authorization_ttl_seconds"],
+        "delegation_diagnostics": _control_plane_diagnostics(
+            target=selected, policy=effective_policy, estimated_context_tokens=estimated_context_tokens,
+        ),
     }, ensure_ascii=False)
 
 
@@ -228,10 +271,12 @@ def consume_model_escalation_authorization(
 ) -> Optional[str]:
     """Consume exactly one capability, returning an error string on mismatch."""
     token = _clean_model(authorization)
-    target = _clean_model(target_model)
+    target, target_error = _normalized_openai_codex_model(target_model, provider)
     scope_digest = _scope_hash(scope)
     if not token:
         return "An explicit task model requires a user-authorized model escalation."
+    if target_error:
+        return target_error
     with _lock:
         record = _authorizations.pop(token, None)
     if record is None:
@@ -257,7 +302,8 @@ def reset_for_tests() -> None:
 MODEL_ESCALATION_SCHEMA = {
     "name": "request_model_escalation",
     "description": (
-        "Propose a more capable model for ONE bounded delegated child. The user authorizes, chooses a lower model, "
+        "Propose a more capable model for ONE bounded delegated child. Use bare model IDs or openai-codex/<model>; "
+        "other provider-qualified IDs are rejected. The user authorizes, chooses a lower model, "
         "declines, or defers. Never changes the active session model. On approval, use the returned target_model and "
         "model_authorization together in exactly one delegate_task task."
     ),
