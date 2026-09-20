@@ -54,12 +54,17 @@ class StreamingWaitMonitor:
             watchdog = ("stream stale", stale - waiting_secs) if stale is not None and stale != float("inf") else None
             diag = getattr(getattr(self, "clients", None), "diag", None)
             phase = "post_chunk" if isinstance(diag, dict) and diag.get("first_chunk_at") else "first_chunk"
-            if not self._mon.wait_notice.should_emit(phase, watchdog):
+            wait_notice = getattr(self._mon, "wait_notice", None)
+            if wait_notice is None:
+                wait_notice = self._mon.wait_notice = wn.WaitNoticeState()
+            if not wait_notice.should_emit(phase, watchdog):
                 self.agent._touch_activity(f"waiting for stream response ({waiting_secs}s, {phase})")
                 return
             self._mon.wait_notice_started_ts = self._mon.last_heartbeat
             self.agent._emit_wait_notice(wn.wait_notice_text(
-                self.api_kwargs.get('model', 'the provider'), waiting_secs, phase, watchdog))
+                self.api_kwargs.get('model', 'the provider'), waiting_secs, phase, watchdog,
+                request_identity=str(getattr(self, "request_identity", "") or ""),
+            ))
         else:
             # Chunks are flowing — keep the tracker fresh, leave the display alone.
             getattr(self.agent, "_touch_liveness", self.agent._touch_activity)(

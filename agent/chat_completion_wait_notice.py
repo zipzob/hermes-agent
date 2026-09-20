@@ -29,11 +29,17 @@ _PHASE_TEXT = {
 }
 
 
-def wait_notice_text(model: str, silence_secs: float, phase: str,
-                     watchdog: Optional[tuple[str, float]] = None) -> str:
+def wait_notice_text(
+    model: str,
+    silence_secs: float,
+    phase: str,
+    watchdog: Optional[tuple[str, float]] = None,
+    request_identity: str = "",
+) -> str:
     """One neutral status line. ``watchdog`` is ``(label, seconds_until_it_fires)``."""
     lead = "still waiting on" if _near_deadline(watchdog) else "waiting on"
-    text = f"⏳ {lead} {model} — " + _PHASE_TEXT[phase].format(n=int(silence_secs))
+    subject = f"{request_identity} {lead}" if request_identity else lead
+    text = f"⏳ {subject} {model} — " + _PHASE_TEXT[phase].format(n=int(silence_secs))
     if watchdog is not None:
         label, remaining = watchdog
         text += f" (auto-reconnect: {label} watchdog in {max(0, int(remaining))}s)"

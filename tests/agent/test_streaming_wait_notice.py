@@ -33,8 +33,8 @@ def test_streaming_wait_notice_includes_request_identity_and_recovery():
     call._heartbeat(60)
 
     assert "background review request in session …70dd49 — attempt 2" in notices[0]
-    assert "no stream output for 60s" in notices[0]
-    assert "auto-reconnect at 180s" in notices[0]
+    assert "60s waiting for the first stream chunk" in notices[0]
+    assert "stream stale watchdog in 120s" in notices[0]
 
 
 def test_streaming_call_captures_scoped_request_identity():

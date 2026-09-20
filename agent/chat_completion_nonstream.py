@@ -234,7 +234,9 @@ class _NonStreamRequest:
                 self.agent._touch_activity(f"waiting for provider response ({int(silence)}s, {phase})")
                 return
             self.agent._emit_wait_notice(wn.wait_notice_text(
-                self.api_kwargs.get('model', 'the provider'), silence, phase, watchdog))
+                self.api_kwargs.get('model', 'the provider'), silence, phase, watchdog,
+                request_identity=str(getattr(self, "request_identity", "") or ""),
+            ))
             self.wait_notice_started_ts = self.call_start + elapsed
         except Exception:
             h.logger.debug("wait-notice construction failed", exc_info=True)

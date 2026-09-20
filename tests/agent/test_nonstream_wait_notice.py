@@ -107,8 +107,8 @@ def test_nonstream_wait_notice_includes_scoped_request_identity():
     request._emit_wait_notice(60.0)
 
     assert "compression request in session …70dd49 — attempt 3" in notices[0]
-    assert "60s with no response yet" in notices[0]
-    assert "auto-reconnect at 120s" in notices[0]
+    assert "60s waiting for the first provider event" in notices[0]
+    assert "TTFB watchdog in 60s" in notices[0]
 
 
 @pytest.mark.parametrize(
